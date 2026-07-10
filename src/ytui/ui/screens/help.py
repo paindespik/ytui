@@ -16,17 +16,28 @@ HELP_TEXT = """\
   ?          This help
   Escape     Close / go back
 
-[b]Home feed[/b]
+[b]Lists (feed, search, channel, playlist)[/b]
   j / k / ↓ / ↑   Move selection
   g / G           Top / bottom
-  Enter           Play in mpv
+  Enter           Play video/playlist in mpv, or open a channel
+  o               Open the channel or playlist of the item
+  a               Follow the channel (add to config)
+
+[b]Home feed[/b]
   r               Refresh feed
   /               Open search
 
 [b]Search[/b]
   Type a query, Enter to search
-  Enter on a result to play
+  Results include videos, playlists and channels
   /               Focus the search input
+
+[b]Playlist view[/b]
+  Enter           Play one video
+  p               Play the whole playlist
+
+The panel on the right shows the highlighted item's thumbnail
+(sixel/kitty/half-block; disable with ui.thumbnails = false).
 
 Press any key to close."""
 

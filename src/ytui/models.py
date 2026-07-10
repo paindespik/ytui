@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -17,6 +18,8 @@ class Channel(BaseModel):
 
 
 class Video(BaseModel):
+    """A browsable item: a video, a playlist or a channel (see `kind`)."""
+
     video_id: str
     title: str
     channel_title: str = ""
@@ -24,9 +27,14 @@ class Video(BaseModel):
     published: datetime | None = None
     duration: int | None = None  # seconds
     thumbnail_url: str = ""
+    kind: Literal["video", "playlist", "channel"] = "video"
 
     @property
     def url(self) -> str:
+        if self.kind == "playlist":
+            return f"https://www.youtube.com/playlist?list={self.video_id}"
+        if self.kind == "channel":
+            return f"https://www.youtube.com/channel/{self.video_id}"
         return f"https://www.youtube.com/watch?v={self.video_id}"
 
     @property

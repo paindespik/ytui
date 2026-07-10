@@ -14,8 +14,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command")
 
-    play_parser = sub.add_parser("play", help="Play a video URL in mpv")
-    play_parser.add_argument("url", help="YouTube video URL")
+    play_parser = sub.add_parser("play", help="Play a video or playlist URL in mpv")
+    play_parser.add_argument("url", help="YouTube video or playlist URL")
 
     search_parser = sub.add_parser("search", help="Search YouTube and print results")
     search_parser.add_argument("query", help="Search query")

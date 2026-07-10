@@ -5,26 +5,29 @@ from __future__ import annotations
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import Screen
+from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Label, LoadingIndicator
 
 from ...sources.base import FeedResult
+from ..widgets.detail_panel import DetailPanel
 from ..widgets.video_list import VideoList
+from .browse import BrowseScreen
 
 
-class HomeFeedScreen(Screen):
+class HomeFeedScreen(BrowseScreen):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("/", "search", "Search"),
         Binding("q", "quit", "Quit"),
-        Binding("question_mark", "help", "Help"),
     ]
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Label("", id="warning-banner", classes="hidden")
         yield LoadingIndicator(id="feed-loading")
-        yield VideoList(id="feed-list")
+        with Horizontal():
+            yield VideoList(id="feed-list")
+            yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -63,9 +66,3 @@ class HomeFeedScreen(Screen):
 
     def action_search(self) -> None:
         self.app.push_screen("search")
-
-    def action_help(self) -> None:
-        self.app.push_screen("help")
-
-    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
-        self.app.play_video(event.video.url)

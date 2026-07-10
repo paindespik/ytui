@@ -86,3 +86,25 @@ def load_config(path: Path | None = None) -> Config:
     with path.open("rb") as f:
         data = tomllib.load(f)
     return Config.model_validate(data)
+
+
+def add_channel(channel_id: str, path: Path | None = None) -> bool:
+    """Persist a channel into [channels].list in config.toml, preserving comments.
+
+    Returns True if added, False if it was already present.
+    """
+    import tomlkit
+
+    path = path or config_path()
+    if path.exists():
+        doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        doc = tomlkit.parse(DEFAULT_CONFIG_TOML)
+    channels = doc.setdefault("channels", tomlkit.table())
+    entries = channels.setdefault("list", tomlkit.array())
+    if channel_id in entries:
+        return False
+    entries.append(channel_id)
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    return True
