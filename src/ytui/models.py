@@ -1,0 +1,51 @@
+"""Data models."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel
+
+
+class Channel(BaseModel):
+    channel_id: str
+    title: str = ""
+
+    @property
+    def rss_url(self) -> str:
+        return f"https://www.youtube.com/feeds/videos.xml?channel_id={self.channel_id}"
+
+
+class Video(BaseModel):
+    video_id: str
+    title: str
+    channel_title: str = ""
+    channel_id: str = ""
+    published: datetime | None = None
+    duration: int | None = None  # seconds
+    thumbnail_url: str = ""
+
+    @property
+    def url(self) -> str:
+        return f"https://www.youtube.com/watch?v={self.video_id}"
+
+    @property
+    def age(self) -> str:
+        """Human-readable age like '3h ago' or '2d ago'."""
+        if self.published is None:
+            return ""
+        now = datetime.now(tz=self.published.tzinfo)
+        delta = now - self.published
+        seconds = int(delta.total_seconds())
+        if seconds < 0:
+            seconds = 0
+        if seconds < 3600:
+            return f"{seconds // 60}m ago"
+        if seconds < 86400:
+            return f"{seconds // 3600}h ago"
+        days = seconds // 86400
+        if days < 30:
+            return f"{days}d ago"
+        if days < 365:
+            return f"{days // 30}mo ago"
+        return f"{days // 365}y ago"

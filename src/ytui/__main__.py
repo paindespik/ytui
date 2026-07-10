@@ -1,0 +1,56 @@
+"""CLI entry point: ytui | ytui play <url> | ytui search "query"."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from .config import load_config
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ytui", description="A terminal YouTube client (feed, search, mpv playback)."
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    play_parser = sub.add_parser("play", help="Play a video URL in mpv")
+    play_parser.add_argument("url", help="YouTube video URL")
+
+    search_parser = sub.add_parser("search", help="Search YouTube and print results")
+    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
+
+    args = parser.parse_args(argv)
+    config = load_config()
+
+    if args.command == "play":
+        from .player.mpv import PlayerError, play
+
+        try:
+            play(args.url, config.player)
+        except PlayerError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.command == "search":
+        from .sources.ytdlp_source import search_videos
+
+        try:
+            videos = search_videos(args.query, limit=args.limit)
+        except Exception as exc:
+            print(f"Search failed: {exc}", file=sys.stderr)
+            return 1
+        for video in videos:
+            print(f"{video.url}  {video.channel_title}  {video.title}")
+        return 0
+
+    from .app import YtuiApp
+
+    YtuiApp(config).run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
