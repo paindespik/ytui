@@ -21,6 +21,8 @@ class BrowseScreen(Screen):
         Binding("A", "play_audio", "Audio only", show=False),
         Binding("d", "download", "Download", show=False),
         Binding("s", "save_to_playlist", "Save to playlist"),
+        Binding("L", "like", "Like"),
+        Binding("C", "comment", "Comment", show=False),
         Binding("space", "pause_toggle", "Pause", show=False),
         Binding("n", "playlist_next", "Next in queue", show=False),
         Binding("question_mark", "help", "Help", show=False),
@@ -93,6 +95,18 @@ class BrowseScreen(Screen):
         if video is None:
             return
         self.app.save_to_local_playlist(video)
+
+    def action_like(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.like_video_action(video)
+
+    def action_comment(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.comment_video_action(video)
 
     async def action_pause_toggle(self) -> None:
         await self.app.pause_toggle()

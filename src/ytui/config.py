@@ -39,6 +39,11 @@ download_dir = "~/Videos"
 
 [ui]
 thumbnails = true
+
+[auth]
+# Path to the OAuth2 client_secret.json (Google Cloud Console, type "Desktop app").
+# Needed for the like ('L') and comment ('C') actions. Requires 'pip install ytui[auth]'.
+# client_secret = "~/.config/ytui/client_secret.json"
 """
 
 
@@ -63,11 +68,17 @@ class UIConfig(BaseModel):
     thumbnails: bool = True
 
 
+class AuthConfig(BaseModel):
+    # Path to the OAuth2 client_secret.json; empty = config_dir()/client_secret.json.
+    client_secret: str = ""
+
+
 class Config(BaseModel):
     feed: FeedConfig = Field(default_factory=FeedConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     player: PlayerConfig = Field(default_factory=PlayerConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
 
 
 def config_dir() -> Path:

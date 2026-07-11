@@ -15,6 +15,7 @@ def test_load_missing_creates_default(tmp_path: Path):
     assert config.player.command == "mpv"
     assert config.player.audio_only is False
     assert config.ui.thumbnails is True
+    assert config.auth.client_secret == ""
 
 
 def test_created_default_file_is_reloadable(tmp_path: Path):
@@ -46,6 +47,13 @@ thumbnails = false
     assert config.channels.list == ["UCXuqSBlHAE6Xw-yeJA0Tunw", "@SomeHandle"]
     assert config.player.audio_only is True
     assert config.ui.thumbnails is False
+
+
+def test_auth_section_loads(tmp_path: Path):
+    path = tmp_path / "config.toml"
+    path.write_text('[auth]\nclient_secret = "/tmp/secret.json"\n')
+    config = load_config(path)
+    assert config.auth.client_secret == "/tmp/secret.json"
 
 
 def test_partial_config_uses_defaults(tmp_path: Path):

@@ -82,6 +82,8 @@ Feed metadata, watch history and local playlists are stored in `~/.cache/ytui/me
 | `A` | Play audio only (this video, ignores the global setting) |
 | `d` | Download in the background to `[player].download_dir` |
 | `s` | Save the item to a local playlist (picker modal) |
+| `L` | Like the video on YouTube (requires [account setup](#youtube-account-likecomment)) |
+| `C` | Comment on the video on YouTube (requires account setup) |
 | `Space` | Pause / resume mpv playback |
 | `n` | Next entry in the mpv queue |
 
@@ -105,6 +107,7 @@ Feed metadata, watch history and local playlists are stored in `~/.cache/ytui/me
 | `n` / `r` | (local playlists) New / rename playlist |
 | `x` | (local playlists) Delete playlist (with confirmation) |
 | `y` | (video details) Copy URL to clipboard (OSC 52) |
+| `L` / `C` | (video details) Like / comment (YouTube account) |
 | `b` / `m` / `t` | (settings) Toggle backend / audio-only / thumbnails |
 | `Escape` | Go back |
 | `?` | Help |
@@ -173,6 +176,36 @@ Caveats:
 - Set `thumbnails = false` under `[ui]` to disable the image entirely (e.g. slow SSH links).
 
 Thumbnails are cached in `~/.cache/ytui/thumbs/` with LRU eviction above ~100 MB.
+
+## YouTube account (like/comment)
+
+The `L` (like) and `C` (comment) actions call the YouTube Data API v3 on behalf
+of your Google account via OAuth2. Setup:
+
+1. Install the optional dependencies:
+
+   ```sh
+   pip install 'ytui[auth]'    # or: pipx inject ytui google-auth google-auth-oauthlib google-api-python-client
+   ```
+
+2. In the [Google Cloud Console](https://console.cloud.google.com/):
+   - create a project and enable the **YouTube Data API v3**;
+   - configure the **OAuth consent screen** (User type *External*, publishing
+     status *Testing*, and add yourself as a test user);
+   - create an **OAuth client ID** of type **Desktop app** and download the
+     JSON as `~/.config/ytui/client_secret.json` (or set another path via
+     `client_secret` in the `[auth]` section of config.toml).
+
+3. The first `L`/`C` opens your browser for consent. The token is then stored
+   in `~/.config/ytui/oauth_token.json` and refreshed automatically.
+
+Notes:
+
+- API quota is 10,000 units/day; a like costs 50 units and a comment 50 units —
+  plenty for personal use.
+- While the consent screen is in *Testing* mode, Google expires refresh tokens
+  after 7 days; you may occasionally have to re-consent in the browser.
+- These actions only work on YouTube videos (not BitChute, channels or playlists).
 
 ## Development
 

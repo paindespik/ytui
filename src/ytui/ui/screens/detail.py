@@ -41,6 +41,8 @@ class VideoDetailScreen(Screen):
         Binding("o", "open_channel", "Open channel"),
         Binding("d", "download", "Download"),
         Binding("s", "save_to_playlist", "Save to playlist", show=False),
+        Binding("L", "like", "Like", show=False),
+        Binding("C", "comment", "Comment", show=False),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
@@ -135,6 +137,12 @@ class VideoDetailScreen(Screen):
 
     def action_save_to_playlist(self) -> None:
         self.app.save_to_local_playlist(self.video)
+
+    def action_like(self) -> None:
+        self.app.like_video_action(self.video)
+
+    def action_comment(self) -> None:
+        self.app.comment_video_action(self.video)
 
     def action_help(self) -> None:
         self.app.push_screen("help")

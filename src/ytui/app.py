@@ -21,7 +21,7 @@ from .ui.screens.local_playlists import LocalPlaylistsScreen
 from .ui.screens.playlist import PlaylistScreen
 from .ui.screens.search import SearchScreen
 from .ui.screens.settings import SettingsScreen
-from .ui.widgets.modals import PlaylistPickerModal
+from .ui.widgets.modals import PlaylistPickerModal, TextInputModal
 from .ui.widgets.video_list import VideoList
 
 
@@ -235,6 +235,61 @@ class YtuiApp(App):
             )
             return
         self.call_from_thread(self.notify, f"Downloaded to {target}: {video.title}", timeout=8)
+
+    def _youtube_video_or_notify(self, video: Video) -> bool:
+        if video.kind != "video":
+            self.notify("Only videos can be liked or commented.", severity="warning", timeout=5)
+            return False
+        if video.platform != "youtube":
+            self.notify("Only YouTube videos support this action.", severity="warning", timeout=5)
+            return False
+        return True
+
+    def like_video_action(self, video: Video) -> None:
+        if not self._youtube_video_or_notify(video):
+            return
+        self.notify(f"Liking: {video.title}", timeout=4)
+        self.run_worker(
+            lambda: self._like_blocking(video), thread=True, group="youtube-auth", exclusive=False
+        )
+
+    def _like_blocking(self, video: Video) -> None:
+        from . import auth
+
+        try:
+            youtube = auth.get_youtube_client(self.config)
+            auth.like_video(youtube, video.video_id)
+        except (auth.AuthError, auth.ApiError) as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=10)
+            return
+        self.call_from_thread(self.notify, f"Liked: {video.title}", timeout=5)
+
+    def comment_video_action(self, video: Video) -> None:
+        if not self._youtube_video_or_notify(video):
+            return
+
+        def on_text(text: str | None) -> None:
+            if not text:
+                return
+            self.run_worker(
+                lambda: self._comment_blocking(video, text),
+                thread=True,
+                group="youtube-auth",
+                exclusive=False,
+            )
+
+        self.push_screen(TextInputModal(f"Comment on: {video.title}"), on_text)
+
+    def _comment_blocking(self, video: Video, text: str) -> None:
+        from . import auth
+
+        try:
+            youtube = auth.get_youtube_client(self.config)
+            auth.post_comment(youtube, video.video_id, text)
+        except (auth.AuthError, auth.ApiError) as exc:
+            self.call_from_thread(self.notify, str(exc), severity="error", timeout=10)
+            return
+        self.call_from_thread(self.notify, f"Comment posted on: {video.title}", timeout=5)
 
     def save_to_local_playlist(self, video: Video) -> None:
         if video.kind == "channel":

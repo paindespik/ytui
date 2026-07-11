@@ -27,6 +27,8 @@ HELP_TEXT = """\
   A               Play audio only (this video)
   d               Download to [player].download_dir
   s               Save to a local playlist
+  L               Like the video (YouTube account)
+  C               Comment on the video (YouTube account)
   Space           Pause / resume mpv
   n               Next in mpv queue
 
@@ -58,6 +60,7 @@ HELP_TEXT = """\
 [b]Video details[/b]
   Enter play · A audio only · e enqueue · y copy URL
   o open channel · d download · s save to playlist
+  L like · C comment (YouTube account)
 
 [b]Settings[/b]
   x remove channel · b backend · m audio-only · t thumbnails
