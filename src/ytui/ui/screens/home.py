@@ -22,7 +22,7 @@ class HomeFeedScreen(BrowseScreen):
         Binding("h", "history", "History"),
         Binding("P", "local_playlists", "Playlists"),
         Binding("comma", "settings", "Settings"),
-        Binding("q", "quit", "Quit"),
+        Binding("q", "app.quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:

@@ -145,3 +145,20 @@ async def test_playlist_picker_modal_opens(app):
         await pilot.press("escape")
         await pilot.pause()
         assert app.screen.__class__.__name__ != "PlaylistPickerModal"
+
+
+async def test_q_quits_from_home(app):
+    app.config.channels.list = ["UC123"]
+
+    async def fake_feed(force_refresh=False):
+        from ytui.sources.base import FeedResult
+
+        return FeedResult([VIDEO], [])
+
+    app.source.feed = fake_feed
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "HomeFeedScreen"
+        await pilot.press("q")
+        await pilot.pause()
+        assert app._exit
