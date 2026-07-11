@@ -98,7 +98,16 @@ class MetaCache:
         row = self._conn.execute(
             "SELECT title FROM channel_names WHERE channel_id = ?", (channel_id,)
         ).fetchone()
-        return row[0] if row else None
+        if row:
+            return row[0]
+        # Backfill from cached feed items (works even when the feed was
+        # served from cache and no fresh RSS fetch happened).
+        videos = self.get_feed(channel_id, allow_stale=True)
+        if videos and videos[0].channel_title:
+            title = videos[0].channel_title
+            self.set_channel_name(channel_id, title)
+            return title
+        return None
 
     def set_channel_name(self, channel_id: str, title: str) -> None:
         self._conn.execute(
@@ -129,6 +138,8 @@ class MetaCache:
             (channel_id, time.time(), payload),
         )
         self._conn.commit()
+        if videos and videos[0].channel_title:
+            self.set_channel_name(channel_id, videos[0].channel_title)
 
     def clear_feed(self) -> None:
         self._conn.execute("DELETE FROM feed_items")
