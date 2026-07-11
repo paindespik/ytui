@@ -1,6 +1,6 @@
 """Platform-aware URL/RSS resolution tests for Video and Channel models."""
 
-from ytui.models import Channel, Video
+from ytui.models import Channel, Video, video_id_from_url
 
 
 # -- Video.url --
@@ -37,6 +37,16 @@ def test_video_url_bitchute_playlist():
 
 def test_video_platform_defaults_to_youtube():
     assert Video(video_id="abc123", title="v").platform == "youtube"
+
+
+# -- video_id_from_url --
+
+
+def test_video_id_from_url():
+    assert video_id_from_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert video_id_from_url("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert video_id_from_url("https://www.bitchute.com/video/AbC123xyz/") == "AbC123xyz"
+    assert video_id_from_url("https://www.youtube.com/playlist?list=PL1") is None
 
 
 # -- Channel.rss_url --

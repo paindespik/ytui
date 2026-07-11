@@ -3,30 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 
 from .config import load_config
-
-_YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
-_YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
-_BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
 
 
 def _record_cli_watch(url: str) -> None:
     """Record a `ytui play <url>` in watch history, mirroring the TUI behaviour."""
     from .cache import MetaCache
-    from .models import Video
+    from .models import Video, video_id_from_url
 
-    platform = "youtube"
-    match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url)
-    if not match:
-        match = _BITCHUTE_RE.search(url)
-        if match:
-            platform = "bitchute"
-    if not match:
+    video_id = video_id_from_url(url)
+    if video_id is None:
         return  # playlists / unknown URLs: nothing to record
-    video_id = match.group(1)
+    platform = "bitchute" if "bitchute.com/" in url else "youtube"
 
     cache = MetaCache()
     try:

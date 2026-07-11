@@ -5,9 +5,9 @@ from __future__ import annotations
 from textual.app import App
 from textual.reactive import reactive
 
-from .cache import MetaCache
+from .cache import MetaCache, resume_start
 from .config import Config, add_channel
-from .models import Video
+from .models import Video, video_id_from_url
 from .player.mpv import MpvController, PlayerError, play
 from .sources.base import VideoSource
 from .sources.rss import RSSSource
@@ -105,18 +105,95 @@ class YtuiApp(App):
         icon = "⏸ paused" if status.paused else "▶ playing"
         queued = f" ({status.queued} queued)" if status.queued else ""
         self.player_status = f"{icon}{queued}"
+        snap = await self.player.playback_snapshot()
+        if snap:
+            vid = video_id_from_url(snap[0])
+            if vid:
+                self.cache.save_position(vid, snap[1], snap[2])
+
+    def _resume_start_for(self, video: Video) -> float:
+        if video.kind != "video":
+            return 0.0
+        row = self.cache.get_resume(video.video_id)
+        if row is None:
+            return 0.0
+        return resume_start(row[0], row[1])
+
+    def _notify_resume(self, start: float) -> None:
+        if start > 0:
+            minutes, seconds = divmod(int(start), 60)
+            self.notify(f"Resuming at {minutes}:{seconds:02d}", timeout=4)
 
     def play_video(self, video: Video, audio_only: bool | None = None) -> None:
+        start = self._resume_start_for(video)
         self._record_watch(video)
         if audio_only:
             # One-shot audio playback, separate from the controlled queue.
             try:
-                play(video.url, self.config.player, audio_only=True)
+                play(video.url, self.config.player, audio_only=True, start=start or None)
+                self._notify_resume(start)
                 self.notify("Playing audio in mpv…", timeout=4)
             except PlayerError as exc:
                 self.notify(str(exc), severity="error", timeout=10)
             return
-        self.run_worker(self._play_async(video.url), group="player")
+        self._notify_resume(start)
+        self.run_worker(self._play_async(video.url, start=start or None), group="player")
+
+    def play_from_history(self, video: Video) -> None:
+        """Replay from the history screen: resume position and playlist context."""
+        row = self.cache.get_resume(video.video_id)
+        if row is None or not row[2] or video.kind != "video":
+            self.play_video(video)
+            return
+        playlist_id = row[2]
+        start = resume_start(row[0], row[1])
+        self._record_watch(video)
+        self._notify_resume(start)
+        self.run_worker(
+            lambda: self._resume_playlist_blocking(video, playlist_id, start),
+            thread=True,
+            group="player",
+            exclusive=False,
+        )
+
+    def _resume_playlist_blocking(self, video: Video, playlist_id: str, start: float) -> None:
+        from .sources.ytdlp_source import playlist_videos
+
+        playlist_url = Video(video_id=playlist_id, title="", kind="playlist").url
+        try:
+            entries = playlist_videos(playlist_url)
+        except Exception:
+            self.call_from_thread(
+                self.notify, "Playlist unavailable, playing video only.", timeout=5
+            )
+            self.call_from_thread(self._play_resumed, video.url, start, [])
+            return
+        idx = next(
+            (i for i, e in enumerate(entries) if e.video_id == video.video_id),
+            None,
+        )
+        if idx is None:
+            self.call_from_thread(
+                self.notify, "Video no longer in playlist, playing video only.", timeout=5
+            )
+            self.call_from_thread(self._play_resumed, video.url, start, [])
+            return
+        rest = [e.url for e in entries[idx + 1 :]]
+        self.call_from_thread(self._play_resumed, video.url, start, rest)
+
+    def _play_resumed(self, url: str, start: float, queue: list[str]) -> None:
+        self.run_worker(self._play_resumed_async(url, start, queue), group="player")
+
+    async def _play_resumed_async(self, url: str, start: float, queue: list[str]) -> None:
+        try:
+            await self.player.play(url, self.config.player, start=start or None)
+            for u in queue:
+                await self.player.enqueue(u, self.config.player)
+        except PlayerError as exc:
+            self.notify(str(exc), severity="error", timeout=10)
+            return
+        queued = f" ({len(queue)} queued)" if queue else ""
+        self.notify(f"Playing in mpv…{queued}", timeout=4)
 
     def enqueue_video(self, video: Video) -> None:
         if video.kind == "channel":
@@ -146,9 +223,9 @@ class YtuiApp(App):
         queued = f" ({len(urls) - 1} queued)" if len(urls) > 1 else ""
         self.notify(f"Playing in mpv…{queued}", timeout=4)
 
-    async def _play_async(self, url: str) -> None:
+    async def _play_async(self, url: str, start: float | None = None) -> None:
         try:
-            await self.player.play(url, self.config.player)
+            await self.player.play(url, self.config.player, start=start)
             self.notify("Playing in mpv…", timeout=4)
         except PlayerError as exc:
             self.notify(str(exc), severity="error", timeout=10)

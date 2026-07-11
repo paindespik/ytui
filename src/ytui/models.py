@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
+
+_YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
+_YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
+_BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
+
+
+def video_id_from_url(url: str) -> str | None:
+    """Extract a video id from a YouTube/BitChute video URL, or None."""
+    match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url) or _BITCHUTE_RE.search(url)
+    return match.group(1) if match else None
 
 
 class Channel(BaseModel):
@@ -32,6 +43,7 @@ class Video(BaseModel):
     thumbnail_url: str = ""
     kind: Literal["video", "playlist", "channel"] = "video"
     platform: Literal["youtube", "bitchute"] = "youtube"
+    playlist_id: str = ""  # parent YouTube playlist when launched from PlaylistScreen
 
     @property
     def url(self) -> str:

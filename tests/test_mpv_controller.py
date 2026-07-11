@@ -15,6 +15,11 @@ class FakeMpv:
     def __init__(self, socket_path):
         self.socket_path = str(socket_path)
         self.commands: list[list] = []
+        self.properties: dict[str, object] = {
+            "playlist-count": 3,
+            "playlist-pos": 0,
+            "pause": False,
+        }
         self._server = None
 
     async def start(self):
@@ -29,9 +34,7 @@ class FakeMpv:
             self.commands.append(msg["command"])
             data = None
             if msg["command"][0] == "get_property":
-                data = {"playlist-count": 3, "playlist-pos": 0, "pause": False}.get(
-                    msg["command"][1]
-                )
+                data = self.properties.get(msg["command"][1])
             resp = {"error": "success", "request_id": msg["request_id"], "data": data}
             writer.write((json.dumps(resp) + "\n").encode())
             await writer.drain()
@@ -94,6 +97,25 @@ async def test_dead_socket_reports_not_alive(tmp_path):
     await ctrl.close()
 
 
+async def test_play_with_start_over_ipc(fake_mpv):
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    await ctrl.play(URL, PLAYER, start=42)
+    assert any(
+        cmd[0] == "loadfile" and "start=42" in cmd for cmd in fake_mpv.commands
+    )
+    await ctrl.close()
+
+
+async def test_playback_snapshot(fake_mpv):
+    fake_mpv.properties.update({"path": URL, "time-pos": 12.5, "duration": 600.0})
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    assert await ctrl.playback_snapshot() == (URL, 12.5, 600.0)
+
+    fake_mpv.properties["duration"] = None  # live stream: no duration
+    assert await ctrl.playback_snapshot() is None
+    await ctrl.close()
+
+
 def test_build_command_flags(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/mpv")
     cmd = build_command(URL, PLAYER, ipc_socket="/tmp/s.sock")
@@ -105,6 +127,13 @@ def test_build_command_flags(monkeypatch):
     audio_cmd = build_command(URL, PLAYER, audio_only=True)
     assert "--no-video" in audio_cmd
     assert not any(a.startswith("--ytdl-format") for a in audio_cmd)
+
+
+def test_build_command_with_start(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/mpv")
+    assert "--start=123" in build_command(URL, PLAYER, start=123.4)
+    assert not any(a.startswith("--start") for a in build_command(URL, PLAYER))
+    assert not any(a.startswith("--start") for a in build_command(URL, PLAYER, start=0))
 
 
 def test_build_command_missing_mpv(monkeypatch):

@@ -38,6 +38,13 @@ class HistoryScreen(BrowseScreen):
         video_list.set_videos(self.app.cache.watch_history())
         video_list.focus()
 
+    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
+        video = event.video
+        if video.kind == "channel":
+            self.app.open_channel(video)
+        else:
+            self.app.play_from_history(video)
+
     def action_remove_entry(self) -> None:
         video = self._highlighted()
         if video is None:

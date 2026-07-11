@@ -26,6 +26,7 @@ def build_command(
     player: PlayerConfig,
     audio_only: bool | None = None,
     ipc_socket: str | None = None,
+    start: float | None = None,
 ) -> list[str]:
     """Build the mpv command line. Raises PlayerError if mpv is missing."""
     if shutil.which(player.command) is None:
@@ -41,6 +42,8 @@ def build_command(
         cmd.append(f"--ytdl-format={player.format}")
     if ipc_socket:
         cmd.append(f"--input-ipc-server={ipc_socket}")
+    if start and start > 0:
+        cmd.append(f"--start={start:.0f}")
     cmd.append(url)
     return cmd
 
@@ -55,9 +58,14 @@ def _popen(cmd: list[str]) -> subprocess.Popen:
     )
 
 
-def play(url: str, player: PlayerConfig, audio_only: bool | None = None) -> None:
+def play(
+    url: str,
+    player: PlayerConfig,
+    audio_only: bool | None = None,
+    start: float | None = None,
+) -> None:
     """Start a detached one-shot mpv (used by the CLI and per-video audio-only)."""
-    _popen(build_command(url, player, audio_only))
+    _popen(build_command(url, player, audio_only, start=start))
 
 
 class PlayerStatus:
@@ -88,12 +96,20 @@ class MpvController:
             self._proc = None  # reap exited process
         return self._proc is not None
 
-    def _spawn(self, url: str, player: PlayerConfig, audio_only: bool | None = None) -> None:
+    def _spawn(
+        self,
+        url: str,
+        player: PlayerConfig,
+        audio_only: bool | None = None,
+        start: float | None = None,
+    ) -> None:
         try:
             os.unlink(self.socket_path)  # remove stale socket file
         except OSError:
             pass
-        self._proc = _popen(build_command(url, player, audio_only, ipc_socket=self.socket_path))
+        self._proc = _popen(
+            build_command(url, player, audio_only, ipc_socket=self.socket_path, start=start)
+        )
 
     async def _disconnect(self) -> None:
         if self._writer is not None:
@@ -146,14 +162,28 @@ class MpvController:
         await self._disconnect()
         return await self._connect(retries=1)
 
-    async def play(self, url: str, player: PlayerConfig) -> None:
+    async def play(self, url: str, player: PlayerConfig, start: float | None = None) -> None:
         """Play now: replace playback in the live instance, or spawn a new one."""
         if await self.is_alive():
-            resp = await self.command("loadfile", url, "replace", connect_retries=25)
+            resp = await self._loadfile_replace(url, start)
             if resp is not None and resp.get("error") == "success":
                 return
             await self._disconnect()
-        self._spawn(url, player)
+        self._spawn(url, player, start=start)
+
+    async def _loadfile_replace(self, url: str, start: float | None) -> dict | None:
+        if not start or start <= 0:
+            return await self.command("loadfile", url, "replace", connect_retries=25)
+        opts = f"start={start:.0f}"
+        # mpv >= 0.38 inserted an index argument before the options string.
+        resp = await self.command("loadfile", url, "replace", -1, opts, connect_retries=25)
+        if resp is not None and resp.get("error") == "success":
+            return resp
+        resp = await self.command("loadfile", url, "replace", opts)
+        if resp is not None and resp.get("error") == "success":
+            return resp
+        # Playing without resume beats not playing at all.
+        return await self.command("loadfile", url, "replace")
 
     async def enqueue(self, url: str, player: PlayerConfig) -> bool:
         """Append to the live queue (True) or start a new player (False)."""
@@ -172,6 +202,19 @@ class MpvController:
     async def playlist_next(self) -> bool:
         resp = await self.command("playlist-next")
         return resp is not None and resp.get("error") == "success"
+
+    async def playback_snapshot(self) -> tuple[str, float, float] | None:
+        """(path, time_pos, duration) of the current file, or None if unavailable."""
+        values = []
+        for prop in ("path", "time-pos", "duration"):
+            resp = await self.command("get_property", prop)
+            if resp is None or resp.get("error") != "success" or resp.get("data") is None:
+                return None
+            values.append(resp["data"])
+        path, time_pos, duration = values
+        if not isinstance(duration, (int, float)) or duration <= 0:
+            return None  # live streams have no usable duration
+        return str(path), float(time_pos), float(duration)
 
     async def status(self) -> PlayerStatus | None:
         """Current playback status, or None when nothing is playing."""

@@ -14,6 +14,15 @@ from .models import Video
 
 FEED_TTL_SECONDS = 15 * 60
 
+
+def resume_start(position: float, duration: float | None) -> float:
+    """Position to resume from: 0 if duration is unknown or within 5% of the end."""
+    if not duration or duration <= 0:
+        return 0.0
+    if position >= 0.95 * duration:
+        return 0.0
+    return position
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS feed_items (
     channel_id TEXT NOT NULL,
@@ -34,7 +43,10 @@ CREATE TABLE IF NOT EXISTS watch_history (
     title TEXT NOT NULL,
     channel_title TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL DEFAULT 'video',
-    watched_at REAL NOT NULL
+    watched_at REAL NOT NULL,
+    position REAL NOT NULL DEFAULT 0,
+    duration REAL,
+    playlist_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS local_playlists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +84,15 @@ class MetaCache:
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        for stmt in (
+            "ALTER TABLE watch_history ADD COLUMN position REAL NOT NULL DEFAULT 0",
+            "ALTER TABLE watch_history ADD COLUMN duration REAL",
+            "ALTER TABLE watch_history ADD COLUMN playlist_id TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         self._conn.commit()
 
     def close(self) -> None:
@@ -158,11 +179,41 @@ class MetaCache:
 
     def record_watch(self, video: Video) -> None:
         self._conn.execute(
-            "INSERT OR REPLACE INTO watch_history "
-            "(video_id, title, channel_title, kind, watched_at) VALUES (?, ?, ?, ?, ?)",
-            (video.video_id, video.title, video.channel_title, video.kind, time.time()),
+            "INSERT INTO watch_history "
+            "(video_id, title, channel_title, kind, watched_at, playlist_id) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(video_id) DO UPDATE SET "
+            "title = excluded.title, "
+            "channel_title = excluded.channel_title, "
+            "watched_at = excluded.watched_at, "
+            "playlist_id = CASE WHEN excluded.playlist_id != '' "
+            "THEN excluded.playlist_id ELSE playlist_id END",
+            (
+                video.video_id,
+                video.title,
+                video.channel_title,
+                video.kind,
+                time.time(),
+                video.playlist_id,
+            ),
         )
         self._conn.commit()
+
+    def save_position(self, video_id: str, position: float, duration: float) -> None:
+        """Update playback position for a video already in the history (no-op otherwise)."""
+        self._conn.execute(
+            "UPDATE watch_history SET position = ?, duration = ? WHERE video_id = ?",
+            (position, duration, video_id),
+        )
+        self._conn.commit()
+
+    def get_resume(self, video_id: str) -> tuple[float, float | None, str] | None:
+        """(position, duration, playlist_id) for a watched video, or None."""
+        row = self._conn.execute(
+            "SELECT position, duration, playlist_id FROM watch_history WHERE video_id = ?",
+            (video_id,),
+        ).fetchone()
+        return row if row is None else (row[0], row[1], row[2])
 
     def watched_ids(self) -> set[str]:
         rows = self._conn.execute("SELECT video_id FROM watch_history").fetchall()
@@ -171,12 +222,12 @@ class MetaCache:
     def watch_history(self, limit: int = 200) -> list[Video]:
         """Most recent watches first."""
         rows = self._conn.execute(
-            "SELECT video_id, title, channel_title, kind, watched_at "
+            "SELECT video_id, title, channel_title, kind, watched_at, duration, playlist_id "
             "FROM watch_history ORDER BY watched_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         videos = []
-        for video_id, title, channel_title, kind, watched_at in rows:
+        for video_id, title, channel_title, kind, watched_at, duration, playlist_id in rows:
             thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if kind == "video" else ""
             videos.append(
                 Video(
@@ -185,7 +236,9 @@ class MetaCache:
                     channel_title=channel_title,
                     kind=kind,
                     published=datetime.fromtimestamp(watched_at, tz=timezone.utc),
+                    duration=int(duration) if duration else None,
                     thumbnail_url=thumb,
+                    playlist_id=playlist_id,
                 )
             )
         return videos

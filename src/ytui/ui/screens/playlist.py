@@ -54,6 +54,8 @@ class PlaylistScreen(BrowseScreen):
 
     def _show_videos(self, videos: list[Video]) -> None:
         self.query_one("#playlist-loading", LoadingIndicator).display = False
+        for v in videos:
+            v.playlist_id = self.playlist.video_id
         video_list = self.query_one("#playlist-list", VideoList)
         video_list.set_videos(videos, self.app.cache.watched_ids())
         video_list.focus()
