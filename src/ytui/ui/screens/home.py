@@ -39,12 +39,30 @@ class HomeFeedScreen(BrowseScreen):
     def on_mount(self) -> None:
         self.sub_title = "Home feed"
         self._pending_focus: Video | None = None
+        self._feed_videos: list[Video] = []
         self.load_feed(force_refresh=False)
 
     def focus_live(self, video: Video) -> None:
         """Refresh the feed and focus the given live video (from a notification)."""
         self._pending_focus = video
         self.load_feed(force_refresh=True)
+
+    def _with_lives(self) -> list[Video]:
+        """Feed videos with active lives pinned on top (deduplicated, 🔴-prefixed)."""
+        lives = list(self.app.active_lives.values())
+        live_ids = {v.video_id for v in lives}
+        pinned = [
+            v.model_copy(update={"title": f"\U0001f534 {v.title}"}) for v in lives
+        ]
+        return pinned + [v for v in self._feed_videos if v.video_id not in live_ids]
+
+    def refresh_lives(self) -> None:
+        """Re-render the list when the set of active lives changed."""
+        if not hasattr(self, "_feed_videos"):
+            return
+        self.query_one("#feed-list", VideoList).set_videos(
+            self._with_lives(), self.app.cache.watched_ids()
+        )
 
     @work(exclusive=True)
     async def load_feed(self, force_refresh: bool) -> None:
@@ -57,13 +75,11 @@ class HomeFeedScreen(BrowseScreen):
             self._show_warning(f"Failed to load feed: {exc}")
             return
         loading.display = False
-        videos = result.videos
+        self._feed_videos = result.videos
         pending = self._pending_focus
         self._pending_focus = None
-        if pending is not None and all(v.video_id != pending.video_id for v in videos):
-            videos = [pending, *videos]  # live not (yet) in the RSS feed: show it on top
         feed_list = self.query_one("#feed-list", VideoList)
-        feed_list.set_videos(videos, self.app.cache.watched_ids())
+        feed_list.set_videos(self._with_lives(), self.app.cache.watched_ids())
         if pending is not None:
             feed_list.focus_video(pending.video_id)
         if result.warnings:

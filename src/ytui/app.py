@@ -89,6 +89,7 @@ class YtuiApp(App):
         self._last_polled_duration: float | None = None
         self._live_vids: set[str] = set()
         self._notified_live_ids: set[str] = set()
+        self.active_lives: dict[str, Video] = {}
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -111,6 +112,7 @@ class YtuiApp(App):
         if not isinstance(source, RSSSource):
             return
         entries = [c for c in self.config.channels.list if not c.startswith("bitchute:")]
+        found: dict[str, Video] = {}
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
             for entry in entries:
                 try:
@@ -119,7 +121,10 @@ class YtuiApp(App):
                     live = await check_channel_live(client, channel_id, name)
                 except Exception:
                     continue  # offline / throttled: retry at the next interval
-                if live is not None and live.video_id not in self._notified_live_ids:
+                if live is None:
+                    continue
+                found[live.video_id] = live
+                if live.video_id not in self._notified_live_ids:
                     self._notified_live_ids.add(live.video_id)
                     self.notify(f"\U0001f534 Live: {live.channel_title} \u2014 {live.title}", timeout=10)
                     self.run_worker(
@@ -128,6 +133,10 @@ class YtuiApp(App):
                         group="live-notify",
                         exclusive=False,
                     )
+        if found != self.active_lives:
+            self.active_lives = found
+            if isinstance(self.screen, HomeFeedScreen):
+                self.screen.refresh_lives()
 
     def _notify_live_blocking(self, video: Video) -> None:
         # Blocks until the notification is dismissed or clicked (notify-send --wait).

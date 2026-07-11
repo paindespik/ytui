@@ -210,8 +210,10 @@ Notes:
 ## Live notifications
 
 When a followed channel goes live, ytui shows a desktop notification
-(via `notify-send`) and an in-app toast. Clicking the notification brings the
-home feed to the front, focused on the live video (press `Enter` to play it).
+(via `notify-send`) and an in-app toast, and the live is pinned at the top of
+the home feed with a 🔴 marker while it is on air. Clicking the
+notification brings the home feed to the front, focused on the live video
+(press `Enter` to play it).
 Channels are checked every 5 minutes while ytui runs. Configure in
 `config.toml`:
 
