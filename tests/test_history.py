@@ -75,6 +75,14 @@ def test_save_position_unknown_video_noop(tmp_path):
     assert cache.get_resume("ghost") is None
 
 
+def test_clear_position(tmp_path):
+    cache = make_cache(tmp_path)
+    cache.record_watch(V1)
+    cache.save_position("vid1", 120.0, 600.0)
+    cache.clear_position("vid1")
+    assert cache.get_resume("vid1") == (0.0, None, "")
+
+
 def test_rewatch_preserves_position(tmp_path):
     cache = make_cache(tmp_path)
     cache.record_watch(V1)

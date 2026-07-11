@@ -83,6 +83,8 @@ class YtuiApp(App):
         self.thumbnails = ThumbnailFetcher()
         self.player = MpvController()
         self._last_polled_vid: str | None = None
+        self._last_polled_duration: float | None = None
+        self._live_vids: set[str] = set()
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -114,8 +116,19 @@ class YtuiApp(App):
                 if vid not in self.cache.watched_ids():
                     # mpv advanced to a queued video on its own: add it to history.
                     self._record_watch(self._video_for_history(vid, title))
-                self.cache.save_position(vid, position, duration)
+                if (
+                    vid == self._last_polled_vid
+                    and self._last_polled_duration is not None
+                    and abs(duration - self._last_polled_duration) > 1.0
+                ):
+                    # Growing duration = live stream (DVR window): resuming a live
+                    # with --start stalls mpv, so never track its position.
+                    self._live_vids.add(vid)
+                    self.cache.clear_position(vid)
+                if vid not in self._live_vids:
+                    self.cache.save_position(vid, position, duration)
                 self._last_polled_vid = vid
+                self._last_polled_duration = duration
 
     def _video_for_history(self, video_id: str, title: str) -> Video:
         video = self.cache.find_cached_video(video_id) or Video(

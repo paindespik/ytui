@@ -212,6 +212,14 @@ class MetaCache:
         )
         self._conn.commit()
 
+    def clear_position(self, video_id: str) -> None:
+        """Drop any saved resume data (used when a video turns out to be live)."""
+        self._conn.execute(
+            "UPDATE watch_history SET position = 0, duration = NULL WHERE video_id = ?",
+            (video_id,),
+        )
+        self._conn.commit()
+
     def get_resume(self, video_id: str) -> tuple[float, float | None, str] | None:
         """(position, duration, playlist_id) for a watched video, or None."""
         row = self._conn.execute(
