@@ -20,7 +20,7 @@ class BrowseScreen(Screen):
         Binding("i", "detail", "Details"),
         Binding("A", "play_audio", "Audio only", show=False),
         Binding("d", "download", "Download", show=False),
-        Binding("s", "save_to_playlist", "Save to playlist", show=False),
+        Binding("s", "save_to_playlist", "Save to playlist"),
         Binding("space", "pause_toggle", "Pause", show=False),
         Binding("n", "playlist_next", "Next in queue", show=False),
         Binding("question_mark", "help", "Help", show=False),

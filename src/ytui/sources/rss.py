@@ -115,6 +115,8 @@ class RSSSource(VideoSource):
                 resp.raise_for_status()
                 videos = parse_rss(resp.content)
                 self.cache.set_feed(channel_id, videos)
+                if videos and videos[0].channel_title:
+                    self.cache.set_channel_name(channel_id, videos[0].channel_title)
                 return videos, None
             except Exception as exc:
                 # Offline / error fallback: serve stale cache with a warning.

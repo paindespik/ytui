@@ -60,8 +60,15 @@ class SettingsScreen(Screen):
         )
         options = self.query_one("#settings-channels", OptionList)
         options.clear_options()
+        cache = self.app.cache
         for entry in config.channels.list:
-            options.add_option(Option(entry, id=entry))
+            channel_id = entry
+            if not entry.startswith("UC"):
+                handle = entry if entry.startswith("@") else f"@{entry}"
+                channel_id = cache.get_handle(handle) or entry
+            name = cache.get_channel_name(channel_id)
+            label = f"{name}  [dim]{entry}[/dim]" if name else entry
+            options.add_option(Option(label, id=entry))
         if not config.channels.list:
             options.add_option(Option("(no channels followed)", disabled=True))
         else:

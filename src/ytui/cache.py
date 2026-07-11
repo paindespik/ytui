@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS handle_resolutions (
     handle TEXT PRIMARY KEY,
     channel_id TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS channel_names (
+    channel_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS watch_history (
     video_id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -85,6 +89,21 @@ class MetaCache:
         self._conn.execute(
             "INSERT OR REPLACE INTO handle_resolutions (handle, channel_id) VALUES (?, ?)",
             (handle, channel_id),
+        )
+        self._conn.commit()
+
+    # -- channel names (permanent, refreshed on each feed fetch) --
+
+    def get_channel_name(self, channel_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT title FROM channel_names WHERE channel_id = ?", (channel_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_channel_name(self, channel_id: str, title: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO channel_names (channel_id, title) VALUES (?, ?)",
+            (channel_id, title),
         )
         self._conn.commit()
 
