@@ -1,10 +1,12 @@
-"""SQLite metadata cache: feed items (TTL) and handle -> channel_id resolutions."""
+"""SQLite metadata cache: feed items (TTL), handle resolutions, watch history,
+local playlists."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import cache_dir
@@ -23,7 +25,39 @@ CREATE TABLE IF NOT EXISTS handle_resolutions (
     handle TEXT PRIMARY KEY,
     channel_id TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watch_history (
+    video_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    channel_title TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'video',
+    watched_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS local_playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS local_playlist_items (
+    playlist_id INTEGER NOT NULL REFERENCES local_playlists(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    video_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    channel_title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'video',
+    PRIMARY KEY (playlist_id, position)
+);
 """
+
+
+class LocalPlaylist:
+    """A local playlist row: id, name, creation time and item count."""
+
+    def __init__(self, playlist_id: int, name: str, created_at: float, item_count: int) -> None:
+        self.id = playlist_id
+        self.name = name
+        self.created_at = created_at
+        self.item_count = item_count
 
 
 class MetaCache:
@@ -32,6 +66,7 @@ class MetaCache:
             cache_dir().mkdir(parents=True, exist_ok=True)
             path = cache_dir() / "meta.sqlite"
         self._conn = sqlite3.connect(path)
+        self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -78,4 +113,149 @@ class MetaCache:
 
     def clear_feed(self) -> None:
         self._conn.execute("DELETE FROM feed_items")
+        self._conn.commit()
+
+    # -- watch history --
+
+    def record_watch(self, video: Video) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO watch_history "
+            "(video_id, title, channel_title, kind, watched_at) VALUES (?, ?, ?, ?, ?)",
+            (video.video_id, video.title, video.channel_title, video.kind, time.time()),
+        )
+        self._conn.commit()
+
+    def watched_ids(self) -> set[str]:
+        rows = self._conn.execute("SELECT video_id FROM watch_history").fetchall()
+        return {r[0] for r in rows}
+
+    def watch_history(self, limit: int = 200) -> list[Video]:
+        """Most recent watches first."""
+        rows = self._conn.execute(
+            "SELECT video_id, title, channel_title, kind, watched_at "
+            "FROM watch_history ORDER BY watched_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        videos = []
+        for video_id, title, channel_title, kind, watched_at in rows:
+            thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if kind == "video" else ""
+            videos.append(
+                Video(
+                    video_id=video_id,
+                    title=title,
+                    channel_title=channel_title,
+                    kind=kind,
+                    published=datetime.fromtimestamp(watched_at, tz=timezone.utc),
+                    thumbnail_url=thumb,
+                )
+            )
+        return videos
+
+    def remove_watch(self, video_id: str) -> None:
+        self._conn.execute("DELETE FROM watch_history WHERE video_id = ?", (video_id,))
+        self._conn.commit()
+
+    # -- local playlists --
+
+    def create_playlist(self, name: str) -> int | None:
+        """Create a playlist. Returns its id, or None if the name is taken."""
+        try:
+            cur = self._conn.execute(
+                "INSERT INTO local_playlists (name, created_at) VALUES (?, ?)",
+                (name, time.time()),
+            )
+        except sqlite3.IntegrityError:
+            return None
+        self._conn.commit()
+        return cur.lastrowid
+
+    def rename_playlist(self, playlist_id: int, name: str) -> bool:
+        try:
+            self._conn.execute(
+                "UPDATE local_playlists SET name = ? WHERE id = ?", (name, playlist_id)
+            )
+        except sqlite3.IntegrityError:
+            return False
+        self._conn.commit()
+        return True
+
+    def delete_playlist(self, playlist_id: int) -> None:
+        self._conn.execute("DELETE FROM local_playlists WHERE id = ?", (playlist_id,))
+        self._conn.commit()
+
+    def list_playlists(self) -> list[LocalPlaylist]:
+        rows = self._conn.execute(
+            "SELECT p.id, p.name, p.created_at, COUNT(i.video_id) "
+            "FROM local_playlists p LEFT JOIN local_playlist_items i ON i.playlist_id = p.id "
+            "GROUP BY p.id ORDER BY p.name"
+        ).fetchall()
+        return [LocalPlaylist(*row) for row in rows]
+
+    def add_playlist_item(self, playlist_id: int, video: Video) -> bool:
+        """Append an item to a playlist. Returns False if already present."""
+        exists = self._conn.execute(
+            "SELECT 1 FROM local_playlist_items WHERE playlist_id = ? AND video_id = ?",
+            (playlist_id, video.video_id),
+        ).fetchone()
+        if exists:
+            return False
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM local_playlist_items "
+            "WHERE playlist_id = ?",
+            (playlist_id,),
+        ).fetchone()
+        self._conn.execute(
+            "INSERT INTO local_playlist_items "
+            "(playlist_id, position, video_id, title, channel_title, url, kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                playlist_id,
+                row[0],
+                video.video_id,
+                video.title,
+                video.channel_title,
+                video.url,
+                video.kind,
+            ),
+        )
+        self._conn.commit()
+        return True
+
+    def playlist_items(self, playlist_id: int) -> list[Video]:
+        rows = self._conn.execute(
+            "SELECT video_id, title, channel_title, kind FROM local_playlist_items "
+            "WHERE playlist_id = ? ORDER BY position",
+            (playlist_id,),
+        ).fetchall()
+        videos = []
+        for video_id, title, channel_title, kind in rows:
+            thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if kind == "video" else ""
+            videos.append(
+                Video(
+                    video_id=video_id,
+                    title=title,
+                    channel_title=channel_title,
+                    kind=kind,
+                    thumbnail_url=thumb,
+                )
+            )
+        return videos
+
+    def remove_playlist_item(self, playlist_id: int, video_id: str) -> None:
+        """Remove an item and compact positions to keep the ordering dense."""
+        self._conn.execute(
+            "DELETE FROM local_playlist_items WHERE playlist_id = ? AND video_id = ?",
+            (playlist_id, video_id),
+        )
+        rows = self._conn.execute(
+            "SELECT position FROM local_playlist_items WHERE playlist_id = ? ORDER BY position",
+            (playlist_id,),
+        ).fetchall()
+        for new_pos, (old_pos,) in enumerate(rows):
+            if new_pos != old_pos:
+                self._conn.execute(
+                    "UPDATE local_playlist_items SET position = ? "
+                    "WHERE playlist_id = ? AND position = ?",
+                    (new_pos, playlist_id, old_pos),
+                )
         self._conn.commit()

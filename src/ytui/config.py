@@ -31,6 +31,8 @@ list = []
 command = "mpv"
 format = "bestvideo[height<=?1080]+bestaudio/best"
 audio_only = false
+# Directory for 'd' (download video)
+download_dir = "~/Videos"
 
 [ui]
 thumbnails = true
@@ -51,6 +53,7 @@ class PlayerConfig(BaseModel):
     command: str = "mpv"
     format: str = "bestvideo[height<=?1080]+bestaudio/best"
     audio_only: bool = False
+    download_dir: str = "~/Videos"
 
 
 class UIConfig(BaseModel):
@@ -88,6 +91,15 @@ def load_config(path: Path | None = None) -> Config:
     return Config.model_validate(data)
 
 
+def _load_doc(path: Path):
+    import tomlkit
+
+    if path.exists():
+        return tomlkit.parse(path.read_text(encoding="utf-8"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return tomlkit.parse(DEFAULT_CONFIG_TOML)
+
+
 def add_channel(channel_id: str, path: Path | None = None) -> bool:
     """Persist a channel into [channels].list in config.toml, preserving comments.
 
@@ -96,11 +108,7 @@ def add_channel(channel_id: str, path: Path | None = None) -> bool:
     import tomlkit
 
     path = path or config_path()
-    if path.exists():
-        doc = tomlkit.parse(path.read_text(encoding="utf-8"))
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        doc = tomlkit.parse(DEFAULT_CONFIG_TOML)
+    doc = _load_doc(path)
     channels = doc.setdefault("channels", tomlkit.table())
     entries = channels.setdefault("list", tomlkit.array())
     if channel_id in entries:
@@ -108,3 +116,32 @@ def add_channel(channel_id: str, path: Path | None = None) -> bool:
     entries.append(channel_id)
     path.write_text(tomlkit.dumps(doc), encoding="utf-8")
     return True
+
+
+def remove_channel(channel_id: str, path: Path | None = None) -> bool:
+    """Remove a channel from [channels].list, preserving comments.
+
+    Returns True if removed, False if it was not present.
+    """
+    import tomlkit
+
+    path = path or config_path()
+    doc = _load_doc(path)
+    channels = doc.setdefault("channels", tomlkit.table())
+    entries = channels.setdefault("list", tomlkit.array())
+    if channel_id not in entries:
+        return False
+    entries.remove(channel_id)
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    return True
+
+
+def set_option(section: str, key: str, value: object, path: Path | None = None) -> None:
+    """Set a single [section].key option in config.toml, preserving comments."""
+    import tomlkit
+
+    path = path or config_path()
+    doc = _load_doc(path)
+    table = doc.setdefault(section, tomlkit.table())
+    table[key] = value
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")

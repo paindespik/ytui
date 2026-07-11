@@ -92,3 +92,50 @@ def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
 def playlist_videos(playlist_url: str, limit: int = 200) -> list[Video]:
     """Blocking flat listing of a playlist's videos."""
     return _extract_items(playlist_url, limit=limit)
+
+
+class VideoDetails:
+    """Full (non-flat) metadata for one video."""
+
+    def __init__(
+        self,
+        description: str = "",
+        view_count: int | None = None,
+        like_count: int | None = None,
+        duration: int | None = None,
+        upload_date: str = "",
+        channel_id: str = "",
+        channel_title: str = "",
+        title: str = "",
+    ) -> None:
+        self.description = description
+        self.view_count = view_count
+        self.like_count = like_count
+        self.duration = duration
+        self.upload_date = upload_date
+        self.channel_id = channel_id
+        self.channel_title = channel_title
+        self.title = title
+
+
+def video_details(url: str) -> VideoDetails:
+    """Blocking non-flat metadata fetch for the VideoDetail screen."""
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    upload_date = info.get("upload_date") or ""
+    if len(upload_date) == 8:
+        upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+    duration = info.get("duration")
+    return VideoDetails(
+        description=info.get("description") or "",
+        view_count=info.get("view_count"),
+        like_count=info.get("like_count"),
+        duration=int(duration) if duration else None,
+        upload_date=upload_date,
+        channel_id=info.get("channel_id") or "",
+        channel_title=info.get("channel") or info.get("uploader") or "",
+        title=info.get("title") or "",
+    )
