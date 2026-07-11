@@ -16,6 +16,13 @@ class BrowseScreen(Screen):
     BINDINGS = [
         Binding("o", "open_item", "Open channel/playlist"),
         Binding("a", "add_channel", "Follow channel"),
+        Binding("e", "enqueue", "Enqueue"),
+        Binding("i", "detail", "Details"),
+        Binding("A", "play_audio", "Audio only", show=False),
+        Binding("d", "download", "Download", show=False),
+        Binding("s", "save_to_playlist", "Save to playlist", show=False),
+        Binding("space", "pause_toggle", "Pause", show=False),
+        Binding("n", "playlist_next", "Next in queue", show=False),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
@@ -40,7 +47,7 @@ class BrowseScreen(Screen):
         else:
             # Videos and playlists both play directly; mpv's ytdl_hook
             # handles playlist URLs natively.
-            self.app.play_video(video.url)
+            self.app.play_video(video)
 
     def action_open_item(self) -> None:
         video = self._highlighted()
@@ -56,3 +63,41 @@ class BrowseScreen(Screen):
         if video is None:
             return
         self.app.add_channel_to_config(video)
+
+    def action_enqueue(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.enqueue_video(video)
+
+    def action_detail(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.open_detail(video)
+
+    def action_play_audio(self) -> None:
+        video = self._highlighted()
+        if video is None or video.kind == "channel":
+            return
+        self.app.play_video(video, audio_only=True)
+
+    def action_download(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.download_video(video)
+
+    def action_save_to_playlist(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.save_to_local_playlist(video)
+
+    async def action_pause_toggle(self) -> None:
+        await self.app.pause_toggle()
+
+    async def action_playlist_next(self) -> None:
+        if not self.app.player_status and not self.app.player.process_alive():
+            return  # only meaningful while playback is active
+        await self.app.playlist_next()

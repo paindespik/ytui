@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable
@@ -29,23 +30,41 @@ class VideoList(DataTable):
             self.video = video
             super().__init__()
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, mark_watched: bool = True, **kwargs) -> None:
         super().__init__(cursor_type="row", zebra_stripes=True, **kwargs)
         self._videos: list[Video] = []
+        self._mark_watched = mark_watched
 
     def on_mount(self) -> None:
+        self.add_column(" ", key="watched")
         self.add_column("Title", key="title")
         self.add_column("Channel", key="channel")
         self.add_column("Age", key="age")
         self.add_column("Type", key="kind")
 
-    def set_videos(self, videos: list[Video]) -> None:
+    def set_videos(self, videos: list[Video], watched: set[str] | None = None) -> None:
         self._videos = videos
+        watched = watched or set()
         self.clear()
         for video in videos:
+            seen = video.video_id in watched
+            style = "dim" if seen else ""
             self.add_row(
-                video.title, video.channel_title, video.age, _KIND_LABELS.get(video.kind, "")
+                Text("✓" if seen else "", style=style),
+                Text(video.title, style=style),
+                Text(video.channel_title, style=style),
+                Text(video.age, style=style),
+                Text(_KIND_LABELS.get(video.kind, ""), style=style),
             )
+
+    def refresh_watched(self, watched: set[str]) -> None:
+        """Re-render watched markers, keeping the cursor position."""
+        if not self._mark_watched:
+            return
+        row = self.cursor_row
+        self.set_videos(self._videos, watched)
+        if 0 <= row < len(self._videos):
+            self.move_cursor(row=row)
 
     def video_at_cursor(self) -> Video | None:
         if 0 <= self.cursor_row < len(self._videos):

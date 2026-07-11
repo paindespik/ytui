@@ -11,6 +11,7 @@ from textual.widgets import Footer, Header, LoadingIndicator
 from ...models import Video
 from ...sources.ytdlp_source import playlist_videos
 from ..widgets.detail_panel import DetailPanel
+from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
@@ -31,6 +32,7 @@ class PlaylistScreen(BrowseScreen):
         with Horizontal():
             yield VideoList(id="playlist-list")
             yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+        yield PlayerBar()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -53,11 +55,11 @@ class PlaylistScreen(BrowseScreen):
     def _show_videos(self, videos: list[Video]) -> None:
         self.query_one("#playlist-loading", LoadingIndicator).display = False
         video_list = self.query_one("#playlist-list", VideoList)
-        video_list.set_videos(videos)
+        video_list.set_videos(videos, self.app.cache.watched_ids())
         video_list.focus()
 
     def action_play_all(self) -> None:
-        self.app.play_video(self.playlist.url)
+        self.app.play_video(self.playlist)
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

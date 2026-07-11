@@ -9,9 +9,12 @@ from .config import load_config
 
 
 def main(argv: list[str] | None = None) -> int:
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="ytui", description="A terminal YouTube client (feed, search, mpv playback)."
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     play_parser = sub.add_parser("play", help="Play a video or playlist URL in mpv")

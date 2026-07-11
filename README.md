@@ -1,6 +1,6 @@
 # ytui
 
-A terminal YouTube client: follow channels via RSS (no account needed), search with yt-dlp, and play videos in an external mpv window.
+A terminal YouTube client: follow channels via RSS (no account needed), search with yt-dlp, and play videos in an external mpv window — with a playback queue, watch history, local playlists and background downloads.
 
 ## Requirements
 
@@ -34,6 +34,7 @@ pip install -e .[dev]
 ytui                    # open the TUI (home feed, or search if no channels configured)
 ytui search "query"     # search and print results to stdout
 ytui play <url>         # play a YouTube video or playlist URL in mpv
+ytui --version          # print the version
 ```
 
 ## Configuration
@@ -55,28 +56,84 @@ list = [
 command = "mpv"
 format = "bestvideo[height<=?1080]+bestaudio/best"
 audio_only = false
+download_dir = "~/Videos"   # target for the 'd' (download) action
 
 [ui]
 thumbnails = true   # thumbnail panel; set to false for SSH / plain terminals
 ```
 
-Feed metadata is cached in `~/.cache/ytui/meta.sqlite` (15 min TTL). When offline, the feed is served from the cache with a warning banner.
+Feed metadata, watch history and local playlists are stored in `~/.cache/ytui/meta.sqlite` (feed TTL: 15 min). When offline, the feed is served from the cache with a warning banner.
 
 ## Keybindings
+
+### Video lists (feed, search, channel, YouTube playlist, history, local playlist)
 
 | Key | Action |
 |---|---|
 | `j` / `k` / arrows | Move selection |
 | `g` / `G` | Top / bottom |
 | `Enter` | Play video/playlist in mpv, or open a channel |
+| `e` | Enqueue in the running mpv (append-play; starts mpv if idle) |
+| `i` | Video details (full description, views, likes, date) |
 | `o` | Open the highlighted item's channel or playlist view |
 | `a` | Follow the channel (persist it to config.toml) |
-| `p` | (playlist view) Play the whole playlist |
+| `A` | Play audio only (this video, ignores the global setting) |
+| `d` | Download in the background to `[player].download_dir` |
+| `s` | Save the item to a local playlist (picker modal) |
+| `Space` | Pause / resume mpv playback |
+| `n` | Next entry in the mpv queue |
+
+### Home feed
+
+| Key | Action |
+|---|---|
 | `r` | Refresh feed |
 | `/` | Open search |
+| `h` | Watch history |
+| `P` | Local playlists |
+| `,` | Settings |
+| `q` | Quit |
+
+### Other screens
+
+| Key | Action |
+|---|---|
+| `p` | (YouTube playlist / local playlist) Play the whole playlist |
+| `x` | (history) Remove entry · (local playlist) Remove entry · (settings) Remove channel |
+| `n` / `r` | (local playlists) New / rename playlist |
+| `x` | (local playlists) Delete playlist (with confirmation) |
+| `y` | (video details) Copy URL to clipboard (OSC 52) |
+| `b` / `m` / `t` | (settings) Toggle backend / audio-only / thumbnails |
 | `Escape` | Go back |
 | `?` | Help |
-| `q` | Quit |
+
+## Playback queue
+
+Playback goes through a single mpv instance controlled over its JSON IPC socket
+(`$XDG_RUNTIME_DIR/ytui-mpv.sock`). `Enter` replaces what is playing, `e` appends
+to the queue, `Space` pauses and `n` skips. A status line (“▶ playing (2 queued)”)
+appears above the footer on the home feed while mpv runs. When mpv exits, ytui
+returns to the idle state automatically.
+
+## Watch history
+
+Every play/enqueue is recorded. Watched videos show a dimmed `✓` marker in all
+lists. Press `h` for the history screen (`Enter` replays, `x` removes an entry).
+
+## Local playlists
+
+Local playlists live in ytui's SQLite database (no YouTube account involved) and
+can contain both videos and YouTube playlists. Press `s` on any list item to save
+it to a playlist (create one on the fly), and `P` from the home feed to manage
+them: `n` new, `r` rename, `x` delete, `Enter` to open. Inside a playlist,
+`Enter` plays one entry, `p` plays everything through the mpv queue in order,
+and `x` removes an entry.
+
+## Settings
+
+Press `,` for the settings screen: remove followed channels (`x`), toggle the
+feed backend, global audio-only and thumbnails. Changes are written to
+`config.toml` immediately, preserving your comments.
 
 ## Search, channels and playlists
 

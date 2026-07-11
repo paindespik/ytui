@@ -11,6 +11,7 @@ from textual.widgets import Footer, Header, LoadingIndicator
 from ...models import Video
 from ...sources.ytdlp_source import channel_videos
 from ..widgets.detail_panel import DetailPanel
+from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
@@ -37,6 +38,7 @@ class ChannelScreen(BrowseScreen):
         with Horizontal():
             yield VideoList(id="channel-list")
             yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+        yield PlayerBar()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -59,7 +61,7 @@ class ChannelScreen(BrowseScreen):
     def _show_videos(self, videos: list[Video]) -> None:
         self.query_one("#channel-loading", LoadingIndicator).display = False
         video_list = self.query_one("#channel-list", VideoList)
-        video_list.set_videos(videos)
+        video_list.set_videos(videos, self.app.cache.watched_ids())
         video_list.focus()
 
     def action_add_this_channel(self) -> None:

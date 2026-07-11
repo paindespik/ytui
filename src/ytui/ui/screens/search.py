@@ -10,6 +10,7 @@ from textual.widgets import Footer, Header, Input, LoadingIndicator
 
 from ...sources.ytdlp_source import search_videos
 from ..widgets.detail_panel import DetailPanel
+from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
@@ -27,6 +28,7 @@ class SearchScreen(BrowseScreen):
         with Horizontal():
             yield VideoList(id="search-results")
             yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+        yield PlayerBar()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -58,7 +60,7 @@ class SearchScreen(BrowseScreen):
 
     def _show_results(self, videos) -> None:
         results = self.query_one("#search-results", VideoList)
-        results.set_videos(videos)
+        results.set_videos(videos, self.app.cache.watched_ids())
         if videos:
             results.focus()
         else:
