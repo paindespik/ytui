@@ -82,6 +82,7 @@ class YtuiApp(App):
         self.source: VideoSource = RSSSource(config.channels.list, self.cache)
         self.thumbnails = ThumbnailFetcher()
         self.player = MpvController()
+        self._last_polled_vid: str | None = None
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -114,12 +115,18 @@ class YtuiApp(App):
                     # mpv advanced to a queued video on its own: add it to history.
                     self._record_watch(self._video_for_history(vid, title))
                 self.cache.save_position(vid, position, duration)
+                self._last_polled_vid = vid
 
     def _video_for_history(self, video_id: str, title: str) -> Video:
-        cached = self.cache.find_cached_video(video_id)
-        if cached is not None:
-            return cached
-        return Video(video_id=video_id, title=title or video_id, kind="video")
+        video = self.cache.find_cached_video(video_id) or Video(
+            video_id=video_id, title=title or video_id, kind="video"
+        )
+        if not video.playlist_id and self._last_polled_vid:
+            # Inherit the playlist context from the previous video in the queue.
+            prev = self.cache.get_resume(self._last_polled_vid)
+            if prev is not None and prev[2]:
+                video.playlist_id = prev[2]
+        return video
 
     def _resume_start_for(self, video: Video) -> float:
         if video.kind != "video":

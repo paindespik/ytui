@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS watch_history (
     watched_at REAL NOT NULL,
     position REAL NOT NULL DEFAULT 0,
     duration REAL,
-    playlist_id TEXT NOT NULL DEFAULT ''
+    playlist_id TEXT NOT NULL DEFAULT '',
+    channel_id TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS local_playlists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +89,7 @@ class MetaCache:
             "ALTER TABLE watch_history ADD COLUMN position REAL NOT NULL DEFAULT 0",
             "ALTER TABLE watch_history ADD COLUMN duration REAL",
             "ALTER TABLE watch_history ADD COLUMN playlist_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE watch_history ADD COLUMN channel_id TEXT NOT NULL DEFAULT ''",
         ):
             try:
                 self._conn.execute(stmt)
@@ -180,14 +182,16 @@ class MetaCache:
     def record_watch(self, video: Video) -> None:
         self._conn.execute(
             "INSERT INTO watch_history "
-            "(video_id, title, channel_title, kind, watched_at, playlist_id) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
+            "(video_id, title, channel_title, kind, watched_at, playlist_id, channel_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(video_id) DO UPDATE SET "
             "title = excluded.title, "
             "channel_title = excluded.channel_title, "
             "watched_at = excluded.watched_at, "
             "playlist_id = CASE WHEN excluded.playlist_id != '' "
-            "THEN excluded.playlist_id ELSE playlist_id END",
+            "THEN excluded.playlist_id ELSE playlist_id END, "
+            "channel_id = CASE WHEN excluded.channel_id != '' "
+            "THEN excluded.channel_id ELSE channel_id END",
             (
                 video.video_id,
                 video.title,
@@ -195,6 +199,7 @@ class MetaCache:
                 video.kind,
                 time.time(),
                 video.playlist_id,
+                video.channel_id,
             ),
         )
         self._conn.commit()
@@ -222,18 +227,20 @@ class MetaCache:
     def watch_history(self, limit: int = 200) -> list[Video]:
         """Most recent watches first."""
         rows = self._conn.execute(
-            "SELECT video_id, title, channel_title, kind, watched_at, duration, playlist_id "
+            "SELECT video_id, title, channel_title, kind, watched_at, duration, "
+            "playlist_id, channel_id "
             "FROM watch_history ORDER BY watched_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         videos = []
-        for video_id, title, channel_title, kind, watched_at, duration, playlist_id in rows:
+        for video_id, title, channel_title, kind, watched_at, duration, playlist_id, ch_id in rows:
             thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg" if kind == "video" else ""
             videos.append(
                 Video(
                     video_id=video_id,
                     title=title,
                     channel_title=channel_title,
+                    channel_id=ch_id,
                     kind=kind,
                     published=datetime.fromtimestamp(watched_at, tz=timezone.utc),
                     duration=int(duration) if duration else None,

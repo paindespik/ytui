@@ -5,7 +5,7 @@ import sqlite3
 from ytui.cache import MetaCache, resume_start
 from ytui.models import Video
 
-V1 = Video(video_id="vid1", title="First", channel_title="Chan A")
+V1 = Video(video_id="vid1", title="First", channel_title="Chan A", channel_id="UCaaa")
 V2 = Video(video_id="vid2", title="Second", channel_title="Chan B")
 PL = Video(video_id="PLxyz", title="A playlist", kind="playlist")
 
@@ -93,6 +93,15 @@ def test_playlist_id_recorded_and_preserved(tmp_path):
     assert cache.watch_history()[0].playlist_id == "PLx"
 
 
+def test_channel_id_recorded_and_preserved(tmp_path):
+    cache = make_cache(tmp_path)
+    cache.record_watch(V1)
+    assert cache.watch_history()[0].channel_id == "UCaaa"
+    # Re-record without channel info (e.g. auto-advanced queue entry): preserved.
+    cache.record_watch(Video(video_id="vid1", title="First"))
+    assert cache.watch_history()[0].channel_id == "UCaaa"
+
+
 def test_migration_adds_columns(tmp_path):
     db = tmp_path / "meta.sqlite"
     conn = sqlite3.connect(db)
@@ -112,6 +121,7 @@ def test_migration_adds_columns(tmp_path):
     assert cache.get_resume("old1") == (0.0, None, "")
     cache.save_position("old1", 42.0, 100.0)
     assert cache.get_resume("old1") == (42.0, 100.0, "")
+    assert cache.watch_history()[0].channel_id == ""
 
 
 def test_resume_start_rule():
