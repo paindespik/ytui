@@ -172,3 +172,71 @@ async def test_feed_uses_fresh_cache_without_network(cache, monkeypatch):
     result = await source.feed()
     assert [v.video_id for v in result.videos] == ["fresh001"]
     assert result.warnings == []
+
+
+# -- BitChute --
+
+
+def test_parse_bitchute_rss_fixture():
+    from ytui.sources.rss import parse_bitchute_rss
+
+    videos = parse_bitchute_rss(
+        FIXTURES.joinpath("bitchute_feed.xml").read_bytes(), channel_id="testchannel"
+    )
+    assert len(videos) == 2
+    first = videos[0]
+    assert first.video_id == "vidid001abc"
+    assert first.title == "First BitChute Video"
+    assert first.channel_title == "Test BitChute Channel"
+    assert first.channel_id == "testchannel"
+    assert first.platform == "bitchute"
+    assert first.published == datetime(2025, 6, 24, 20, 6, 23, tzinfo=timezone.utc)
+    assert first.url == "https://www.bitchute.com/video/vidid001abc/"
+    assert "vidid001abc" in first.thumbnail_url
+
+
+async def test_feed_mixes_youtube_and_bitchute(cache, monkeypatch):
+    yt_fixture = FIXTURES.joinpath("channel_feed.xml").read_bytes()
+    bc_fixture = FIXTURES.joinpath("bitchute_feed.xml").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "youtube.com" in url:
+            return httpx.Response(200, content=yt_fixture)
+        if "bitchute.com" in url:
+            return httpx.Response(200, content=bc_fixture)
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _client(httpx.MockTransport(handler))
+    )
+    source = RSSSource(["UCtest000000000000000000", "bitchute:testchannel"], cache)
+    result = await source.feed()
+    assert result.warnings == []
+    platforms = {v.platform for v in result.videos}
+    assert platforms == {"youtube", "bitchute"}
+    assert len(result.videos) == 4
+    # BitChute feed is cached under its prefixed key.
+    assert cache.get_feed("bitchute:testchannel") is not None
+
+
+async def test_bitchute_feed_offline_uses_stale_cache(cache, monkeypatch):
+    from ytui.sources.rss import parse_bitchute_rss
+
+    videos = parse_bitchute_rss(
+        FIXTURES.joinpath("bitchute_feed.xml").read_bytes(), channel_id="testchannel"
+    )
+    cache.set_feed("bitchute:testchannel", videos)
+    cache._conn.execute("UPDATE feed_items SET fetched_at = 0")
+    cache._conn.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: _client(httpx.MockTransport(handler))
+    )
+    source = RSSSource(["bitchute:testchannel"], cache)
+    result = await source.feed()
+    assert [v.video_id for v in result.videos] == ["vidid001abc", "vidid002def"]
+    assert result.warnings and "cached" in result.warnings[0]

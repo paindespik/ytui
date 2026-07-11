@@ -15,6 +15,9 @@ from .base import FeedResult, VideoSource
 
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 HANDLE_URL = "https://www.youtube.com/{handle}"
+BITCHUTE_PREFIX = "bitchute:"
+BITCHUTE_RSS_URL = "https://api.bitchute.com/feeds/rss/channel/{channel_id}"
+_BITCHUTE_EMBED_RE = re.compile(r"/embed/([\w-]+)/?")
 TIMEOUT = httpx.Timeout(5.0)
 CONCURRENCY = 10
 _CHANNEL_ID_RE = re.compile(r'"channelId"\s*:\s*"(UC[\w-]{22})"')
@@ -46,6 +49,39 @@ def parse_rss(xml: str | bytes) -> list[Video]:
                 channel_id=entry.get("yt_channelid", ""),
                 published=published,
                 thumbnail_url=thumb or f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg",
+            )
+        )
+    return videos
+
+
+def parse_bitchute_rss(xml: str | bytes, channel_id: str = "") -> list[Video]:
+    """Parse a BitChute channel RSS feed into Video objects."""
+    parsed = feedparser.parse(xml)
+    channel_title = parsed.feed.get("title", "")
+    videos: list[Video] = []
+    for entry in parsed.entries:
+        video_id = entry.get("id") or ""
+        if not video_id:
+            m = _BITCHUTE_EMBED_RE.search(entry.get("link", ""))
+            video_id = m.group(1) if m else ""
+        if not video_id:
+            continue
+        published = None
+        if entry.get("published_parsed"):
+            published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        thumb = ""
+        enclosures = entry.get("enclosures") or []
+        if enclosures:
+            thumb = enclosures[0].get("href") or enclosures[0].get("url") or ""
+        videos.append(
+            Video(
+                video_id=video_id,
+                title=entry.get("title", ""),
+                channel_title=channel_title,
+                channel_id=channel_id,
+                published=published,
+                thumbnail_url=thumb,
+                platform="bitchute",
             )
         )
     return videos
@@ -99,6 +135,8 @@ class RSSSource(VideoSource):
     ) -> tuple[list[Video], str | None]:
         """Fetch one channel's feed. Returns (videos, warning)."""
         async with semaphore:
+            if entry.startswith(BITCHUTE_PREFIX):
+                return await self._fetch_bitchute(entry, client, force_refresh)
             try:
                 channel_id = await self.resolve_channel(entry, client)
             except Exception as exc:
@@ -122,6 +160,31 @@ class RSSSource(VideoSource):
                 if stale is not None:
                     return stale, f"{entry}: using cached data ({type(exc).__name__})"
                 return [], f"{entry}: {exc}"
+
+    async def _fetch_bitchute(
+        self, entry: str, client: httpx.AsyncClient, force_refresh: bool
+    ) -> tuple[list[Video], str | None]:
+        """Fetch one BitChute channel's feed; cached under the 'bitchute:<slug>' key."""
+        name = entry[len(BITCHUTE_PREFIX):]
+        if not force_refresh:
+            cached = self.cache.get_feed(entry)
+            if cached is not None:
+                return cached, None
+        try:
+            resp = await client.get(
+                BITCHUTE_RSS_URL.format(channel_id=name),
+                headers={"User-Agent": USER_AGENT},
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            videos = parse_bitchute_rss(resp.content, channel_id=name)
+            self.cache.set_feed(entry, videos)
+            return videos, None
+        except Exception as exc:
+            stale = self.cache.get_feed(entry, allow_stale=True)
+            if stale is not None:
+                return stale, f"{entry}: using cached data ({type(exc).__name__})"
+            return [], f"{entry}: {exc}"
 
     async def feed(self, force_refresh: bool = False) -> FeedResult:
         semaphore = asyncio.Semaphore(CONCURRENCY)

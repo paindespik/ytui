@@ -9,13 +9,14 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, OptionList
 from textual.widgets.option_list import Option
 
-from ...config import remove_channel, set_option
-from ..widgets.modals import ConfirmModal
+from ...config import add_channel, remove_channel, set_option
+from ..widgets.modals import ConfirmModal, TextInputModal
 
 
 class SettingsScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
+        Binding("a", "add_channel", "Add channel"),
         Binding("x", "remove_channel", "Remove channel"),
         Binding("b", "toggle_backend", "Toggle backend"),
         Binding("m", "toggle_audio_only", "Toggle audio-only"),
@@ -41,7 +42,7 @@ class SettingsScreen(Screen):
         yield Header()
         with Vertical():
             yield Label("", id="settings-options")
-            yield Label("Followed channels (x = remove):", id="settings-channels-title")
+            yield Label("Followed channels (a = add, x = remove):", id="settings-channels-title")
             yield OptionList(id="settings-channels")
         yield Footer()
 
@@ -63,7 +64,9 @@ class SettingsScreen(Screen):
         cache = self.app.cache
         for entry in config.channels.list:
             channel_id = entry
-            if not entry.startswith("UC"):
+            if entry.startswith("bitchute:"):
+                pass  # cached under the full 'bitchute:<name>' key
+            elif not entry.startswith("UC"):
                 handle = entry if entry.startswith("@") else f"@{entry}"
                 channel_id = cache.get_handle(handle) or entry
             name = cache.get_channel_name(channel_id)
@@ -74,6 +77,24 @@ class SettingsScreen(Screen):
         else:
             options.highlighted = 0
         options.focus()
+
+    def action_add_channel(self) -> None:
+        prompt = (
+            "Add channel (UC id, @handle, or bitchute:<slug> for a BitChute channel):"
+        )
+
+        def on_entry(entry: str | None) -> None:
+            if not entry:
+                return
+            if add_channel(entry):
+                if entry not in self.app.config.channels.list:
+                    self.app.config.channels.list.append(entry)
+                self.app.notify(f"Added {entry}. Refresh the feed to apply.", timeout=5)
+            else:
+                self.app.notify(f"{entry} is already in your channels.", timeout=5)
+            self._reload()
+
+        self.app.push_screen(TextInputModal(prompt), on_entry)
 
     def action_remove_channel(self) -> None:
         options = self.query_one("#settings-channels", OptionList)

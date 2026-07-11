@@ -202,6 +202,8 @@ class YtuiApp(App):
     def add_channel_to_config(self, video: Video) -> None:
         """Persist the item's channel into config.toml [channels].list."""
         channel_id = video.video_id if video.kind == "channel" else video.channel_id
+        if channel_id and video.platform == "bitchute":
+            channel_id = f"bitchute:{channel_id}"
         if not channel_id:
             self.notify("No channel ID for this item.", severity="warning", timeout=5)
             return

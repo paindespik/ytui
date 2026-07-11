@@ -1,6 +1,6 @@
 # ytui
 
-A terminal YouTube client: follow channels via RSS (no account needed), search with yt-dlp, and play videos in an external mpv window — with a playback queue, watch history, local playlists and background downloads.
+A terminal YouTube client with BitChute support: follow channels via RSS (no account needed), search with yt-dlp, and play videos in an external mpv window — with a playback queue, watch history, local playlists and background downloads.
 
 ## Requirements
 
@@ -46,10 +46,12 @@ Config lives at `~/.config/ytui/config.toml` and is created with defaults on fir
 backend = "rss"
 
 [channels]
-# Channel IDs (UC...) or @handles. Handles are resolved once and cached.
+# Channel IDs (UC...), @handles, or BitChute channel slugs prefixed with
+# "bitchute:". Handles are resolved once and cached.
 list = [
   "UCXuqSBlHAE6Xw-yeJA0Tunw",
   "@LinusTechTips",
+  "bitchute:bitchute",
 ]
 
 [player]
@@ -131,7 +133,8 @@ and `x` removes an entry.
 
 ## Settings
 
-Press `,` for the settings screen: remove followed channels (`x`), toggle the
+Press `,` for the settings screen: add followed channels (`a` — accepts UC ids,
+@handles or `bitchute:<slug>`), remove them (`x`), toggle the
 feed backend, global audio-only and thumbnails. Changes are written to
 `config.toml` immediately, preserving your comments.
 
@@ -142,6 +145,17 @@ Search results mix videos, playlists and channels (see the *Type* column).
 - `Enter` on a **video** or **playlist** plays it in mpv (mpv's ytdl_hook streams whole playlists natively).
 - `Enter` on a **channel** opens its latest videos; press `a` there to follow it — the channel ID is written to `[channels].list` in config.toml and appears in the home feed on the next refresh.
 - `o` on a playlist opens the playlist view, where `Enter` plays one entry and `p` plays them all.
+
+## BitChute channels
+
+BitChute channels can be followed alongside YouTube ones. The channel slug is
+the name in the channel URL — for `bitchute.com/channel/<slug>/` the entry is
+`bitchute:<slug>`. Add it from the settings screen (`,` then `a`) or directly
+to `[channels].list` in config.toml, then press `r` on the home feed to
+refresh. Feeds come from BitChute's RSS API and use the same cache TTL and
+offline fallback as YouTube. Pressing `a` on a BitChute video in any list
+follows its channel (the `bitchute:` prefix is added automatically). Playback
+goes through mpv via yt-dlp's native BitChute extractor.
 
 ## Thumbnails
 

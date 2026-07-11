@@ -30,6 +30,8 @@ class ChannelScreen(BrowseScreen):
     def channel_url(self) -> str:
         if self.channel.kind == "channel":
             return self.channel.url
+        if self.channel.platform == "bitchute":
+            return f"https://www.bitchute.com/channel/{self.channel.channel_id}/"
         return f"https://www.youtube.com/channel/{self.channel.channel_id}"
 
     def compose(self) -> ComposeResult:

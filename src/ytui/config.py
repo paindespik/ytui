@@ -19,11 +19,14 @@ DEFAULT_CONFIG_TOML = """\
 backend = "rss"
 
 [channels]
-# Channels for the home feed. Accepts channel IDs (UC...) or @handles.
+# Channels for the home feed. Accepts YouTube channel IDs (UC...), @handles,
+# or BitChute channel slugs prefixed with "bitchute:" (the name in
+# bitchute.com/channel/<slug>/ URLs).
 # Example:
 # list = [
 #   "UCXuqSBlHAE6Xw-yeJA0Tunw",
 #   "@LinusTechTips",
+#   "bitchute:bitchute",
 # ]
 list = []
 

@@ -23,7 +23,8 @@ def entry_to_item(entry: dict) -> Video | None:
     entry_id = entry.get("id")
     if not entry_id:
         return None
-    url = entry.get("url") or ""
+    url = entry.get("url") or entry.get("webpage_url") or ""
+    platform = "bitchute" if "bitchute.com" in url else "youtube"
     kind = "video"
     if entry.get("ie_key") == "YoutubeTab" or entry.get("_type") == "playlist":
         if _PLAYLIST_URL_RE.search(url) or entry_id.startswith(("PL", "RD", "OL", "UU", "LL")):
@@ -38,12 +39,13 @@ def entry_to_item(entry: dict) -> Video | None:
         published = datetime.fromtimestamp(ts, tz=timezone.utc)
     duration = entry.get("duration")
     thumb = ""
-    if kind == "video":
+    if kind == "video" and platform == "youtube":
         thumb = f"https://i.ytimg.com/vi/{entry_id}/mqdefault.jpg"
     else:
         thumbs = entry.get("thumbnails") or []
         if thumbs:
             thumb = thumbs[-1].get("url") or ""
+        thumb = thumb or entry.get("thumbnail") or ""
     return Video(
         video_id=entry_id,
         title=entry.get("title") or "",
@@ -53,6 +55,7 @@ def entry_to_item(entry: dict) -> Video | None:
         duration=int(duration) if duration else None,
         thumbnail_url=thumb,
         kind=kind,
+        platform=platform,
     )
 
 
@@ -84,6 +87,8 @@ def search_videos(query: str, limit: int = 20) -> list[Video]:
 def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
     """Blocking flat listing of a channel's latest videos."""
     url = channel_url.rstrip("/")
+    if "bitchute.com" in url:
+        return _extract_items(url, limit=limit)
     if not url.endswith("/videos"):
         url += "/videos"
     return _extract_items(url, limit=limit)
