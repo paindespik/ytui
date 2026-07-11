@@ -207,6 +207,20 @@ Notes:
   after 7 days; you may occasionally have to re-consent in the browser.
 - These actions only work on YouTube videos (not BitChute, channels or playlists).
 
+## Live notifications
+
+When a followed channel goes live, ytui shows a desktop notification
+(via `notify-send`) and an in-app toast. Clicking the notification brings the
+home feed to the front, focused on the live video (press `Enter` to play it).
+Channels are checked every 5 minutes while ytui runs. Configure in
+`config.toml`:
+
+```toml
+[live]
+notifications = true   # set to false to disable
+check_minutes = 5
+```
+
 ## Development
 
 ```sh

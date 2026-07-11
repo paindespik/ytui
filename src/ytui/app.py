@@ -5,8 +5,11 @@ from __future__ import annotations
 from textual.app import App
 from textual.reactive import reactive
 
+import httpx
+
 from .cache import MetaCache, resume_start
 from .config import Config, add_channel
+from .livenotify import check_channel_live, send_live_notification
 from .models import Video, video_id_from_url
 from .player.mpv import MpvController, PlayerError, play
 from .sources.base import VideoSource
@@ -85,6 +88,7 @@ class YtuiApp(App):
         self._last_polled_vid: str | None = None
         self._last_polled_duration: float | None = None
         self._live_vids: set[str] = set()
+        self._notified_live_ids: set[str] = set()
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -92,6 +96,50 @@ class YtuiApp(App):
         if not self.config.channels.list:
             self.push_screen("search")
         self.set_interval(2.0, self._poll_player)
+        if self.config.live.notifications and self.config.channels.list:
+            interval = max(1, self.config.live.check_minutes) * 60
+            self.set_interval(interval, self._start_live_check)
+            self.set_timer(15, self._start_live_check)
+
+    # -- live notifications --
+
+    def _start_live_check(self) -> None:
+        self.run_worker(self._check_lives(), group="live-check", exclusive=True)
+
+    async def _check_lives(self) -> None:
+        source = self.source
+        if not isinstance(source, RSSSource):
+            return
+        entries = [c for c in self.config.channels.list if not c.startswith("bitchute:")]
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            for entry in entries:
+                try:
+                    channel_id = await source.resolve_channel(entry, client)
+                    name = self.cache.get_channel_name(channel_id) or ""
+                    live = await check_channel_live(client, channel_id, name)
+                except Exception:
+                    continue  # offline / throttled: retry at the next interval
+                if live is not None and live.video_id not in self._notified_live_ids:
+                    self._notified_live_ids.add(live.video_id)
+                    self.notify(f"\U0001f534 Live: {live.channel_title} \u2014 {live.title}", timeout=10)
+                    self.run_worker(
+                        lambda v=live: self._notify_live_blocking(v),
+                        thread=True,
+                        group="live-notify",
+                        exclusive=False,
+                    )
+
+    def _notify_live_blocking(self, video: Video) -> None:
+        # Blocks until the notification is dismissed or clicked (notify-send --wait).
+        if send_live_notification(video):
+            self.call_from_thread(self._focus_live, video)
+
+    def _focus_live(self, video: Video) -> None:
+        """Bring the home feed to the front, focused on the given live video."""
+        while not isinstance(self.screen, HomeFeedScreen) and len(self.screen_stack) > 1:
+            self.pop_screen()
+        if isinstance(self.screen, HomeFeedScreen):
+            self.screen.focus_live(video)
 
     async def on_unmount(self) -> None:
         await self.thumbnails.close()

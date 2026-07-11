@@ -8,6 +8,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Label, LoadingIndicator
 
+from ...models import Video
 from ...sources.base import FeedResult
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
@@ -37,7 +38,13 @@ class HomeFeedScreen(BrowseScreen):
 
     def on_mount(self) -> None:
         self.sub_title = "Home feed"
+        self._pending_focus: Video | None = None
         self.load_feed(force_refresh=False)
+
+    def focus_live(self, video: Video) -> None:
+        """Refresh the feed and focus the given live video (from a notification)."""
+        self._pending_focus = video
+        self.load_feed(force_refresh=True)
 
     @work(exclusive=True)
     async def load_feed(self, force_refresh: bool) -> None:
@@ -50,9 +57,15 @@ class HomeFeedScreen(BrowseScreen):
             self._show_warning(f"Failed to load feed: {exc}")
             return
         loading.display = False
-        self.query_one("#feed-list", VideoList).set_videos(
-            result.videos, self.app.cache.watched_ids()
-        )
+        videos = result.videos
+        pending = self._pending_focus
+        self._pending_focus = None
+        if pending is not None and all(v.video_id != pending.video_id for v in videos):
+            videos = [pending, *videos]  # live not (yet) in the RSS feed: show it on top
+        feed_list = self.query_one("#feed-list", VideoList)
+        feed_list.set_videos(videos, self.app.cache.watched_ids())
+        if pending is not None:
+            feed_list.focus_video(pending.video_id)
         if result.warnings:
             self._show_warning(" | ".join(result.warnings[:3]))
         else:

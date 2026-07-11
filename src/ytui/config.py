@@ -40,6 +40,11 @@ download_dir = "~/Videos"
 [ui]
 thumbnails = true
 
+[live]
+# Desktop notification (notify-send) when a followed channel goes live.
+notifications = true
+check_minutes = 5
+
 [auth]
 # Path to the OAuth2 client_secret.json (Google Cloud Console, type "Desktop app").
 # Needed for the like ('L') and comment ('C') actions. Requires 'pip install ytui[auth]'.
@@ -68,6 +73,11 @@ class UIConfig(BaseModel):
     thumbnails: bool = True
 
 
+class LiveConfig(BaseModel):
+    notifications: bool = True
+    check_minutes: int = 5
+
+
 class AuthConfig(BaseModel):
     # Path to the OAuth2 client_secret.json; empty = config_dir()/client_secret.json.
     client_secret: str = ""
@@ -78,6 +88,7 @@ class Config(BaseModel):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     player: PlayerConfig = Field(default_factory=PlayerConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    live: LiveConfig = Field(default_factory=LiveConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
 
 

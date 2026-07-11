@@ -66,6 +66,15 @@ class VideoList(DataTable):
         if 0 <= row < len(self._videos):
             self.move_cursor(row=row)
 
+    def focus_video(self, video_id: str) -> bool:
+        """Move the cursor to the given video. False if it is not in the list."""
+        for row, video in enumerate(self._videos):
+            if video.video_id == video_id:
+                self.move_cursor(row=row)
+                self.focus()
+                return True
+        return False
+
     def video_at_cursor(self) -> Video | None:
         if 0 <= self.cursor_row < len(self._videos):
             return self._videos[self.cursor_row]
