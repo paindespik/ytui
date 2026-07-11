@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from .config import load_config
+
+_YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
+_YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
+_BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
+
+
+def _record_cli_watch(url: str) -> None:
+    """Record a `ytui play <url>` in watch history, mirroring the TUI behaviour."""
+    from .cache import MetaCache
+    from .models import Video
+
+    platform = "youtube"
+    match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url)
+    if not match:
+        match = _BITCHUTE_RE.search(url)
+        if match:
+            platform = "bitchute"
+    if not match:
+        return  # playlists / unknown URLs: nothing to record
+    video_id = match.group(1)
+
+    cache = MetaCache()
+    try:
+        # Reuse cached metadata (title/channel) when the video is in a feed.
+        video = cache.find_cached_video(video_id)
+        if video is None:
+            video = Video(video_id=video_id, title=video_id, platform=platform)
+        cache.record_watch(video)
+    finally:
+        cache.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             play(args.url, config.player)
+            _record_cli_watch(args.url)
         except PlayerError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1

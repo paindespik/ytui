@@ -50,3 +50,32 @@ def test_playlist_kind_preserved(tmp_path):
     entry = cache.watch_history()[0]
     assert entry.kind == "playlist"
     assert entry.thumbnail_url == ""  # no i.ytimg URL for non-videos
+
+
+def test_find_cached_video(tmp_path):
+    cache = make_cache(tmp_path)
+    cache.set_feed("UCchan", [V1])
+    found = cache.find_cached_video("vid1")
+    assert found is not None and found.title == "First"
+    assert cache.find_cached_video("nope") is None
+
+
+def test_cli_play_records_watch(tmp_path, monkeypatch):
+    import ytui.__main__ as main_mod
+    import ytui.cache as cache_mod
+
+    db = tmp_path / "meta.sqlite"
+    # _record_cli_watch instantiates MetaCache(); redirect it to a temp DB.
+    orig_init = cache_mod.MetaCache.__init__
+    monkeypatch.setattr(
+        cache_mod.MetaCache,
+        "__init__",
+        lambda self, path=None: orig_init(self, db),
+    )
+
+    main_mod._record_cli_watch("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    main_mod._record_cli_watch("https://www.bitchute.com/video/AbC123xyz/")
+    main_mod._record_cli_watch("https://www.youtube.com/playlist?list=PL1")  # ignored
+
+    cache = cache_mod.MetaCache()
+    assert cache.watched_ids() == {"dQw4w9WgXcQ", "AbC123xyz"}

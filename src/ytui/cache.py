@@ -141,6 +141,15 @@ class MetaCache:
         if videos and videos[0].channel_title:
             self.set_channel_name(channel_id, videos[0].channel_title)
 
+    def find_cached_video(self, video_id: str) -> Video | None:
+        """Look up a video by id across all cached feeds (stale included)."""
+        rows = self._conn.execute("SELECT videos_json FROM feed_items").fetchall()
+        for (videos_json,) in rows:
+            for v in json.loads(videos_json):
+                if v.get("video_id") == video_id:
+                    return Video.model_validate(v)
+        return None
+
     def clear_feed(self) -> None:
         self._conn.execute("DELETE FROM feed_items")
         self._conn.commit()
