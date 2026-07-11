@@ -43,8 +43,11 @@ def build_command(
     if ipc_socket:
         cmd.append(f"--input-ipc-server={ipc_socket}")
     if start and start > 0:
-        cmd.append(f"--start={start:.0f}")
-    cmd.append(url)
+        # Per-file option: a global --start would also apply to any file
+        # loaded later over IPC (queue, live streams), stalling playback.
+        cmd.extend(["--{", f"--start={start:.0f}", url, "--}"])
+    else:
+        cmd.append(url)
     return cmd
 
 

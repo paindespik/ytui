@@ -133,7 +133,9 @@ def test_build_command_flags(monkeypatch):
 
 def test_build_command_with_start(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/mpv")
-    assert "--start=123" in build_command(URL, PLAYER, start=123.4)
+    cmd = build_command(URL, PLAYER, start=123.4)
+    # --start must be a per-file option, not global (would leak to IPC-loaded files).
+    assert cmd[-4:] == ["--{", "--start=123", URL, "--}"]
     assert not any(a.startswith("--start") for a in build_command(URL, PLAYER))
     assert not any(a.startswith("--start") for a in build_command(URL, PLAYER, start=0))
 
