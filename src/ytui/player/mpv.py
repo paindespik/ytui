@@ -203,8 +203,8 @@ class MpvController:
         resp = await self.command("playlist-next")
         return resp is not None and resp.get("error") == "success"
 
-    async def playback_snapshot(self) -> tuple[str, float, float] | None:
-        """(path, time_pos, duration) of the current file, or None if unavailable."""
+    async def playback_snapshot(self) -> tuple[str, str, float, float] | None:
+        """(path, title, time_pos, duration) of the current file, or None if unavailable."""
         values = []
         for prop in ("path", "time-pos", "duration"):
             resp = await self.command("get_property", prop)
@@ -214,7 +214,11 @@ class MpvController:
         path, time_pos, duration = values
         if not isinstance(duration, (int, float)) or duration <= 0:
             return None  # live streams have no usable duration
-        return str(path), float(time_pos), float(duration)
+        title_resp = await self.command("get_property", "media-title")
+        title = ""
+        if title_resp is not None and title_resp.get("error") == "success":
+            title = str(title_resp.get("data") or "")
+        return str(path), title, float(time_pos), float(duration)
 
     async def status(self) -> PlayerStatus | None:
         """Current playback status, or None when nothing is playing."""

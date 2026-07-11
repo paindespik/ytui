@@ -107,9 +107,11 @@ async def test_play_with_start_over_ipc(fake_mpv):
 
 
 async def test_playback_snapshot(fake_mpv):
-    fake_mpv.properties.update({"path": URL, "time-pos": 12.5, "duration": 600.0})
+    fake_mpv.properties.update(
+        {"path": URL, "time-pos": 12.5, "duration": 600.0, "media-title": "Some video"}
+    )
     ctrl = MpvController(socket_path=fake_mpv.socket_path)
-    assert await ctrl.playback_snapshot() == (URL, 12.5, 600.0)
+    assert await ctrl.playback_snapshot() == (URL, "Some video", 12.5, 600.0)
 
     fake_mpv.properties["duration"] = None  # live stream: no duration
     assert await ctrl.playback_snapshot() is None

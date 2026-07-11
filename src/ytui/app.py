@@ -107,9 +107,19 @@ class YtuiApp(App):
         self.player_status = f"{icon}{queued}"
         snap = await self.player.playback_snapshot()
         if snap:
-            vid = video_id_from_url(snap[0])
+            path, title, position, duration = snap
+            vid = video_id_from_url(path)
             if vid:
-                self.cache.save_position(vid, snap[1], snap[2])
+                if vid not in self.cache.watched_ids():
+                    # mpv advanced to a queued video on its own: add it to history.
+                    self._record_watch(self._video_for_history(vid, title))
+                self.cache.save_position(vid, position, duration)
+
+    def _video_for_history(self, video_id: str, title: str) -> Video:
+        cached = self.cache.find_cached_video(video_id)
+        if cached is not None:
+            return cached
+        return Video(video_id=video_id, title=title or video_id, kind="video")
 
     def _resume_start_for(self, video: Video) -> float:
         if video.kind != "video":
