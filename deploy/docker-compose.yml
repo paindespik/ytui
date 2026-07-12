@@ -1,0 +1,14 @@
+services:
+  ytui-backend:
+    container_name: ytui-backend
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "127.0.0.1:8776:8776"   # loopback only; nginx terminates TLS in front
+    env_file: .env               # YTUI_API_TOKEN=...
+    environment:
+      YTUI_DATA_DIR: /data
+    volumes:
+      - ./data:/data             # sqlite + oauth_token.json + client_secret.json
+    restart: unless-stopped
