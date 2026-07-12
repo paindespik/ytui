@@ -39,11 +39,11 @@ class VideoTile extends ConsumerWidget {
       title: Row(
         children: [
           if (live)
-            const Padding(
-              padding: EdgeInsets.only(right: 4),
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
               child: Semantics(
                 label: 'Live',
-                child: Icon(Icons.circle, color: Colors.red, size: 10),
+                child: const Icon(Icons.circle, color: Colors.red, size: 10),
               ),
             ),
           Expanded(
@@ -57,8 +57,9 @@ class VideoTile extends ConsumerWidget {
             ),
           ),
           if (watched)
-            const Semantics(
-                label: 'Already watched', child: Icon(Icons.check, size: 14)),
+            Semantics(
+                label: 'Already watched',
+                child: const Icon(Icons.check, size: 14)),
         ],
       ),
       subtitle: Text(
