@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 import '../widgets/video_tile.dart';
+import '../widgets/app_state_views.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -72,9 +73,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             child: _query.isEmpty
                 ? const Center(child: Text('Type a query'))
                 : ref.watch(searchProvider((_query, _source))).when(
-                      loading: () =>
-                          const Center(child: CircularProgressIndicator()),
-                      error: (e, _) => Center(child: Text('$e')),
+                      loading: () => const AppLoading(),
+                      error: (e, _) => AppError.from(e,
+                          onRetry: () => ref
+                              .invalidate(searchProvider((_query, _source)))),
                       data: (items) => ListView(
                         children: [for (final v in items) VideoTile(video: v)],
                       ),

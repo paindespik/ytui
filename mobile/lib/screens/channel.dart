@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/client.dart';
 import '../state/providers.dart';
+import '../widgets/app_state_views.dart';
 import '../widgets/video_tile.dart';
 
 class ChannelScreen extends ConsumerWidget {
@@ -55,11 +56,15 @@ class ChannelScreen extends ConsumerWidget {
         ],
       ),
       body: data.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
-        data: (result) => ListView(
-          children: [for (final v in result.$1) VideoTile(video: v)],
-        ),
+        loading: () => const AppLoading(),
+        error: (e, _) => AppError.from(e,
+            onRetry: () =>
+                ref.invalidate(channelVideosProvider((channelId, platform)))),
+        data: (result) => result.$1.isEmpty
+            ? const AppEmpty(message: 'This channel has no videos')
+            : ListView(
+                children: [for (final v in result.$1) VideoTile(video: v)],
+              ),
       ),
     );
   }

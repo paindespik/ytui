@@ -76,7 +76,7 @@ class YtuiApi {
   }) async {
     final r = await _request('GET', '/api/search',
         query: {'q': query, 'limit': limit, 'source': source});
-    return ((r.data as Map<String, dynamic>)['items'] as List<dynamic>)
+    return ((r.data as Map<String, dynamic>)['items'] as List<dynamic>? ?? const [])
         .map((e) => Video.fromJson(e as Map<String, dynamic>))
         .toList();
   }
@@ -89,10 +89,10 @@ class YtuiApi {
     final r = await _request('GET', '/api/channels/${_enc(channelId)}/videos',
         query: {'platform': platform, 'limit': limit});
     final data = r.data as Map<String, dynamic>;
-    final items = (data['items'] as List<dynamic>)
+    final items = (data['items'] as List<dynamic>? ?? const [])
         .map((e) => Video.fromJson(e as Map<String, dynamic>))
         .toList();
-    final title = (data['channel'] as Map<String, dynamic>)['title'] as String? ?? '';
+    final title = (data['channel'] as Map<String, dynamic>?)?['title'] as String? ?? '';
     return (items, title);
   }
 
@@ -104,7 +104,7 @@ class YtuiApi {
     final r = await _request('GET', '/api/ytplaylists/${_enc(playlistId)}/videos',
         query: {'platform': platform, 'limit': limit});
     final data = r.data as Map<String, dynamic>;
-    final items = (data['items'] as List<dynamic>)
+    final items = (data['items'] as List<dynamic>? ?? const [])
         .map((e) => Video.fromJson(e as Map<String, dynamic>))
         .toList();
     return (items, data['title'] as String? ?? '');

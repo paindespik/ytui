@@ -298,4 +298,29 @@ void main() {
     final lives = await api.lives();
     expect(lives.single.video.videoId, 'a');
   });
+
+  test('channelVideos tolerates null items and channel', () async {
+    final api = _api({
+      'GET /api/channels/UC1/videos': (200, {'items': null, 'channel': null}),
+    });
+    final (videos, title) = await api.channelVideos('UC1');
+    expect(videos, isEmpty);
+    expect(title, '');
+  });
+
+  test('playlistVideos tolerates null items', () async {
+    final api = _api({
+      'GET /api/ytplaylists/PL1/videos': (200, {'items': null, 'title': 'x'}),
+    });
+    final (videos, title) = await api.playlistVideos('PL1');
+    expect(videos, isEmpty);
+    expect(title, 'x');
+  });
+
+  test('search tolerates missing items', () async {
+    final api = _api({
+      'GET /api/search': (200, {'total': 0}),
+    });
+    expect(await api.search('q'), isEmpty);
+  });
 }

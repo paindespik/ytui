@@ -10,6 +10,14 @@ import '../state/settings.dart';
 
 const _channelId = 'ytui_lives';
 
+int _notifId(String s) {
+  var h = 0;
+  for (final c in s.codeUnits) {
+    h = (h * 31 + c) & 0x7fffffff;
+  }
+  return h;
+}
+
 final FlutterLocalNotificationsPlugin notificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
@@ -26,7 +34,7 @@ Future<void> initNotifications() async {
 
 Future<void> showLiveNotification(String videoId, String title, String channel) {
   return notificationsPlugin.show(
-    videoId.hashCode,
+    _notifId(videoId),
     '🔴 $channel is live',
     title,
     const NotificationDetails(

@@ -9,6 +9,7 @@ import '../api/models.dart';
 import '../state/providers.dart';
 import '../state/queue.dart';
 import '../widgets/video_tile.dart';
+import '../widgets/app_state_views.dart';
 
 class LocalPlaylistsScreen extends ConsumerWidget {
   const LocalPlaylistsScreen({super.key});
@@ -24,8 +25,9 @@ class LocalPlaylistsScreen extends ConsumerWidget {
         child: const Icon(Icons.add),
       ),
       body: playlists.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
+        loading: () => const AppLoading(),
+        error: (e, _) =>
+            AppError.from(e, onRetry: () => ref.invalidate(playlistsProvider)),
         data: (items) => items.isEmpty
             ? const Center(child: Text('No playlists'))
             : ListView(
@@ -147,8 +149,9 @@ class LocalPlaylistScreen extends ConsumerWidget {
         ],
       ),
       body: items.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
+        loading: () => const AppLoading(),
+        error: (e, _) => AppError.from(e,
+            onRetry: () => ref.invalidate(playlistItemsProvider(playlistId))),
         data: (entries) => entries.isEmpty
             ? const Center(child: Text('Empty playlist'))
             : ListView.builder(

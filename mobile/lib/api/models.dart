@@ -298,6 +298,7 @@ class LiveItem {
 
   factory LiveItem.fromJson(Map<String, dynamic> json) => LiveItem(
         video: Video.fromJson(json['video'] as Map<String, dynamic>),
-        detectedAt: DateTime.parse(json['detected_at'] as String),
+        detectedAt: DateTime.tryParse(json['detected_at'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0),
       );
 }

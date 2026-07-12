@@ -2,6 +2,7 @@
 library;
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'notifications.dart';
@@ -16,8 +17,8 @@ void callbackDispatcher() {
         await initNotifications();
         final prefs = await SharedPreferences.getInstance();
         await checkLivesAndNotify(prefs);
-      } catch (_) {
-        // Best-effort: swallow network errors, WorkManager will retry later.
+      } catch (e) {
+        debugPrint('ytui live check failed: $e');
       }
     }
     return true;

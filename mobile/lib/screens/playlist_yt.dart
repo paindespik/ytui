@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../state/providers.dart';
 import '../state/queue.dart';
 import '../widgets/video_tile.dart';
+import '../widgets/app_state_views.dart';
 
 class YtPlaylistScreen extends ConsumerWidget {
   final String playlistId;
@@ -43,20 +44,26 @@ class YtPlaylistScreen extends ConsumerWidget {
         ],
       ),
       body: data.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
-        data: (result) => ListView(
-          children: [
-            for (var i = 0; i < result.$1.length; i++)
-              VideoTile(
-                video: result.$1[i],
-                onTap: () {
-                  ref.read(queueProvider.notifier).play(result.$1, startIndex: i);
-                  context.push('/player');
-                },
+        loading: () => const AppLoading(),
+        error: (e, _) => AppError.from(e,
+            onRetry: () =>
+                ref.invalidate(ytPlaylistProvider((playlistId, platform)))),
+        data: (result) => result.$1.isEmpty
+            ? const AppEmpty(message: 'No videos in this playlist')
+            : ListView(
+                children: [
+                  for (var i = 0; i < result.$1.length; i++)
+                    VideoTile(
+                      video: result.$1[i],
+                      onTap: () {
+                        ref
+                            .read(queueProvider.notifier)
+                            .play(result.$1, startIndex: i);
+                        context.push('/player');
+                      },
+                    ),
+                ],
               ),
-          ],
-        ),
       ),
     );
   }

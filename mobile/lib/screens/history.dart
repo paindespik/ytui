@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../state/providers.dart';
 import '../state/queue.dart';
 import '../widgets/video_tile.dart';
+import '../widgets/app_state_views.dart';
 
 class HistoryScreen extends ConsumerWidget {
   const HistoryScreen({super.key});
@@ -19,8 +20,9 @@ class HistoryScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('History')),
       body: history.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
+        loading: () => const AppLoading(),
+        error: (e, _) =>
+            AppError.from(e, onRetry: () => ref.invalidate(historyProvider)),
         data: (entries) => entries.isEmpty
             ? const Center(child: Text('No history yet'))
             : ListView.builder(

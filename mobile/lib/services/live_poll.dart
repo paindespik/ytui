@@ -3,6 +3,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
@@ -12,26 +14,31 @@ import 'notifications.dart';
 class LivePoller {
   final Ref ref;
   Timer? _timer;
+  Timer? _initial;
 
   LivePoller(this.ref);
 
   void start() {
     _timer?.cancel();
+    _initial?.cancel();
     _timer = Timer.periodic(const Duration(minutes: 5), (_) => _check());
     // First check shortly after startup.
-    Timer(const Duration(seconds: 15), _check);
+    _initial = Timer(const Duration(seconds: 15), _check);
   }
 
   Future<void> _check() async {
     try {
       await checkLivesAndNotify(ref.read(sharedPreferencesProvider));
       ref.invalidate(livesProvider);
-    } catch (_) {
-      // Server unreachable: stay silent, retry at the next tick.
+    } catch (e) {
+      debugPrint('ytui live poll failed: $e');
     }
   }
 
-  void stop() => _timer?.cancel();
+  void stop() {
+    _timer?.cancel();
+    _initial?.cancel();
+  }
 }
 
 final livePollerProvider = Provider<LivePoller>((ref) {

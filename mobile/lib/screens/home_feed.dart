@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../api/client.dart';
 import '../state/providers.dart';
+import '../widgets/app_state_views.dart';
 import '../widgets/video_tile.dart';
 
 class HomeFeedScreen extends ConsumerWidget {
@@ -41,13 +41,8 @@ class HomeFeedScreen extends ConsumerWidget {
         ],
       ),
       body: feed.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _ErrorView(
-          message: e is ApiException && e.statusCode == 0
-              ? 'Server unreachable — check settings'
-              : '$e',
-          onRetry: () => ref.invalidate(feedProvider),
-        ),
+        loading: () => const AppLoading(),
+        error: (e, _) => AppError.from(e, onRetry: () => ref.invalidate(feedProvider)),
         data: (result) {
           // Pin active lives at the top, like the desktop home feed.
           final liveVideos = lives.map((l) => l.video).toList();
@@ -84,29 +79,6 @@ class HomeFeedScreen extends ConsumerWidget {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-class _ErrorView extends StatelessWidget {
-  final String message;
-  final VoidCallback onRetry;
-
-  const _ErrorView({required this.message, required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(message, textAlign: TextAlign.center),
-          ),
-          FilledButton(onPressed: onRetry, child: const Text('Retry')),
-        ],
       ),
     );
   }

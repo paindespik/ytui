@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../state/providers.dart';
+import '../widgets/app_state_views.dart';
 
 class DetailScreen extends ConsumerWidget {
   final String videoId;
@@ -22,8 +23,10 @@ class DetailScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Details')),
       body: details.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
+        loading: () => const AppLoading(),
+        error: (e, _) => AppError.from(e,
+            onRetry: () =>
+                ref.invalidate(videoDetailsProvider((videoId, platform)))),
         data: (d) => ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -74,7 +77,7 @@ class DetailScreen extends ConsumerWidget {
                 ),
               ),
             const SizedBox(height: 16),
-            Text(d.description),
+            Text(d.description, maxLines: 8, overflow: TextOverflow.ellipsis),
             if (platform == 'odysee') ...[
               const Divider(height: 32),
               _OdyseeComments(videoId: videoId),

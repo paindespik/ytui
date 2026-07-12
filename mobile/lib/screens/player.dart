@@ -155,6 +155,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             children: [
               IconButton(
                 icon: const Icon(Icons.skip_previous),
+                tooltip: 'Previous',
                 onPressed: queue.hasPrevious
                     ? () => ref.read(queueProvider.notifier).previous()
                     : null,
@@ -162,10 +163,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               IconButton(
                 iconSize: 40,
                 icon: const Icon(Icons.play_arrow),
+                tooltip: 'Play/Pause',
                 onPressed: () => player.playOrPause(),
               ),
               IconButton(
                 icon: const Icon(Icons.skip_next),
+                tooltip: 'Next',
                 onPressed: queue.hasNext
                     ? () => ref.read(queueProvider.notifier).next()
                     : null,

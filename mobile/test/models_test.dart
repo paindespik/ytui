@@ -205,5 +205,14 @@ void main() {
       });
       expect(channel.ref, '@LinusTechTips');
     });
+
+    test('LiveItem tolerates a bad detected_at without throwing', () {
+      final live = LiveItem.fromJson({
+        'video': {'video_id': 'a', 'title': 'live'},
+        'detected_at': 'not-a-date',
+      });
+      expect(live.video.videoId, 'a');
+      expect(live.detectedAt, DateTime.fromMillisecondsSinceEpoch(0));
+    });
   });
 }
