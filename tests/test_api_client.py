@@ -61,6 +61,61 @@ async def test_search(client):
     request = respx.calls.last.request
     assert request.url.params["q"] == "query"
     assert request.url.params["limit"] == "5"
+    assert request.url.params["source"] == "youtube"
+
+
+@respx.mock
+async def test_search_odysee_source(client):
+    odysee_video = dict(
+        VIDEO_JSON,
+        video_id="ma-video:abc123",
+        platform="odysee",
+        url="https://odysee.com/ma-video:abc123",
+    )
+    respx.get(f"{BASE}/api/search").mock(
+        return_value=httpx.Response(200, json={"items": [odysee_video]})
+    )
+    videos = await client.search("query", source="odysee")
+    assert respx.calls.last.request.url.params["source"] == "odysee"
+    assert videos[0].platform == "odysee"
+    assert videos[0].url == "https://odysee.com/ma-video:abc123"
+
+
+@respx.mock
+async def test_video_comments_encodes_video_id(client):
+    respx.get(f"{BASE}/api/videos/ma-video%3Aabc123/comments").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "comment_id": "c1",
+                        "text": "Great video",
+                        "channel_name": "@bob",
+                        "timestamp": 1700000000,
+                        "replies": 2,
+                        "likes": 5,
+                        "dislikes": 0,
+                        "is_pinned": False,
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+    comments, total = await client.video_comments("ma-video:abc123", platform="odysee")
+    assert respx.calls.last.request.url.params["platform"] == "odysee"
+    assert total == 1
+    assert comments[0].comment_id == "c1"
+    assert comments[0].channel_name == "@bob"
+    assert comments[0].likes == 5
+
+
+@respx.mock
+async def test_like_video_sends_platform(client):
+    route = respx.post(f"{BASE}/api/videos/abc/like").mock(return_value=httpx.Response(204))
+    await client.like_video("abc")
+    assert route.calls.last.request.url.params["platform"] == "youtube"
 
 
 @respx.mock

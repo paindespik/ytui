@@ -34,6 +34,29 @@ def test_add_bitchute_channel(client):
     assert body["channel_id"] == "someslug"
 
 
+def test_add_odysee_channel(client):
+    resp = client.post("/api/channels", json={"ref": "odysee:@somechan:1a"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["platform"] == "odysee"
+    assert body["channel_id"] == "@somechan:1a"
+    assert body["title"] == "@somechan"
+
+
+def test_add_odysee_channel_url(client):
+    resp = client.post("/api/channels", json={"ref": "https://odysee.com/@somechan:1a"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["platform"] == "odysee"
+    assert body["channel_id"] == "@somechan:1a"
+    assert body["ref"] == "odysee:@somechan:1a"
+
+
+def test_add_odysee_channel_invalid(client):
+    resp = client.post("/api/channels", json={"ref": "odysee:notachannel"})
+    assert resp.status_code == 404
+
+
 def test_add_handle_resolves(client):
     async def fake_get(url, **kwargs):
         return httpx.Response(200, text=CHANNEL_PAGE, request=httpx.Request("GET", str(url)))

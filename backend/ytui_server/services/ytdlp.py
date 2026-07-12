@@ -24,6 +24,8 @@ _YDL_FLAT_OPTS = {
 
 _PLAYLIST_URL_RE = re.compile(r"[?&]list=([\w-]+)")
 _CHANNEL_URL_RE = re.compile(r"youtube\.com/(?:channel/|c/|user/|@)")
+_ODYSEE_PATH_RE = re.compile(r"odysee\.com/(?:@[^/]+(?::\w+)?/)?([^/?#]+:[0-9a-f]+)")
+_LBRY_URI_RE = re.compile(r"lbry://(?:@[^/]+(?:[:#]\w+)?/)?([^/?#:]+)[:#]([0-9a-f]+)")
 
 _SEMAPHORE = asyncio.Semaphore(4)
 
@@ -38,7 +40,20 @@ def entry_to_item(entry: dict) -> Video | None:
     if not entry_id:
         return None
     url = entry.get("url") or entry.get("webpage_url") or ""
-    platform = "bitchute" if "bitchute.com" in url else "youtube"
+    if "odysee.com" in url or url.startswith("lbry://"):
+        platform = "odysee"
+        # yt-dlp reports the bare claim_id as id; prefer "name:claim_id" from the URL
+        m = _ODYSEE_PATH_RE.search(url)
+        if m:
+            entry_id = m.group(1)
+        else:
+            m = _LBRY_URI_RE.search(url)
+            if m:
+                entry_id = f"{m.group(1)}:{m.group(2)}"
+    elif "bitchute.com" in url:
+        platform = "bitchute"
+    else:
+        platform = "youtube"
     kind = "video"
     if entry.get("ie_key") == "YoutubeTab" or entry.get("_type") == "playlist":
         if _PLAYLIST_URL_RE.search(url) or entry_id.startswith(("PL", "RD", "OL", "UU", "LL")):
@@ -121,7 +136,11 @@ async def search_videos(query: str, limit: int = 20) -> list[Video]:
 
 async def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
     url = channel_url.rstrip("/")
-    if "bitchute.com" not in url and not url.endswith("/videos"):
+    if (
+        "bitchute.com" not in url
+        and "odysee.com" not in url
+        and not url.endswith("/videos")
+    ):
         url += "/videos"
     return await _run(_extract_flat, url, limit)
 

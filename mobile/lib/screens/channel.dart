@@ -35,8 +35,11 @@ class ChannelScreen extends ConsumerWidget {
             tooltip: 'Follow',
             onPressed: () async {
               final messenger = ScaffoldMessenger.of(context);
-              final ref_ =
-                  platform == 'bitchute' ? 'bitchute:$channelId' : channelId;
+              final ref_ = switch (platform) {
+                'bitchute' => 'bitchute:$channelId',
+                'odysee' => 'odysee:$channelId',
+                _ => channelId,
+              };
               try {
                 await ref.read(apiProvider).followChannel(ref_);
                 messenger.showSnackBar(

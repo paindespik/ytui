@@ -76,3 +76,10 @@ def test_history_preserves_platform(client):
     entry = client.get("/api/history").json()[0]
     assert entry["video"]["platform"] == "bitchute"
     assert entry["video"]["url"].startswith("https://www.bitchute.com/")
+
+
+def test_history_odysee_platform(client):
+    _record(client, "my-video:ab12", platform="odysee")
+    entry = client.get("/api/history").json()[0]
+    assert entry["video"]["platform"] == "odysee"
+    assert entry["video"]["url"] == "https://odysee.com/my-video:ab12"

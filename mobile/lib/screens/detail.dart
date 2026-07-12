@@ -1,10 +1,12 @@
 /// Video details: description, views, likes + Like / Comment actions.
+/// Odysee: read-only comments listed below the description.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/client.dart';
+import '../api/models.dart';
 import '../state/providers.dart';
 
 class DetailScreen extends ConsumerWidget {
@@ -55,8 +57,28 @@ class DetailScreen extends ConsumerWidget {
                   ),
                 ],
               ),
+            if (platform == 'odysee')
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.lock_outline, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text('Odysee likes/comments are read-only',
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             const SizedBox(height: 16),
             Text(d.description),
+            if (platform == 'odysee') ...[
+              const Divider(height: 32),
+              _OdyseeComments(videoId: videoId),
+            ],
           ],
         ),
       ),
@@ -66,7 +88,7 @@ class DetailScreen extends ConsumerWidget {
   Future<void> _like(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await ref.read(apiProvider).likeVideo(videoId);
+      await ref.read(apiProvider).likeVideo(videoId, platform: platform);
       messenger.showSnackBar(const SnackBar(content: Text('Liked 👍')));
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(
@@ -102,7 +124,7 @@ class DetailScreen extends ConsumerWidget {
     if (text == null || text.isEmpty || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await ref.read(apiProvider).commentVideo(videoId, text);
+      await ref.read(apiProvider).commentVideo(videoId, text, platform: platform);
       messenger.showSnackBar(const SnackBar(content: Text('Comment posted')));
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(
@@ -110,5 +132,82 @@ class DetailScreen extends ConsumerWidget {
               ? 'Not authenticated — run `ytui auth push` from the desktop'
               : e.toString())));
     }
+  }
+}
+
+class _OdyseeComments extends ConsumerWidget {
+  final String videoId;
+
+  const _OdyseeComments({required this.videoId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final comments = ref.watch(commentsProvider((videoId, 'odysee')));
+
+    return comments.when(
+      loading: () => const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(),
+        ),
+      ),
+      error: (e, _) => Text('Comments unavailable: $e',
+          style: Theme.of(context).textTheme.bodySmall),
+      data: (page) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Comments (${page.total})',
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          if (page.items.isEmpty) const Text('No comments'),
+          for (final c in page.items) _CommentCard(comment: c),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommentCard extends StatelessWidget {
+  final Comment comment;
+
+  const _CommentCard({required this.comment});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final meta = [
+      if (comment.isPinned) '📌',
+      comment.channelName,
+      if (comment.timestamp != null) _relativeDate(comment.timestamp!),
+      if (comment.likes > 0) '👍 ${comment.likes}',
+      if (comment.replies > 0)
+        '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
+    ].where((s) => s.isNotEmpty).join(' · ');
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(meta, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 4),
+            Text(comment.text),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _relativeDate(int epochSeconds) {
+    final date = DateTime.fromMillisecondsSinceEpoch(epochSeconds * 1000);
+    final diff = DateTime.now().difference(date);
+    if (diff.inDays >= 365) return '${diff.inDays ~/ 365}y ago';
+    if (diff.inDays >= 30) return '${diff.inDays ~/ 30}mo ago';
+    if (diff.inDays >= 1) return '${diff.inDays}d ago';
+    if (diff.inHours >= 1) return '${diff.inHours}h ago';
+    if (diff.inMinutes >= 1) return '${diff.inMinutes}m ago';
+    return 'just now';
   }
 }

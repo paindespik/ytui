@@ -79,10 +79,12 @@ class VideoTile extends ConsumerWidget {
   void _defaultTap(BuildContext context, WidgetRef ref) {
     switch (video.kind) {
       case 'channel':
-        context.push('/channel/${video.videoId}?platform=${video.platform}'
+        context.push(
+            '/channel/${Uri.encodeComponent(video.videoId)}?platform=${video.platform}'
             '&title=${Uri.encodeComponent(video.title)}');
       case 'playlist':
-        context.push('/ytplaylist/${video.videoId}?platform=${video.platform}');
+        context.push('/ytplaylist/${Uri.encodeComponent(video.videoId)}'
+            '?platform=${video.platform}');
       default:
         ref.read(queueProvider.notifier).play([video]);
         context.push('/player');
@@ -109,7 +111,8 @@ class VideoTile extends ConsumerWidget {
               title: const Text('Details'),
               onTap: () {
                 Navigator.pop(sheetContext);
-                context.push('/detail/${video.videoId}?platform=${video.platform}');
+                context.push('/detail/${Uri.encodeComponent(video.videoId)}'
+                    '?platform=${video.platform}');
               },
             ),
             ListTile(
@@ -127,9 +130,11 @@ class VideoTile extends ConsumerWidget {
                 onTap: () async {
                   Navigator.pop(sheetContext);
                   final messenger = ScaffoldMessenger.of(context);
-                  final ref_ = video.platform == 'bitchute'
-                      ? 'bitchute:${video.channelId}'
-                      : video.channelId;
+                  final ref_ = switch (video.platform) {
+                    'bitchute' => 'bitchute:${video.channelId}',
+                    'odysee' => 'odysee:${video.channelId}',
+                    _ => video.channelId,
+                  };
                   try {
                     await ref.read(apiProvider).followChannel(ref_);
                     messenger.showSnackBar(

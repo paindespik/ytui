@@ -86,7 +86,12 @@ def import_client_db(server: Database, client_path: Path) -> None:
             "WHERE playlist_id = ?",
             (new_pl,),
         ).fetchone()[0]
-        platform = "bitchute" if "bitchute.com" in url else "youtube"
+        if "odysee.com" in url:
+            platform = "odysee"
+        elif "bitchute.com" in url:
+            platform = "bitchute"
+        else:
+            platform = "youtube"
         conn.execute(
             "INSERT INTO local_playlist_items "
             "(playlist_id, position, video_id, title, channel_title, url, kind, platform) "
@@ -109,6 +114,17 @@ def import_config_channels(server: Database, config_path: Path) -> None:
             slug = ref[len("bitchute:"):]
             channel = FollowedChannel(
                 ref=ref, channel_id=slug, title=slug, platform="bitchute"
+            )
+        elif ref.startswith("odysee:"):
+            odysee_id = ref[len("odysee:"):]
+            if not odysee_id.startswith("@") or ":" not in odysee_id:
+                print(f"skip {ref}: invalid Odysee channel (expected odysee:@name:claim)")
+                continue
+            channel = FollowedChannel(
+                ref=ref,
+                channel_id=odysee_id,
+                title=odysee_id.rsplit(":", 1)[0],
+                platform="odysee",
             )
         elif ref.startswith("UC"):
             title = server.get_channel_name(ref) or ""

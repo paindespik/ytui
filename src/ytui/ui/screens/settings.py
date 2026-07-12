@@ -85,7 +85,7 @@ class SettingsScreen(Screen):
 
     def action_add_channel(self) -> None:
         prompt = (
-            "Add channel (UC id, @handle, or bitchute:<slug> for a BitChute channel):"
+            "Add channel (UC id, @handle, bitchute:<slug> or odysee:@name:claim):"
         )
 
         def on_entry(entry: str | None) -> None:

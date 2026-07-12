@@ -11,23 +11,29 @@ from pydantic import BaseModel, computed_field
 _YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
 _YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
 _BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
+_ODYSEE_RE = re.compile(r"odysee\.com/(?:@[^/?#]+/)?([^/?#@][^/?#]*:[0-9a-f]+)")
 
 
 def video_id_from_url(url: str) -> str | None:
-    """Extract a video id from a YouTube/BitChute video URL, or None."""
+    """Extract a video id from a YouTube/BitChute/Odysee video URL, or None."""
     match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url) or _BITCHUTE_RE.search(url)
+    if match:
+        return match.group(1)
+    match = _ODYSEE_RE.search(url)
     return match.group(1) if match else None
 
 
 class Channel(BaseModel):
     channel_id: str
     title: str = ""
-    platform: Literal["youtube", "bitchute"] = "youtube"
+    platform: Literal["youtube", "bitchute", "odysee"] = "youtube"
 
     @property
     def rss_url(self) -> str:
         if self.platform == "bitchute":
             return f"https://api.bitchute.com/feeds/rss/channel/{self.channel_id}"
+        if self.platform == "odysee":
+            return f"https://odysee.com/$/rss/{self.channel_id}"
         return f"https://www.youtube.com/feeds/videos.xml?channel_id={self.channel_id}"
 
 
@@ -42,12 +48,16 @@ class Video(BaseModel):
     duration: int | None = None  # seconds
     thumbnail_url: str = ""
     kind: Literal["video", "playlist", "channel"] = "video"
-    platform: Literal["youtube", "bitchute"] = "youtube"
+    platform: Literal["youtube", "bitchute", "odysee"] = "youtube"
     playlist_id: str = ""
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def url(self) -> str:
+        if self.platform == "odysee":
+            if self.kind == "playlist":
+                return f"https://odysee.com/$/playlist/{self.video_id}"
+            return f"https://odysee.com/{self.video_id}"
         if self.platform == "bitchute":
             if self.kind == "channel":
                 return f"https://www.bitchute.com/channel/{self.video_id}/"
@@ -109,7 +119,7 @@ class FollowedChannel(BaseModel):
     ref: str
     channel_id: str
     title: str = ""
-    platform: Literal["youtube", "bitchute"] = "youtube"
+    platform: Literal["youtube", "bitchute", "odysee"] = "youtube"
 
 
 class ChannelIn(BaseModel):
@@ -163,6 +173,22 @@ class PlaylistItemIn(BaseModel):
 
 class CommentIn(BaseModel):
     text: str
+
+
+class CommentOut(BaseModel):
+    comment_id: str
+    text: str
+    channel_name: str = ""
+    timestamp: int | None = None
+    replies: int = 0
+    likes: int = 0
+    dislikes: int = 0
+    is_pinned: bool = False
+
+
+class CommentsResponse(BaseModel):
+    items: list[CommentOut]
+    total: int = 0
 
 
 class LiveOut(BaseModel):

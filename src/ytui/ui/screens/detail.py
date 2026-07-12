@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+from rich.markup import escape
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -10,7 +13,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, LoadingIndicator, Static
 
 from ...api_client import YtuiApiError
-from ...models import Video, VideoDetails
+from ...models import Comment, Video, VideoDetails
 
 
 def _fmt_count(count: int | None) -> str:
@@ -21,6 +24,12 @@ def _fmt_count(count: int | None) -> str:
     if count >= 1_000:
         return f"{count / 1_000:.1f}K"
     return str(count)
+
+
+def _fmt_comment_date(timestamp: int | None) -> str:
+    if not timestamp:
+        return ""
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
 def _fmt_duration(seconds: int | None) -> str:
@@ -43,6 +52,7 @@ class VideoDetailScreen(Screen):
         Binding("s", "save_to_playlist", "Save to playlist", show=False),
         Binding("L", "like", "Like", show=False),
         Binding("C", "comment", "Comment", show=False),
+        Binding("c", "reload_comments", "Comments", show=False),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
@@ -56,6 +66,17 @@ class VideoDetailScreen(Screen):
     VideoDetailScreen #detail-stats {
         color: $text-muted;
         margin-bottom: 1;
+    }
+    VideoDetailScreen #detail-comments-title {
+        margin-top: 1;
+        text-style: bold;
+        display: none;
+    }
+    VideoDetailScreen #detail-comments-title.visible {
+        display: block;
+    }
+    VideoDetailScreen .detail-comment {
+        margin-top: 1;
     }
     """
 
@@ -71,6 +92,7 @@ class VideoDetailScreen(Screen):
             yield Label(self.video.title, id="detail-heading")
             yield Label("", id="detail-stats")
             yield Static("", id="detail-description")
+            yield Static("", id="detail-comments-title")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -87,6 +109,44 @@ class VideoDetailScreen(Screen):
             self._show_error(exc.detail)
             return
         self._show_details(details)
+        if self.video.platform == "odysee":
+            self.load_comments()
+
+    @work(exclusive=True, group="comments")
+    async def load_comments(self) -> None:
+        title = self.query_one("#detail-comments-title", Static)
+        title.add_class("visible")
+        title.update("Comments — loading…")
+        try:
+            comments, total = await self.app.client.video_comments(
+                self.video.video_id, platform=self.video.platform
+            )
+        except YtuiApiError as exc:
+            title.update(f"Comments unavailable: {exc.detail}")
+            return
+        self._show_comments(comments, total)
+
+    def _show_comments(self, comments: list[Comment], total: int) -> None:
+        body = self.query_one("#detail-body", VerticalScroll)
+        for old in self.query(".detail-comment"):
+            old.remove()
+        title = self.query_one("#detail-comments-title", Static)
+        if not comments:
+            title.update("Comments (0)")
+            return
+        title.update(f"Comments ({total})")
+        for comment in comments:
+            pin = "📌 " if comment.is_pinned else ""
+            date = _fmt_comment_date(comment.timestamp)
+            header = f"{pin}[b]{escape(comment.channel_name)}[/b]"
+            if date:
+                header += f"  [dim]{date}[/dim]"
+            if comment.likes:
+                header += f"  👍{comment.likes}"
+            if comment.replies:
+                header += f"  [dim]({comment.replies} replies)[/dim]"
+            widget = Static(f"{header}\n{escape(comment.text)}", classes="detail-comment")
+            body.mount(widget)
 
     def _show_error(self, message: str) -> None:
         self.query_one("#detail-loading", LoadingIndicator).display = False
@@ -145,6 +205,12 @@ class VideoDetailScreen(Screen):
 
     def action_comment(self) -> None:
         self.app.comment_video_action(self.video)
+
+    def action_reload_comments(self) -> None:
+        if self.video.platform != "odysee":
+            self.app.notify("Comment listing is only available for Odysee.", timeout=5)
+            return
+        self.load_comments()
 
     def action_help(self) -> None:
         self.app.push_screen("help")

@@ -15,11 +15,21 @@ from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
 
+SOURCES = ("youtube", "odysee")
+SOURCE_LABELS = {"youtube": "YouTube", "odysee": "Odysee"}
+
+
 class SearchScreen(BrowseScreen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("slash", "focus_input", "New search", show=False),
+        Binding("ctrl+s", "toggle_source", "Source"),
     ]
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.source: str = "youtube"
+        self._last_query: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -32,7 +42,7 @@ class SearchScreen(BrowseScreen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.sub_title = "Search"
+        self._update_source_ui()
         self.query_one("#search-loading", LoadingIndicator).display = False
         self.query_one("#search-input", Input).focus()
 
@@ -43,9 +53,10 @@ class SearchScreen(BrowseScreen):
 
     @work(exclusive=True)
     async def run_search(self, query: str) -> None:
+        self._last_query = query
         self._set_loading(True)
         try:
-            videos = await self.app.client.search(query, limit=20)
+            videos = await self.app.client.search(query, limit=20, source=self.source)
         except YtuiApiError as exc:
             self._set_loading(False)
             self.app.notify(f"Search failed: {exc.detail}", severity="error", timeout=8)
@@ -70,3 +81,15 @@ class SearchScreen(BrowseScreen):
 
     def action_focus_input(self) -> None:
         self.query_one("#search-input", Input).focus()
+
+    def action_toggle_source(self) -> None:
+        index = SOURCES.index(self.source)
+        self.source = SOURCES[(index + 1) % len(SOURCES)]
+        self._update_source_ui()
+        if self._last_query:
+            self.run_search(self._last_query)
+
+    def _update_source_ui(self) -> None:
+        label = SOURCE_LABELS[self.source]
+        self.sub_title = f"Search — {label}"
+        self.query_one("#search-input", Input).placeholder = f"Search {label}…"

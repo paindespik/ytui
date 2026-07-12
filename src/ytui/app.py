@@ -210,7 +210,12 @@ class YtuiApp(App):
             pass  # best-effort heartbeat
 
     def _video_for_history(self, video_id: str, title: str, path: str = "") -> Video:
-        platform = "bitchute" if "bitchute.com/" in path else "youtube"
+        if "bitchute.com/" in path:
+            platform = "bitchute"
+        elif "odysee.com/" in path:
+            platform = "odysee"
+        else:
+            platform = "youtube"
         return Video(
             video_id=video_id, title=title or video_id, kind="video", platform=platform
         )
@@ -387,6 +392,8 @@ class YtuiApp(App):
         channel_id = video.video_id if video.kind == "channel" else video.channel_id
         if channel_id and video.platform == "bitchute":
             channel_id = f"bitchute:{channel_id}"
+        elif channel_id and video.platform == "odysee":
+            channel_id = f"odysee:{channel_id}"
         if not channel_id:
             self.notify("No channel ID for this item.", severity="warning", timeout=5)
             return
@@ -428,6 +435,13 @@ class YtuiApp(App):
     def _youtube_video_or_notify(self, video: Video) -> bool:
         if video.kind != "video":
             self.notify("Only videos can be liked or commented.", severity="warning", timeout=5)
+            return False
+        if video.platform == "odysee":
+            self.notify(
+                "Odysee: likes/comments are read-only (open details to view comments).",
+                severity="warning",
+                timeout=5,
+            )
             return False
         if video.platform != "youtube":
             self.notify("Only YouTube videos support this action.", severity="warning", timeout=5)

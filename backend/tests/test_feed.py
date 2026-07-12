@@ -83,6 +83,32 @@ def test_feed_offline_fallback_with_warning(client, app):
     assert "cached" in body["warnings"][0]
 
 
+def test_feed_odysee_channel(client, app):
+    xml = (FIXTURES / "odysee_feed.xml").read_bytes()
+    from ytui_server.models import FollowedChannel
+
+    app.state.db.add_channel(
+        FollowedChannel(
+            ref="odysee:@testchan:1", channel_id="@testchan:1", platform="odysee"
+        )
+    )
+    with patch.object(
+        httpx.AsyncClient,
+        "get",
+        _mock_get({"odysee.com/$/rss": httpx.Response(200, content=xml)}),
+    ):
+        resp = client.get("/api/feed")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert len(body["videos"]) == 2
+    assert all(v["platform"] == "odysee" for v in body["videos"])
+    video = body["videos"][0]
+    assert video["video_id"] == "first-odysee-video:1bd2a8fec67b8cffa8ae0c983653e50be988ba2f"
+    assert video["url"].startswith("https://odysee.com/")
+    assert video["thumbnail_url"] == "https://thumbs.odycdn.com/aaa111.webp"
+    assert video["channel_title"] == "testchan on Odysee"
+
+
 def test_feed_bitchute_channel(client, app):
     xml = (FIXTURES / "bitchute_feed.xml").read_bytes()
     from ytui_server.models import FollowedChannel

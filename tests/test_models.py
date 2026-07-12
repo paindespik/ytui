@@ -35,6 +35,21 @@ def test_video_url_bitchute_playlist():
     assert v.url == "https://www.bitchute.com/playlist/pl123/"
 
 
+def test_video_url_odysee():
+    v = Video(video_id="ma-video:abc123", title="v", platform="odysee")
+    assert v.url == "https://odysee.com/ma-video:abc123"
+
+
+def test_video_url_odysee_channel():
+    v = Video(video_id="@chan:1", title="c", kind="channel", platform="odysee")
+    assert v.url == "https://odysee.com/@chan:1"
+
+
+def test_video_url_odysee_playlist():
+    v = Video(video_id="pl123", title="p", kind="playlist", platform="odysee")
+    assert v.url == "https://odysee.com/$/playlist/pl123"
+
+
 def test_video_platform_defaults_to_youtube():
     assert Video(video_id="abc123", title="v").platform == "youtube"
 
@@ -47,6 +62,16 @@ def test_video_id_from_url():
     assert video_id_from_url("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
     assert video_id_from_url("https://www.bitchute.com/video/AbC123xyz/") == "AbC123xyz"
     assert video_id_from_url("https://www.youtube.com/playlist?list=PL1") is None
+
+
+def test_video_id_from_url_odysee():
+    assert video_id_from_url("https://odysee.com/ma-video:abc123") == "ma-video:abc123"
+    assert (
+        video_id_from_url("https://odysee.com/@chan:1/ma-video:abc123") == "ma-video:abc123"
+    )
+    # channel pages and arbitrary paths are not video URLs
+    assert video_id_from_url("https://odysee.com/@chan:1") is None
+    assert video_id_from_url("https://odysee.com/foo") is None
 
 
 # -- Channel.rss_url --
@@ -62,6 +87,11 @@ def test_channel_rss_url_youtube():
 def test_channel_rss_url_bitchute():
     c = Channel(channel_id="bcsupport", platform="bitchute")
     assert c.rss_url == "https://api.bitchute.com/feeds/rss/channel/bcsupport"
+
+
+def test_channel_rss_url_odysee():
+    c = Channel(channel_id="@chan:1", platform="odysee")
+    assert c.rss_url == "https://odysee.com/$/rss/@chan:1"
 
 
 def test_channel_platform_defaults_to_youtube():

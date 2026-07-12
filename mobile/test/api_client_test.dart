@@ -88,6 +88,94 @@ void main() {
     expect(items.single.kind, 'channel');
   });
 
+  test('search sends source=youtube by default', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/search': (200, {'items': []}),
+    });
+    final api = _api({}, adapter: adapter);
+    await api.search('query');
+    expect(adapter.requests.single.queryParameters['source'], 'youtube');
+  });
+
+  test('search sends source=odysee and parses odysee items', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/search': (
+        200,
+        {
+          'items': [
+            {
+              'video_id': 'ma-video:abc123',
+              'title': 't',
+              'platform': 'odysee',
+              'url': 'https://odysee.com/ma-video:abc123',
+            },
+          ]
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final items = await api.search('query', source: 'odysee');
+    expect(adapter.requests.single.queryParameters['source'], 'odysee');
+    expect(items.single.platform, 'odysee');
+    expect(items.single.videoId, 'ma-video:abc123');
+  });
+
+  test('videoComments encodes the video id and parses the page', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/videos/ma-video%3Aabc123/comments': (
+        200,
+        {
+          'items': [
+            {'comment_id': 'c1', 'text': 'hello', 'channel_name': '@bob', 'likes': 3},
+          ],
+          'total': 1,
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final page = await api.videoComments('ma-video:abc123');
+    expect(adapter.requests.single.queryParameters['platform'], 'odysee');
+    expect(page.total, 1);
+    expect(page.items.single.text, 'hello');
+    expect(page.items.single.likes, 3);
+  });
+
+  test('videoStreams encodes odysee ids in the path', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/videos/ma-video%3Aabc123/streams': (
+        200,
+        {'kind': 'hls', 'url': 'https://x/m.m3u8'}
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final info = await api.videoStreams('ma-video:abc123', platform: 'odysee');
+    expect(info.kind, 'hls');
+    expect(adapter.requests.single.queryParameters['platform'], 'odysee');
+  });
+
+  test('likeVideo sends the platform query param', () async {
+    final adapter = _FakeAdapter({
+      'POST /api/videos/abc/like': (204, {}),
+    });
+    final api = _api({}, adapter: adapter);
+    await api.likeVideo('abc', platform: 'odysee');
+    expect(adapter.requests.single.queryParameters['platform'], 'odysee');
+  });
+
+  test('likeVideo surfaces 409 for odysee', () async {
+    final api = _api({
+      'POST /api/videos/a%3Ab/like': (
+        409,
+        {'detail': 'Odysee likes/comments require a LBRY wallet signature'}
+      ),
+    });
+    expect(
+      api.likeVideo('a:b', platform: 'odysee'),
+      throwsA(isA<ApiException>()
+          .having((e) => e.statusCode, 'statusCode', 409)),
+    );
+  });
+
   test('videoStreams parses StreamInfo', () async {
     final api = _api({
       'GET /api/videos/abc/streams': (

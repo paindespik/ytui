@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 
-from .models import Video, VideoDetails
+from .models import Comment, Video, VideoDetails
+
+
+def _encode(video_id: str) -> str:
+    """Path-encode a video id (Odysee ids contain ':')."""
+    return quote(video_id, safe="")
 
 
 def resume_start(position: float, duration: float | None) -> float:
@@ -97,9 +104,13 @@ class YtuiClient:
             [Video.model_validate(v) for v in data["videos"]], data.get("warnings", [])
         )
 
-    async def search(self, query: str, limit: int = 20) -> list[Video]:
+    async def search(
+        self, query: str, limit: int = 20, source: str = "youtube"
+    ) -> list[Video]:
         data = (
-            await self._request("GET", "/api/search", params={"q": query, "limit": limit})
+            await self._request(
+                "GET", "/api/search", params={"q": query, "limit": limit, "source": source}
+            )
         ).json()
         return [Video.model_validate(v) for v in data["items"]]
 
@@ -109,7 +120,7 @@ class YtuiClient:
         data = (
             await self._request(
                 "GET",
-                f"/api/channels/{channel_id}/videos",
+                f"/api/channels/{_encode(channel_id)}/videos",
                 params={"platform": platform, "limit": limit},
             )
         ).json()
@@ -121,7 +132,7 @@ class YtuiClient:
         data = (
             await self._request(
                 "GET",
-                f"/api/ytplaylists/{playlist_id}/videos",
+                f"/api/ytplaylists/{_encode(playlist_id)}/videos",
                 params={"platform": platform, "limit": limit},
             )
         ).json()
@@ -130,10 +141,24 @@ class YtuiClient:
     async def video_details(self, video_id: str, platform: str = "youtube") -> VideoDetails:
         data = (
             await self._request(
-                "GET", f"/api/videos/{video_id}", params={"platform": platform}
+                "GET", f"/api/videos/{_encode(video_id)}", params={"platform": platform}
             )
         ).json()
         return VideoDetails.model_validate(data)
+
+    async def video_comments(
+        self, video_id: str, platform: str = "odysee", page: int = 1, page_size: int = 50
+    ) -> tuple[list[Comment], int]:
+        """(comments for one page, total comment count on the server)."""
+        data = (
+            await self._request(
+                "GET",
+                f"/api/videos/{_encode(video_id)}/comments",
+                params={"platform": platform, "page": page, "page_size": page_size},
+            )
+        ).json()
+        comments = [Comment.model_validate(c) for c in data["items"]]
+        return comments, data.get("total", len(comments))
 
     async def video_streams(
         self,
@@ -145,7 +170,7 @@ class YtuiClient:
         return (
             await self._request(
                 "GET",
-                f"/api/videos/{video_id}/streams",
+                f"/api/videos/{_encode(video_id)}/streams",
                 params={"platform": platform, "max_height": max_height, "audio_only": audio_only},
             )
         ).json()
@@ -161,7 +186,7 @@ class YtuiClient:
         return FollowedChannel(**data)
 
     async def unfollow_channel(self, channel_id: str) -> None:
-        await self._request("DELETE", f"/api/channels/{channel_id}")
+        await self._request("DELETE", f"/api/channels/{_encode(channel_id)}")
 
     # -- watch history --
 
@@ -181,14 +206,14 @@ class YtuiClient:
     ) -> None:
         await self._request(
             "PUT",
-            f"/api/history/{video_id}/position",
+            f"/api/history/{_encode(video_id)}/position",
             json={"position": position, "duration": duration},
         )
 
     async def resume(self, video_id: str) -> tuple[float, float | None, str] | None:
         """(position, duration, playlist_id) for a watched video, or None."""
         try:
-            data = (await self._request("GET", f"/api/history/{video_id}/resume")).json()
+            data = (await self._request("GET", f"/api/history/{_encode(video_id)}/resume")).json()
         except YtuiApiError as exc:
             if exc.status_code == 404:
                 return None
@@ -196,7 +221,7 @@ class YtuiClient:
         return (data["position"], data.get("duration"), data.get("playlist_id", ""))
 
     async def remove_watch(self, video_id: str) -> None:
-        await self._request("DELETE", f"/api/history/{video_id}")
+        await self._request("DELETE", f"/api/history/{_encode(video_id)}")
 
     # -- local playlists --
 
@@ -251,11 +276,18 @@ class YtuiClient:
 
     # -- YouTube account (like/comment) --
 
-    async def like_video(self, video_id: str) -> None:
-        await self._request("POST", f"/api/videos/{video_id}/like")
+    async def like_video(self, video_id: str, platform: str = "youtube") -> None:
+        await self._request(
+            "POST", f"/api/videos/{_encode(video_id)}/like", params={"platform": platform}
+        )
 
-    async def comment_video(self, video_id: str, text: str) -> None:
-        await self._request("POST", f"/api/videos/{video_id}/comment", json={"text": text})
+    async def comment_video(self, video_id: str, text: str, platform: str = "youtube") -> None:
+        await self._request(
+            "POST",
+            f"/api/videos/{_encode(video_id)}/comment",
+            params={"platform": platform},
+            json={"text": text},
+        )
 
     async def auth_status(self) -> bool:
         data = (await self._request("GET", "/api/auth/youtube/status")).json()

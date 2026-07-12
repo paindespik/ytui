@@ -12,17 +12,26 @@ from ..models import (
     Channel,
     ChannelVideosResponse,
     CommentIn,
+    CommentsResponse,
     PlaylistVideosResponse,
     StreamInfo,
     Video,
     VideoDetails,
 )
-from ..services import ytdlp
+from ..services import odysee, ytdlp
 from ..services.youtube import ApiError, AuthError
 
 router = APIRouter()
 
-Platform = Literal["youtube", "bitchute"]
+Platform = Literal["youtube", "bitchute", "odysee"]
+
+_ODYSEE_WRITE_DETAIL = "Odysee likes/comments require a LBRY wallet signature (not supported)"
+
+
+def _write_unsupported_detail(platform: Platform) -> str:
+    if platform == "odysee":
+        return _ODYSEE_WRITE_DETAIL
+    return f"Likes/comments are not supported for {platform}"
 
 
 def _video_url(video_id: str, platform: Platform) -> str:
@@ -36,10 +45,13 @@ async def channel_videos(
     limit: int = Query(default=50, ge=1, le=200),
     platform: Platform = "youtube",
 ) -> ChannelVideosResponse:
-    url = Video(video_id=channel_id, title="", kind="channel", platform=platform).url
     try:
-        items = await ytdlp.channel_videos(url, limit=limit)
-    except ytdlp.UpstreamError as exc:
+        if platform == "odysee":
+            items = await odysee.channel_videos(channel_id, limit=limit)
+        else:
+            url = Video(video_id=channel_id, title="", kind="channel", platform=platform).url
+            items = await ytdlp.channel_videos(url, limit=limit)
+    except (ytdlp.UpstreamError, odysee.OdyseeError) as exc:
         raise HTTPException(status_code=502, detail=f"Channel listing failed: {exc}") from exc
     title = request.app.state.db.get_channel_name(channel_id) or ""
     if not title and items:
@@ -55,6 +67,9 @@ async def playlist_videos(
     limit: int = Query(default=200, ge=1, le=500),
     platform: Platform = "youtube",
 ) -> PlaylistVideosResponse:
+    if platform == "odysee":
+        # odysee.com/$/playlist/{id} is a JS route with no yt-dlp extractor
+        raise HTTPException(status_code=400, detail="Odysee playlists are not supported")
     url = Video(video_id=playlist_id, title="", kind="playlist", platform=platform).url
     try:
         items, title = await ytdlp.playlist_videos(url, limit=limit)
@@ -69,7 +84,8 @@ async def video_details(video_id: str, platform: Platform = "youtube") -> VideoD
         details = await ytdlp.video_details(_video_url(video_id, platform))
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Details fetch failed: {exc}") from exc
-    if not details.video_id:
+    if not details.video_id or platform == "odysee":
+        # yt-dlp reports the bare claim_id for Odysee; keep the requested 'name:claim' id
         details.video_id = video_id
     return details
 
@@ -89,8 +105,29 @@ async def video_streams(
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
 
 
+@router.get("/videos/{video_id}/comments", response_model=CommentsResponse)
+async def video_comments(
+    video_id: str,
+    platform: Platform = "youtube",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+) -> CommentsResponse:
+    if platform != "odysee":
+        raise HTTPException(
+            status_code=501, detail="Comment listing is only available for Odysee"
+        )
+    try:
+        return await odysee.comments(
+            odysee.claim_id_from_video_id(video_id), page=page, page_size=page_size
+        )
+    except odysee.OdyseeError as exc:
+        raise HTTPException(status_code=502, detail=f"Comments fetch failed: {exc}") from exc
+
+
 @router.post("/videos/{video_id}/like", status_code=204)
-async def like_video(video_id: str, request: Request) -> None:
+async def like_video(video_id: str, request: Request, platform: Platform = "youtube") -> None:
+    if platform != "youtube":
+        raise HTTPException(status_code=409, detail=_write_unsupported_detail(platform))
     yt = request.app.state.youtube_service
     try:
         await anyio.to_thread.run_sync(yt.like_video, video_id)
@@ -101,7 +138,11 @@ async def like_video(video_id: str, request: Request) -> None:
 
 
 @router.post("/videos/{video_id}/comment", status_code=204)
-async def comment_video(video_id: str, body: CommentIn, request: Request) -> None:
+async def comment_video(
+    video_id: str, body: CommentIn, request: Request, platform: Platform = "youtube"
+) -> None:
+    if platform != "youtube":
+        raise HTTPException(status_code=409, detail=_write_unsupported_detail(platform))
     yt = request.app.state.youtube_service
     try:
         await anyio.to_thread.run_sync(yt.post_comment, video_id, body.text)

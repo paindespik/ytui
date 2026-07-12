@@ -10,7 +10,7 @@ class Video {
   final int? duration; // seconds
   final String thumbnailUrl;
   final String kind; // video | playlist | channel
-  final String platform; // youtube | bitchute
+  final String platform; // youtube | bitchute | odysee
   final String playlistId;
   final String url;
 
@@ -240,6 +240,53 @@ class PlaylistItem {
   factory PlaylistItem.fromJson(Map<String, dynamic> json) => PlaylistItem(
         position: json['position'] as int,
         video: Video.fromJson(json['video'] as Map<String, dynamic>),
+      );
+}
+
+class Comment {
+  final String commentId;
+  final String text;
+  final String channelName;
+  final int? timestamp;
+  final int replies;
+  final int likes;
+  final int dislikes;
+  final bool isPinned;
+
+  const Comment({
+    required this.commentId,
+    required this.text,
+    this.channelName = '',
+    this.timestamp,
+    this.replies = 0,
+    this.likes = 0,
+    this.dislikes = 0,
+    this.isPinned = false,
+  });
+
+  factory Comment.fromJson(Map<String, dynamic> json) => Comment(
+        commentId: json['comment_id'] as String,
+        text: json['text'] as String? ?? '',
+        channelName: json['channel_name'] as String? ?? '',
+        timestamp: json['timestamp'] as int?,
+        replies: json['replies'] as int? ?? 0,
+        likes: json['likes'] as int? ?? 0,
+        dislikes: json['dislikes'] as int? ?? 0,
+        isPinned: json['is_pinned'] as bool? ?? false,
+      );
+}
+
+class CommentsPage {
+  final List<Comment> items;
+  final int total;
+
+  const CommentsPage({required this.items, this.total = 0});
+
+  factory CommentsPage.fromJson(Map<String, dynamic> json) => CommentsPage(
+        items: (json['items'] as List<dynamic>)
+            .map((e) => Comment.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        total: json['total'] as int? ?? 0,
       );
 }
 

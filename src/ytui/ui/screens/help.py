@@ -43,6 +43,7 @@ HELP_TEXT = """\
   Type a query, Enter to search
   Results include videos, playlists and channels
   /               Focus the search input
+  Ctrl+S          Toggle source (YouTube / Odysee)
 
 [b]Playlist view (YouTube)[/b]
   Enter           Play one video
@@ -61,6 +62,7 @@ HELP_TEXT = """\
   Enter play · A audio only · e enqueue · y copy URL
   o open channel · d download · s save to playlist
   L like · C comment (YouTube account)
+  c               Reload comments (Odysee, read-only)
 
 [b]Settings[/b]
   a add channel · x remove channel · m audio-only · t thumbnails

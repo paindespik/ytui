@@ -16,6 +16,9 @@ class ApiException implements Exception {
       statusCode == 0 ? 'Server unreachable: $detail' : 'API error $statusCode: $detail';
 }
 
+/// Path-encode an id: Odysee ids contain ':' and '@' — encode everywhere for safety.
+String _enc(String id) => Uri.encodeComponent(id);
+
 class YtuiApi {
   final Dio dio;
 
@@ -66,8 +69,13 @@ class YtuiApi {
     return FeedResult.fromJson(r.data as Map<String, dynamic>);
   }
 
-  Future<List<Video>> search(String query, {int limit = 20}) async {
-    final r = await _request('GET', '/api/search', query: {'q': query, 'limit': limit});
+  Future<List<Video>> search(
+    String query, {
+    int limit = 20,
+    String source = 'youtube',
+  }) async {
+    final r = await _request('GET', '/api/search',
+        query: {'q': query, 'limit': limit, 'source': source});
     return ((r.data as Map<String, dynamic>)['items'] as List<dynamic>)
         .map((e) => Video.fromJson(e as Map<String, dynamic>))
         .toList();
@@ -78,7 +86,7 @@ class YtuiApi {
     String platform = 'youtube',
     int limit = 50,
   }) async {
-    final r = await _request('GET', '/api/channels/$channelId/videos',
+    final r = await _request('GET', '/api/channels/${_enc(channelId)}/videos',
         query: {'platform': platform, 'limit': limit});
     final data = r.data as Map<String, dynamic>;
     final items = (data['items'] as List<dynamic>)
@@ -93,7 +101,7 @@ class YtuiApi {
     String platform = 'youtube',
     int limit = 200,
   }) async {
-    final r = await _request('GET', '/api/ytplaylists/$playlistId/videos',
+    final r = await _request('GET', '/api/ytplaylists/${_enc(playlistId)}/videos',
         query: {'platform': platform, 'limit': limit});
     final data = r.data as Map<String, dynamic>;
     final items = (data['items'] as List<dynamic>)
@@ -103,8 +111,8 @@ class YtuiApi {
   }
 
   Future<VideoDetails> videoDetails(String videoId, {String platform = 'youtube'}) async {
-    final r =
-        await _request('GET', '/api/videos/$videoId', query: {'platform': platform});
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}',
+        query: {'platform': platform});
     return VideoDetails.fromJson(r.data as Map<String, dynamic>);
   }
 
@@ -114,7 +122,7 @@ class YtuiApi {
     int maxHeight = 1080,
     bool audioOnly = false,
   }) async {
-    final r = await _request('GET', '/api/videos/$videoId/streams', query: {
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}/streams', query: {
       'platform': platform,
       'max_height': maxHeight,
       'audio_only': audioOnly,
@@ -122,11 +130,26 @@ class YtuiApi {
     return StreamInfo.fromJson(r.data as Map<String, dynamic>);
   }
 
-  Future<void> likeVideo(String videoId) =>
-      _request('POST', '/api/videos/$videoId/like');
+  Future<void> likeVideo(String videoId, {String platform = 'youtube'}) =>
+      _request('POST', '/api/videos/${_enc(videoId)}/like',
+          query: {'platform': platform});
 
-  Future<void> commentVideo(String videoId, String text) =>
-      _request('POST', '/api/videos/$videoId/comment', data: {'text': text});
+  Future<void> commentVideo(String videoId, String text,
+          {String platform = 'youtube'}) =>
+      _request('POST', '/api/videos/${_enc(videoId)}/comment',
+          query: {'platform': platform}, data: {'text': text});
+
+  /// Read-only comment listing (Odysee only server-side).
+  Future<CommentsPage> videoComments(
+    String videoId, {
+    String platform = 'odysee',
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}/comments',
+        query: {'platform': platform, 'page': page, 'page_size': pageSize});
+    return CommentsPage.fromJson(r.data as Map<String, dynamic>);
+  }
 
   // ─── Followed channels ───
 
@@ -143,7 +166,7 @@ class YtuiApi {
   }
 
   Future<void> unfollowChannel(String channelId) =>
-      _request('DELETE', '/api/channels/$channelId');
+      _request('DELETE', '/api/channels/${_enc(channelId)}');
 
   // ─── History ───
 
@@ -165,12 +188,12 @@ class YtuiApi {
   }
 
   Future<void> savePosition(String videoId, double position, {double? duration}) =>
-      _request('PUT', '/api/history/$videoId/position',
+      _request('PUT', '/api/history/${_enc(videoId)}/position',
           data: {'position': position, 'duration': duration});
 
   Future<ResumeInfo?> resume(String videoId) async {
     try {
-      final r = await _request('GET', '/api/history/$videoId/resume');
+      final r = await _request('GET', '/api/history/${_enc(videoId)}/resume');
       return ResumeInfo.fromJson(r.data as Map<String, dynamic>);
     } on ApiException catch (e) {
       if (e.statusCode == 404) return null;
@@ -178,7 +201,8 @@ class YtuiApi {
     }
   }
 
-  Future<void> removeWatch(String videoId) => _request('DELETE', '/api/history/$videoId');
+  Future<void> removeWatch(String videoId) =>
+      _request('DELETE', '/api/history/${_enc(videoId)}');
 
   // ─── Local playlists ───
 

@@ -38,6 +38,22 @@ void main() {
       expect(video.durationLabel, '1:02:05');
     });
 
+    test('odysee video round-trips platform and colon id', () {
+      final video = Video.fromJson({
+        'video_id': 'ma-video:abc123',
+        'title': 'Odysee video',
+        'channel_id': '@chan:1',
+        'platform': 'odysee',
+        'url': 'https://odysee.com/ma-video:abc123',
+      });
+      expect(video.platform, 'odysee');
+      expect(video.videoId, 'ma-video:abc123');
+      expect(video.url, 'https://odysee.com/ma-video:abc123');
+      final json = video.toJson();
+      expect(json['platform'], 'odysee');
+      expect(json['video_id'], 'ma-video:abc123');
+    });
+
     test('toJson round-trips the API fields', () {
       final video = Video.fromJson({
         'video_id': 'abc',
@@ -138,6 +154,46 @@ void main() {
         'detected_at': '2026-07-11T10:00:00Z',
       });
       expect(live.video.title, 'live!');
+    });
+
+    test('Comment parses full payload', () {
+      final comment = Comment.fromJson({
+        'comment_id': 'c1',
+        'text': 'hello',
+        'channel_name': '@bob',
+        'timestamp': 1700000000,
+        'replies': 2,
+        'likes': 5,
+        'dislikes': 1,
+        'is_pinned': true,
+      });
+      expect(comment.commentId, 'c1');
+      expect(comment.text, 'hello');
+      expect(comment.channelName, '@bob');
+      expect(comment.timestamp, 1700000000);
+      expect(comment.replies, 2);
+      expect(comment.likes, 5);
+      expect(comment.dislikes, 1);
+      expect(comment.isPinned, isTrue);
+    });
+
+    test('Comment tolerates minimal payload', () {
+      final comment = Comment.fromJson({'comment_id': 'c1', 'text': 't'});
+      expect(comment.likes, 0);
+      expect(comment.timestamp, isNull);
+      expect(comment.isPinned, isFalse);
+    });
+
+    test('CommentsPage parses items and total', () {
+      final page = CommentsPage.fromJson({
+        'items': [
+          {'comment_id': 'a', 'text': 'one'},
+          {'comment_id': 'b', 'text': 'two'},
+        ],
+        'total': 12,
+      });
+      expect(page.items, hasLength(2));
+      expect(page.total, 12);
     });
 
     test('FollowedChannel parses', () {

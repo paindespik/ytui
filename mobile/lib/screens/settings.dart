@@ -193,7 +193,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'UC…, @handle or bitchute:slug',
+            hintText: 'UC…, @handle, bitchute:slug or odysee:@name:claim',
           ),
         ),
         actions: [

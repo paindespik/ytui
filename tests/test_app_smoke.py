@@ -10,7 +10,7 @@ import pytest
 
 from ytui.api_client import FeedResult, FollowedChannel, LocalPlaylist, PlaylistItem
 from ytui.config import Config
-from ytui.models import Video, VideoDetails
+from ytui.models import Comment, Video, VideoDetails
 
 VIDEO = Video(
     video_id="dQw4w9WgXcQ",
@@ -21,6 +21,13 @@ VIDEO = Video(
 )
 PLAYLIST = Video(video_id="PLabc", title="A playlist", kind="playlist")
 CHANNEL = Video(video_id="UCabc", title="A channel", kind="channel")
+ODYSEE_VIDEO = Video(
+    video_id="ma-video:abc123",
+    title="An Odysee video",
+    channel_title="@chan",
+    channel_id="@chan:1",
+    platform="odysee",
+)
 
 
 class FakeClient:
@@ -39,8 +46,9 @@ class FakeClient:
     async def feed(self, refresh: bool = False) -> FeedResult:
         return FeedResult([VIDEO], [])
 
-    async def search(self, query: str, limit: int = 20) -> list[Video]:
-        return [VIDEO]
+    async def search(self, query: str, limit: int = 20, source: str = "youtube") -> list[Video]:
+        self.last_search_source = source
+        return [ODYSEE_VIDEO] if source == "odysee" else [VIDEO]
 
     async def channel_videos(self, channel_id, platform="youtube", limit=50):
         return [VIDEO]
@@ -50,6 +58,12 @@ class FakeClient:
 
     async def video_details(self, video_id, platform="youtube") -> VideoDetails:
         return VideoDetails(description="A description", view_count=1234, duration=60)
+
+    async def video_comments(self, video_id, platform="odysee", page=1, page_size=50):
+        return (
+            [Comment(comment_id="c1", text="Nice one", channel_name="@bob", likes=3)],
+            1,
+        )
 
     async def channels(self) -> list[FollowedChannel]:
         return [FollowedChannel("@x", "UC123", "Some Channel")]
@@ -157,6 +171,41 @@ async def test_search_screen_opens(app):
         assert app.screen.__class__.__name__ == "SearchScreen"
 
 
+async def test_search_source_toggle(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen("search")
+        await pilot.pause()
+        screen = app.screen
+        assert screen.source == "youtube"
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert screen.source == "odysee"
+        assert "Odysee" in screen.sub_title
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert screen.source == "youtube"
+
+
+async def test_search_odysee_results(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen("search")
+        await pilot.pause()
+        screen = app.screen
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        screen.run_search("linux")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.last_search_source == "odysee"
+        from ytui.ui.widgets.video_list import VideoList
+
+        video = screen.query_one("#search-results", VideoList).video_at_cursor()
+        assert video.platform == "odysee"
+        assert video.url == "https://odysee.com/ma-video:abc123"
+
+
 async def test_channel_screen_opens(app):
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -248,6 +297,25 @@ async def test_detail_screen_opens(app):
 
         description = app.screen.query_one("#detail-description", Static)
         assert "A description" in str(description.render())
+
+
+async def test_detail_screen_odysee_comments(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_detail(ODYSEE_VIDEO)
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "VideoDetailScreen"
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from textual.widgets import Static
+
+        title = app.screen.query_one("#detail-comments-title", Static)
+        assert "Comments (1)" in str(title.render())
+        comments = app.screen.query(".detail-comment")
+        assert len(comments) == 1
+        assert "Nice one" in str(comments.first().render())
 
 
 async def test_playlist_picker_modal_opens(app):

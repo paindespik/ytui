@@ -137,13 +137,16 @@ and `x` removes an entry.
 ## Settings
 
 Press `,` for the settings screen: add followed channels (`a` — accepts UC ids,
-@handles or `bitchute:<slug>`), remove them (`x`), toggle the
+@handles, `bitchute:<slug>` or `odysee:@name:claim`), remove them (`x`), toggle the
 feed backend, global audio-only and thumbnails. Changes are written to
 `config.toml` immediately, preserving your comments.
 
 ## Search, channels and playlists
 
 Search results mix videos, playlists and channels (see the *Type* column).
+Press `Ctrl+S` in the search screen to toggle the search source between
+**YouTube** and **Odysee** (the placeholder and subtitle show the active source;
+the current query is re-run automatically).
 
 - `Enter` on a **video** or **playlist** plays it in mpv (mpv's ytdl_hook streams whole playlists natively).
 - `Enter` on a **channel** opens its latest videos; press `a` there to follow it — the channel ID is written to `[channels].list` in config.toml and appears in the home feed on the next refresh.
@@ -159,6 +162,21 @@ refresh. Feeds come from BitChute's RSS API and use the same cache TTL and
 offline fallback as YouTube. Pressing `a` on a BitChute video in any list
 follows its channel (the `bitchute:` prefix is added automatically). Playback
 goes through mpv via yt-dlp's native BitChute extractor.
+
+## Odysee channels
+
+Odysee works the same way: search it with `Ctrl+S` in the search screen, play
+and download videos through mpv/yt-dlp's LBRY extractor, and follow channels
+with `a` (the `odysee:` prefix is added automatically — the channel id is
+`@name:claim`, e.g. `odysee:@gotbletu:b`). Followed Odysee channels appear in
+the home feed via Odysee's RSS (`odysee.com/$/rss/…`), with the same cache TTL
+and offline fallback. Video details show Odysee comments (read-only, press `c`
+to reload); likes and posting comments are not supported by Odysee's public
+API, so `L`/`C` explain that instead.
+
+> **Upgrade note:** older ytui/mobile clients reject `platform="odysee"` items
+> when validating API responses — update all installed clients before following
+> an Odysee channel, or the whole home feed will fail to load on stale clients.
 
 ## Thumbnails
 

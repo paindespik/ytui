@@ -21,6 +21,11 @@ HANDLE_URL = "https://www.youtube.com/{handle}"
 BITCHUTE_PREFIX = "bitchute:"
 BITCHUTE_RSS_URL = "https://api.bitchute.com/feeds/rss/channel/{channel_id}"
 _BITCHUTE_EMBED_RE = re.compile(r"/embed/([\w-]+)/?")
+ODYSEE_PREFIX = "odysee:"
+ODYSEE_RSS_URL = "https://odysee.com/$/rss/{channel_id}"
+_ODYSEE_LINK_RE = re.compile(r"odysee\.com/(?:@[^/]+/)?([^/?#]+:[0-9a-f]+)")
+_ODYSEE_CHANNEL_URL_RE = re.compile(r"odysee\.com/(@[^/?#:]+:\w+)")
+_IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
 TIMEOUT = httpx.Timeout(5.0)
 CONCURRENCY = 10
 _CHANNEL_ID_RE = re.compile(r'"channelId"\s*:\s*"(UC[\w-]{22})"')
@@ -100,6 +105,42 @@ def parse_bitchute_rss(xml: str | bytes, channel_id: str = "") -> list[Video]:
     return videos
 
 
+def parse_odysee_rss(xml: str | bytes, channel_id: str = "") -> list[Video]:
+    """Parse an Odysee channel RSS feed into Video objects."""
+    parsed = feedparser.parse(xml)
+    channel_title = parsed.feed.get("title", "")
+    videos: list[Video] = []
+    for entry in parsed.entries:
+        m = _ODYSEE_LINK_RE.search(entry.get("link", ""))
+        if not m:
+            continue
+        video_id = m.group(1)
+        published = None
+        if entry.get("published_parsed"):
+            published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        thumb = ""
+        media = entry.get("media_thumbnail") or []
+        if media:
+            thumb = media[0].get("url", "")
+        if not thumb:
+            # Odysee embeds the thumbnail as an <img> in the item description HTML
+            m_img = _IMG_SRC_RE.search(entry.get("summary", "") or entry.get("description", ""))
+            if m_img:
+                thumb = m_img.group(1)
+        videos.append(
+            Video(
+                video_id=video_id,
+                title=entry.get("title", ""),
+                channel_title=channel_title,
+                channel_id=channel_id,
+                published=published,
+                thumbnail_url=thumb,
+                platform="odysee",
+            )
+        )
+    return videos
+
+
 def extract_channel_id(html: str) -> str | None:
     """Extract a channel_id (UC...) from a YouTube channel page."""
     m = _CANONICAL_RE.search(html) or _CHANNEL_ID_RE.search(html)
@@ -124,6 +165,26 @@ class FeedService:
             slug = ref[len(BITCHUTE_PREFIX):]
             return FollowedChannel(
                 ref=ref, channel_id=slug, title=slug, platform="bitchute"
+            )
+        odysee_id = None
+        if ref.startswith(ODYSEE_PREFIX):
+            odysee_id = ref[len(ODYSEE_PREFIX):]
+        elif "odysee.com/" in ref:
+            m = _ODYSEE_CHANNEL_URL_RE.search(ref)
+            if not m:
+                raise ValueError(f"Could not parse Odysee channel URL {ref!r}")
+            odysee_id = m.group(1)
+        if odysee_id:
+            if not odysee_id.startswith("@") or ":" not in odysee_id:
+                raise ValueError(
+                    f"Invalid Odysee channel {odysee_id!r} (expected @name:claim)"
+                )
+            title = odysee_id.rsplit(":", 1)[0]
+            return FollowedChannel(
+                ref=f"{ODYSEE_PREFIX}{odysee_id}",
+                channel_id=odysee_id,
+                title=title,
+                platform="odysee",
             )
         if ref.startswith("UC"):
             title = self.db.get_channel_name(ref) or ""
@@ -157,6 +218,8 @@ class FeedService:
         async with semaphore:
             if channel.platform == "bitchute":
                 return await self._fetch_bitchute(channel, client, force_refresh)
+            if channel.platform == "odysee":
+                return await self._fetch_odysee(channel, client, force_refresh)
             channel_id = channel.channel_id
             if not force_refresh:
                 cached = self.db.get_feed(channel_id)
@@ -193,6 +256,30 @@ class FeedService:
             )
             resp.raise_for_status()
             videos = parse_bitchute_rss(resp.content, channel_id=channel.channel_id)
+            self.db.set_feed(cache_key, videos)
+            return videos, None
+        except Exception as exc:
+            stale = self.db.get_feed(cache_key, allow_stale=True)
+            if stale is not None:
+                return stale, f"{channel.ref}: using cached data ({type(exc).__name__})"
+            return [], f"{channel.ref}: {exc}"
+
+    async def _fetch_odysee(
+        self, channel: FollowedChannel, client: httpx.AsyncClient, force_refresh: bool
+    ) -> tuple[list[Video], str | None]:
+        cache_key = f"{ODYSEE_PREFIX}{channel.channel_id}"
+        if not force_refresh:
+            cached = self.db.get_feed(cache_key)
+            if cached is not None:
+                return cached, None
+        try:
+            resp = await client.get(
+                ODYSEE_RSS_URL.format(channel_id=channel.channel_id),
+                headers={"User-Agent": USER_AGENT},
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            videos = parse_odysee_rss(resp.content, channel_id=channel.channel_id)
             self.db.set_feed(cache_key, videos)
             return videos, None
         except Exception as exc:

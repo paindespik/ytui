@@ -29,7 +29,12 @@ def _record_cli_watch(config: Config, url: str) -> None:
     video_id = video_id_from_url(url)
     if video_id is None:
         return  # playlists / unknown URLs: nothing to record
-    platform = "bitchute" if "bitchute.com/" in url else "youtube"
+    if "bitchute.com/" in url:
+        platform = "bitchute"
+    elif "odysee.com/" in url:
+        platform = "odysee"
+    else:
+        platform = "youtube"
     client = _client(config)
     if client is None:
         return
