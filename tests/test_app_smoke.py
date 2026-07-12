@@ -163,6 +163,38 @@ async def test_app_boots_to_home(app):
         assert app.screen.__class__.__name__ == "HomeFeedScreen"
 
 
+async def test_home_list_shows_source_column(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = app.screen.query_one(VideoList)
+        labels = [str(col.label) for col in video_list.columns.values()]
+        assert "Source" in labels
+        assert "Type" not in labels
+        row = video_list.get_row_at(0)
+        assert str(row[-1]) == "YouTube"
+
+
+async def test_search_odysee_row_shows_odysee_source(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen("search")
+        await pilot.pause()
+        screen = app.screen
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        screen.run_search("linux")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = screen.query_one("#search-results", VideoList)
+        assert str(video_list.get_row_at(0)[-1]) == "Odysee"
+
+
 async def test_search_screen_opens(app):
     async with app.run_test() as pilot:
         await pilot.pause()

@@ -139,6 +139,29 @@ async def test_connection_error_raises_api_error_status_zero(client):
 
 
 @respx.mock
+async def test_timeout_raises_api_error_with_timeout_detail(client):
+    respx.get(f"{BASE}/api/videos/abc").mock(side_effect=httpx.ReadTimeout("too slow"))
+    with pytest.raises(YtuiApiError) as exc:
+        await client.video_details("abc", platform="odysee")
+    assert exc.value.status_code == 0
+    assert "timed out" in exc.value.detail
+    assert "unreachable" not in exc.value.detail
+
+
+@respx.mock
+async def test_video_details_uses_extended_timeout(client):
+    from ytui.api_client import SLOW_TIMEOUT
+
+    route = respx.get(f"{BASE}/api/videos/ma-video%3Aabc123").mock(
+        return_value=httpx.Response(200, json=VIDEO_JSON | {"description": "d"})
+    )
+    await client.video_details("ma-video:abc123", platform="odysee")
+    request = route.calls.last.request
+    assert request.url.params["platform"] == "odysee"
+    assert request.extensions["timeout"]["read"] == SLOW_TIMEOUT
+
+
+@respx.mock
 async def test_record_watch_serializes_video(client):
     from ytui.models import Video
 

@@ -1,4 +1,4 @@
-"""Video list widget: title / channel / age columns with vim-style navigation."""
+"""Video list widget: title / channel / age / source columns with vim-style navigation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,14 @@ from textual.widgets import DataTable
 
 from ...models import Video
 
-_KIND_LABELS = {"video": "", "playlist": "▶ Playlist", "channel": "@ Channel"}
+_KIND_MARKS = {"playlist": "▶ ", "channel": "@ "}
+_PLATFORM_LABELS = {"youtube": "YouTube", "bitchute": "BitChute", "odysee": "Odysee"}
+
+
+def _source_label(video: Video) -> str:
+    """'YouTube', '▶ Odysee' (playlist), '@ BitChute' (channel)…"""
+    mark = _KIND_MARKS.get(video.kind, "")
+    return mark + _PLATFORM_LABELS.get(video.platform, video.platform)
 
 
 class VideoList(DataTable):
@@ -40,7 +47,7 @@ class VideoList(DataTable):
         self.add_column("Title", key="title")
         self.add_column("Channel", key="channel")
         self.add_column("Age", key="age")
-        self.add_column("Type", key="kind")
+        self.add_column("Source", key="source")
 
     def set_videos(self, videos: list[Video], watched: set[str] | None = None) -> None:
         self._videos = videos
@@ -54,7 +61,7 @@ class VideoList(DataTable):
                 Text(video.title, style=style),
                 Text(video.channel_title, style=style),
                 Text(video.age, style=style),
-                Text(_KIND_LABELS.get(video.kind, ""), style=style),
+                Text(_source_label(video), style=style),
             )
 
     def refresh_watched(self, watched: set[str]) -> None:

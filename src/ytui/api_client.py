@@ -14,6 +14,11 @@ def _encode(video_id: str) -> str:
     return quote(video_id, safe="")
 
 
+# yt-dlp backed endpoints (details, streams) can take well over the default
+# timeout, especially for Odysee; give them their own generous budget.
+SLOW_TIMEOUT = 60.0
+
+
 def resume_start(position: float, duration: float | None) -> float:
     """Position to resume from: 0 if duration is unknown or within 5% of the end."""
     if not duration or duration <= 0:
@@ -81,6 +86,8 @@ class YtuiClient:
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         try:
             response = await self._http.request(method, path, **kwargs)
+        except httpx.TimeoutException as exc:
+            raise YtuiApiError(0, f"Server timed out ({type(exc).__name__}): {exc}") from exc
         except httpx.HTTPError as exc:
             raise YtuiApiError(0, f"Server unreachable: {exc}") from exc
         if response.status_code >= 400:
@@ -141,7 +148,10 @@ class YtuiClient:
     async def video_details(self, video_id: str, platform: str = "youtube") -> VideoDetails:
         data = (
             await self._request(
-                "GET", f"/api/videos/{_encode(video_id)}", params={"platform": platform}
+                "GET",
+                f"/api/videos/{_encode(video_id)}",
+                params={"platform": platform},
+                timeout=SLOW_TIMEOUT,
             )
         ).json()
         return VideoDetails.model_validate(data)
@@ -172,6 +182,7 @@ class YtuiClient:
                 "GET",
                 f"/api/videos/{_encode(video_id)}/streams",
                 params={"platform": platform, "max_height": max_height, "audio_only": audio_only},
+                timeout=SLOW_TIMEOUT,
             )
         ).json()
 
