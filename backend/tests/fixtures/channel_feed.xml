@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+      xmlns:media="http://search.yahoo.com/mrss/"
+      xmlns="http://www.w3.org/2005/Atom">
+  <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCtest000000000000000000"/>
+  <id>yt:channel:test000000000000000000</id>
+  <yt:channelId>test000000000000000000</yt:channelId>
+  <title>Test Channel</title>
+  <link rel="alternate" href="https://www.youtube.com/channel/UCtest000000000000000000"/>
+  <author>
+    <name>Test Channel</name>
+    <uri>https://www.youtube.com/channel/UCtest000000000000000000</uri>
+  </author>
+  <published>2020-01-01T00:00:00+00:00</published>
+  <entry>
+    <id>yt:video:abc123def45</id>
+    <yt:videoId>abc123def45</yt:videoId>
+    <yt:channelId>UCtest000000000000000000</yt:channelId>
+    <title>First Video Title</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=abc123def45"/>
+    <author>
+      <name>Test Channel</name>
+      <uri>https://www.youtube.com/channel/UCtest000000000000000000</uri>
+    </author>
+    <published>2024-06-02T12:00:00+00:00</published>
+    <updated>2024-06-02T12:30:00+00:00</updated>
+    <media:group>
+      <media:title>First Video Title</media:title>
+      <media:content url="https://www.youtube.com/v/abc123def45?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+      <media:thumbnail url="https://i.ytimg.com/vi/abc123def45/hqdefault.jpg" width="480" height="360"/>
+      <media:description>Description of the first video.</media:description>
+    </media:group>
+  </entry>
+  <entry>
+    <id>yt:video:xyz987wvu65</id>
+    <yt:videoId>xyz987wvu65</yt:videoId>
+    <yt:channelId>UCtest000000000000000000</yt:channelId>
+    <title>Second Video Title</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=xyz987wvu65"/>
+    <author>
+      <name>Test Channel</name>
+      <uri>https://www.youtube.com/channel/UCtest000000000000000000</uri>
+    </author>
+    <published>2024-06-01T08:00:00+00:00</published>
+    <updated>2024-06-01T08:00:00+00:00</updated>
+    <media:group>
+      <media:title>Second Video Title</media:title>
+      <media:thumbnail url="https://i.ytimg.com/vi/xyz987wvu65/hqdefault.jpg" width="480" height="360"/>
+      <media:description>Description of the second video.</media:description>
+    </media:group>
+  </entry>
+</feed>
