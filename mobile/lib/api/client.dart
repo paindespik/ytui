@@ -1,0 +1,250 @@
+/// HTTP client for the ytui backend (one method per endpoint).
+library;
+
+import 'package:dio/dio.dart';
+
+import 'models.dart';
+
+class ApiException implements Exception {
+  final int statusCode; // 0 = server unreachable
+  final String detail;
+
+  const ApiException(this.statusCode, this.detail);
+
+  @override
+  String toString() =>
+      statusCode == 0 ? 'Server unreachable: $detail' : 'API error $statusCode: $detail';
+}
+
+class YtuiApi {
+  final Dio dio;
+
+  YtuiApi({required String baseUrl, required String token, Dio? dio})
+      : dio = dio ??
+            Dio(BaseOptions(
+              baseUrl: baseUrl,
+              headers: {'Authorization': 'Bearer $token'},
+              connectTimeout: const Duration(seconds: 10),
+              receiveTimeout: const Duration(seconds: 60),
+            ));
+
+  Future<Response<dynamic>> _request(
+    String method,
+    String path, {
+    Map<String, dynamic>? query,
+    Object? data,
+  }) async {
+    try {
+      return await dio.request(
+        path,
+        queryParameters: query,
+        data: data,
+        options: Options(method: method),
+      );
+    } on DioException catch (e) {
+      final response = e.response;
+      if (response != null) {
+        final body = response.data;
+        final detail = body is Map<String, dynamic>
+            ? (body['detail']?.toString() ?? response.statusMessage ?? '')
+            : response.statusMessage ?? '';
+        throw ApiException(response.statusCode ?? 0, detail);
+      }
+      throw ApiException(0, e.message ?? 'connection failed');
+    }
+  }
+
+  Future<Map<String, dynamic>> health() async {
+    final r = await _request('GET', '/health');
+    return r.data as Map<String, dynamic>;
+  }
+
+  // ─── Feed & discovery ───
+
+  Future<FeedResult> feed({bool refresh = false}) async {
+    final r = await _request('GET', '/api/feed', query: {'refresh': refresh});
+    return FeedResult.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<List<Video>> search(String query, {int limit = 20}) async {
+    final r = await _request('GET', '/api/search', query: {'q': query, 'limit': limit});
+    return ((r.data as Map<String, dynamic>)['items'] as List<dynamic>)
+        .map((e) => Video.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<(List<Video>, String)> channelVideos(
+    String channelId, {
+    String platform = 'youtube',
+    int limit = 50,
+  }) async {
+    final r = await _request('GET', '/api/channels/$channelId/videos',
+        query: {'platform': platform, 'limit': limit});
+    final data = r.data as Map<String, dynamic>;
+    final items = (data['items'] as List<dynamic>)
+        .map((e) => Video.fromJson(e as Map<String, dynamic>))
+        .toList();
+    final title = (data['channel'] as Map<String, dynamic>)['title'] as String? ?? '';
+    return (items, title);
+  }
+
+  Future<(List<Video>, String)> playlistVideos(
+    String playlistId, {
+    String platform = 'youtube',
+    int limit = 200,
+  }) async {
+    final r = await _request('GET', '/api/ytplaylists/$playlistId/videos',
+        query: {'platform': platform, 'limit': limit});
+    final data = r.data as Map<String, dynamic>;
+    final items = (data['items'] as List<dynamic>)
+        .map((e) => Video.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return (items, data['title'] as String? ?? '');
+  }
+
+  Future<VideoDetails> videoDetails(String videoId, {String platform = 'youtube'}) async {
+    final r =
+        await _request('GET', '/api/videos/$videoId', query: {'platform': platform});
+    return VideoDetails.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<StreamInfo> videoStreams(
+    String videoId, {
+    String platform = 'youtube',
+    int maxHeight = 1080,
+    bool audioOnly = false,
+  }) async {
+    final r = await _request('GET', '/api/videos/$videoId/streams', query: {
+      'platform': platform,
+      'max_height': maxHeight,
+      'audio_only': audioOnly,
+    });
+    return StreamInfo.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<void> likeVideo(String videoId) =>
+      _request('POST', '/api/videos/$videoId/like');
+
+  Future<void> commentVideo(String videoId, String text) =>
+      _request('POST', '/api/videos/$videoId/comment', data: {'text': text});
+
+  // ─── Followed channels ───
+
+  Future<List<FollowedChannel>> channels() async {
+    final r = await _request('GET', '/api/channels');
+    return (r.data as List<dynamic>)
+        .map((e) => FollowedChannel.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<FollowedChannel> followChannel(String ref) async {
+    final r = await _request('POST', '/api/channels', data: {'ref': ref});
+    return FollowedChannel.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<void> unfollowChannel(String channelId) =>
+      _request('DELETE', '/api/channels/$channelId');
+
+  // ─── History ───
+
+  Future<List<HistoryEntry>> history({int limit = 200}) async {
+    final r = await _request('GET', '/api/history', query: {'limit': limit});
+    return (r.data as List<dynamic>)
+        .map((e) => HistoryEntry.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> recordWatch(Video video) =>
+      _request('POST', '/api/history', data: {'video': video.toJson()});
+
+  Future<Set<String>> watchedIds() async {
+    final r = await _request('GET', '/api/history/watched-ids');
+    return ((r.data as Map<String, dynamic>)['ids'] as List<dynamic>)
+        .map((e) => e as String)
+        .toSet();
+  }
+
+  Future<void> savePosition(String videoId, double position, {double? duration}) =>
+      _request('PUT', '/api/history/$videoId/position',
+          data: {'position': position, 'duration': duration});
+
+  Future<ResumeInfo?> resume(String videoId) async {
+    try {
+      final r = await _request('GET', '/api/history/$videoId/resume');
+      return ResumeInfo.fromJson(r.data as Map<String, dynamic>);
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<void> removeWatch(String videoId) => _request('DELETE', '/api/history/$videoId');
+
+  // ─── Local playlists ───
+
+  Future<List<LocalPlaylist>> playlists() async {
+    final r = await _request('GET', '/api/playlists');
+    return (r.data as List<dynamic>)
+        .map((e) => LocalPlaylist.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Returns null when the name is already taken (409).
+  Future<LocalPlaylist?> createPlaylist(String name) async {
+    try {
+      final r = await _request('POST', '/api/playlists', data: {'name': name});
+      return LocalPlaylist.fromJson(r.data as Map<String, dynamic>);
+    } on ApiException catch (e) {
+      if (e.statusCode == 409) return null;
+      rethrow;
+    }
+  }
+
+  /// Returns false when the name is already taken (409).
+  Future<bool> renamePlaylist(int id, String name) async {
+    try {
+      await _request('PATCH', '/api/playlists/$id', data: {'name': name});
+      return true;
+    } on ApiException catch (e) {
+      if (e.statusCode == 409) return false;
+      rethrow;
+    }
+  }
+
+  Future<void> deletePlaylist(int id) => _request('DELETE', '/api/playlists/$id');
+
+  Future<List<PlaylistItem>> playlistItems(int id) async {
+    final r = await _request('GET', '/api/playlists/$id/items');
+    return (r.data as List<dynamic>)
+        .map((e) => PlaylistItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Returns false when the item is already in the playlist (409).
+  Future<bool> addPlaylistItem(int id, Video video) async {
+    try {
+      await _request('POST', '/api/playlists/$id/items', data: {'video': video.toJson()});
+      return true;
+    } on ApiException catch (e) {
+      if (e.statusCode == 409) return false;
+      rethrow;
+    }
+  }
+
+  Future<void> removePlaylistItem(int id, int position) =>
+      _request('DELETE', '/api/playlists/$id/items/$position');
+
+  // ─── Auth & lives ───
+
+  Future<bool> authStatus() async {
+    final r = await _request('GET', '/api/auth/youtube/status');
+    return (r.data as Map<String, dynamic>)['authenticated'] as bool? ?? false;
+  }
+
+  Future<List<LiveItem>> lives() async {
+    final r = await _request('GET', '/api/lives');
+    return (r.data as List<dynamic>)
+        .map((e) => LiveItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+}
