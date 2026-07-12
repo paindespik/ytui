@@ -8,3 +8,8 @@ android/app/.cxx/
 *.iml
 .idea/
 android/app/src/main/java/io/flutter/plugins/
+
+# Signing — never commit secrets
+android/key.properties
+*.jks
+*.keystore

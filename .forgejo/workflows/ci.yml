@@ -48,6 +48,19 @@ jobs:
           flutter analyze
           flutter test
 
+      - name: Set up release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > mobile/android/ytui-release.jks
+            printf 'storeFile=ytui-release.jks\nstorePassword=%s\nkeyAlias=ytui\nkeyPassword=%s\n' "$KEYSTORE_PASSWORD" "$KEYSTORE_PASSWORD" > mobile/android/key.properties
+            echo "Release keystore configured."
+          else
+            echo "No keystore secret; falling back to debug signing."
+          fi
+
       - name: Build APK
         run: cd mobile && flutter build apk --release
 
