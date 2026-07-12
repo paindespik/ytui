@@ -1,250 +1,125 @@
 # ytui
 
-A terminal YouTube client with BitChute support: follow channels via RSS (no account needed), search with yt-dlp, and play videos in an external mpv window — with a playback queue, watch history, local playlists and background downloads.
+A self-hosted, multi-client YouTube (plus BitChute and Odysee) viewing system. A shared FastAPI backend aggregates RSS feeds, resolves playable stream URLs via `yt-dlp`, and stores history, playlists, and channels server-side in SQLite. Three independent front-ends — a Textual-based terminal UI, a headless argparse CLI, and a Flutter Android app — all consume the same REST API over a Bearer-token-authenticated connection, so state (watch history, resume position, followed channels, local playlists) stays in sync across every device.
 
-## Requirements
+## Features
 
-- Python 3.11+
-- **mpv** (system dependency, used for playback):
-  - Debian/Ubuntu: `sudo apt install mpv`
-  - Fedora: `sudo dnf install mpv`
-  - Arch: `sudo pacman -S mpv`
+- **Unified feed** — merges YouTube, BitChute, and Odysee RSS feeds by publish date, with TTL-based caching (15 min) and stale-fallback on upstream failure.
+- **Playback** — resolves the best available stream (HLS/progressive/DASH up to 4320p) via `yt-dlp`; the TUI drives `mpv` over JSON IPC, the mobile app uses `media_kit`.
+- **Cross-device continuity** — watch history, resume position (10s heartbeat), local playlists, and followed channels all live on the server, not per-client config.
+- **Live notifications** — the server polls followed channels' `/live` pages every 5 min; clients poll `/api/lives` and surface desktop/mobile notifications, pinning live videos in the feed.
+- **YouTube interactions** — an OAuth2 "token push" model: the desktop client completes OAuth consent and uploads the token to the server, which then handles like/comment actions via the YouTube Data API v3 on behalf of every client.
+- **Search** — YouTube and Odysee search via `yt-dlp`/the LBRY API, from any client.
+- **Three clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/auth`), and a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling).
 
-yt-dlp is bundled as a Python library — you don't need the binary.
+## Architecture
 
-## Install
+```
+Clients (TUI / CLI / Mobile) --Bearer-token REST--> FastAPI backend (uvicorn)
+                                                      ├─ FeedService (RSS merge)
+                                                      ├─ YtdlpService (search/streams)
+                                                      ├─ YouTubeService (OAuth2 like/comment)
+                                                      ├─ OdyseeService (LBRY API)
+                                                      └─ LiveMonitor (live polling)
+                                                      → SQLite (meta.sqlite)
 
-With [pipx](https://pipx.pypa.io/) from git:
-
-```sh
-pipx install git+https://github.com/paindespik/ytui.git
+Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
+            (backend-tests → build-apk → deploy via SSH + docker compose)
 ```
 
-Or for development:
-
-```sh
-git clone <repo> youtube-cli && cd youtube-cli
-python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
-```
-
-## Usage
-
-```sh
-ytui                    # open the TUI (home feed, or search if no channels configured)
-ytui search "query"     # search and print results to stdout
-ytui play <url>         # play a YouTube video or playlist URL in mpv
-ytui --version          # print the version
-```
-
-## Configuration
-
-Config lives at `~/.config/ytui/config.toml` and is created with defaults on first run:
-
-```toml
-[feed]
-backend = "rss"
-
-[channels]
-# Channel IDs (UC...), @handles, or BitChute channel slugs prefixed with
-# "bitchute:". Handles are resolved once and cached.
-list = [
-  "UCXuqSBlHAE6Xw-yeJA0Tunw",
-  "@LinusTechTips",
-  "bitchute:bitchute",
-]
-
-[player]
-command = "mpv"
-format = "bestvideo[height<=?1080]+bestaudio/best"
-audio_only = false
-download_dir = "~/Videos"   # target for the 'd' (download) action
-
-[ui]
-thumbnails = true   # thumbnail panel; set to false for SSH / plain terminals
-```
-
-Feed metadata, watch history and local playlists are stored in `~/.cache/ytui/meta.sqlite` (feed TTL: 15 min). When offline, the feed is served from the cache with a warning banner.
-
-## Keybindings
-
-### Video lists (feed, search, channel, YouTube playlist, history, local playlist)
-
-| Key | Action |
+| Component | Stack |
 |---|---|
-| `j` / `k` / arrows | Move selection |
-| `g` / `G` | Top / bottom |
-| `Enter` | Play video/playlist in mpv, or open a channel |
-| `e` | Enqueue in the running mpv (append-play; starts mpv if idle) |
-| `i` | Video details (full description, views, likes, date) |
-| `o` | Open the highlighted item's channel or playlist view |
-| `a` | Follow the channel (persist it to config.toml) |
-| `A` | Play audio only (this video, ignores the global setting) |
-| `d` | Download in the background to `[player].download_dir` |
-| `s` | Save the item to a local playlist (picker modal) |
-| `L` | Like the video on YouTube (requires [account setup](#youtube-account-likecomment)) |
-| `C` | Comment on the video on YouTube (requires account setup) |
-| `Space` | Pause / resume mpv playback |
-| `n` | Next entry in the mpv queue |
+| Backend  | Python 3.11+, FastAPI, yt-dlp, feedparser, httpx, pydantic, SQLite |
+| TUI      | Python 3.11+, Textual, textual-image, mpv |
+| CLI      | Python 3.11+, argparse, asyncio (shares the httpx REST client with the TUI) |
+| Mobile   | Dart/Flutter 3.6+, Riverpod, GoRouter, dio, media_kit, flutter_local_notifications |
 
-### Home feed
+## Setup
 
-| Key | Action |
-|---|---|
-| `r` | Refresh feed |
-| `/` | Open search |
-| `h` | Watch history |
-| `P` | Local playlists |
-| `,` | Settings |
-| `q` | Quit |
+### Backend (server)
 
-### Other screens
-
-| Key | Action |
-|---|---|
-| `p` | (YouTube playlist / local playlist) Play the whole playlist |
-| `x` | (history) Remove entry · (local playlist) Remove entry · (settings) Remove channel |
-| `n` / `r` | (local playlists) New / rename playlist |
-| `x` | (local playlists) Delete playlist (with confirmation) |
-| `y` | (video details) Copy URL to clipboard (OSC 52) |
-| `L` / `C` | (video details) Like / comment (YouTube account) |
-| `b` / `m` / `t` | (settings) Toggle backend / audio-only / thumbnails |
-| `Escape` | Go back |
-| `?` | Help |
-
-## Playback queue
-
-Playback goes through a single mpv instance controlled over its JSON IPC socket
-(`$XDG_RUNTIME_DIR/ytui-mpv.sock`). `Enter` replaces what is playing, `e` appends
-to the queue, `Space` pauses and `n` skips. A status line (“▶ playing (2 queued)”)
-appears above the footer on the home feed while mpv runs. When mpv exits, ytui
-returns to the idle state automatically.
-
-## Watch history
-
-Every play/enqueue is recorded. Watched videos show a dimmed `✓` marker in all
-lists. Press `h` for the history screen (`Enter` replays, `x` removes an entry).
-
-## Local playlists
-
-Local playlists live in ytui's SQLite database (no YouTube account involved) and
-can contain both videos and YouTube playlists. Press `s` on any list item to save
-it to a playlist (create one on the fly), and `P` from the home feed to manage
-them: `n` new, `r` rename, `x` delete, `Enter` to open. Inside a playlist,
-`Enter` plays one entry, `p` plays everything through the mpv queue in order,
-and `x` removes an entry.
-
-## Settings
-
-Press `,` for the settings screen: add followed channels (`a` — accepts UC ids,
-@handles, `bitchute:<slug>` or `odysee:@name:claim`), remove them (`x`), toggle the
-feed backend, global audio-only and thumbnails. Changes are written to
-`config.toml` immediately, preserving your comments.
-
-## Search, channels and playlists
-
-Search results mix videos, playlists and channels (see the *Type* column).
-Press `Ctrl+S` in the search screen to toggle the search source between
-**YouTube** and **Odysee** (the placeholder and subtitle show the active source;
-the current query is re-run automatically).
-
-- `Enter` on a **video** or **playlist** plays it in mpv (mpv's ytdl_hook streams whole playlists natively).
-- `Enter` on a **channel** opens its latest videos; press `a` there to follow it — the channel ID is written to `[channels].list` in config.toml and appears in the home feed on the next refresh.
-- `o` on a playlist opens the playlist view, where `Enter` plays one entry and `p` plays them all.
-
-## BitChute channels
-
-BitChute channels can be followed alongside YouTube ones. The channel slug is
-the name in the channel URL — for `bitchute.com/channel/<slug>/` the entry is
-`bitchute:<slug>`. Add it from the settings screen (`,` then `a`) or directly
-to `[channels].list` in config.toml, then press `r` on the home feed to
-refresh. Feeds come from BitChute's RSS API and use the same cache TTL and
-offline fallback as YouTube. Pressing `a` on a BitChute video in any list
-follows its channel (the `bitchute:` prefix is added automatically). Playback
-goes through mpv via yt-dlp's native BitChute extractor.
-
-## Odysee channels
-
-Odysee works the same way: search it with `Ctrl+S` in the search screen, play
-and download videos through mpv/yt-dlp's LBRY extractor, and follow channels
-with `a` (the `odysee:` prefix is added automatically — the channel id is
-`@name:claim`, e.g. `odysee:@gotbletu:b`). Followed Odysee channels appear in
-the home feed via Odysee's RSS (`odysee.com/$/rss/…`), with the same cache TTL
-and offline fallback. Video details show Odysee comments (read-only, press `c`
-to reload); likes and posting comments are not supported by Odysee's public
-API, so `L`/`C` explain that instead.
-
-> **Upgrade note:** older ytui/mobile clients reject `platform="odysee"` items
-> when validating API responses — update all installed clients before following
-> an Odysee channel, or the whole home feed will fail to load on stale clients.
-
-## Thumbnails
-
-A side panel shows the highlighted item's thumbnail, rendered with
-[textual-image](https://github.com/lnqs/textual-image). The image protocol is
-auto-detected:
-
-- **foot** (and other sixel-capable terminals): crisp Sixel graphics.
-- **kitty / ghostty**: kitty graphics protocol.
-- anything else: Unicode half-block fallback (works everywhere, lower fidelity).
-
-Caveats:
-
-- **tmux/screen break Sixel and kitty graphics** — you'll get the half-block fallback inside a multiplexer.
-- Set `thumbnails = false` under `[ui]` to disable the image entirely (e.g. slow SSH links).
-
-Thumbnails are cached in `~/.cache/ytui/thumbs/` with LRU eviction above ~100 MB.
-
-## YouTube account (like/comment)
-
-The `L` (like) and `C` (comment) actions call the YouTube Data API v3 on behalf
-of your Google account via OAuth2. Setup:
-
-1. Install the optional dependencies:
-
-   ```sh
-   pip install 'ytui[auth]'    # or: pipx inject ytui google-auth google-auth-oauthlib google-api-python-client
+1. Install:
+   ```bash
+   cd backend && pip install -e .[auth]
    ```
+   (Python 3.11+.)
+2. Configure environment variables:
+   - `YTUI_API_TOKEN` — Bearer token shared by all clients.
+   - `YTUI_DATA_DIR` — SQLite + OAuth token storage location.
+3. Run it, either directly:
+   ```bash
+   uvicorn ytui_server.main:app --host 0.0.0.0 --port 8776
+   ```
+   or via Docker:
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d
+   ```
+   (uses `deploy/Dockerfile`, mounts `deploy/data/` to `/data`).
+4. Put nginx (see `deploy/nginx-ytui.conf`) in front for TLS termination. Health check available at `GET /health` (no auth required).
 
-2. In the [Google Cloud Console](https://console.cloud.google.com/):
-   - create a project and enable the **YouTube Data API v3**;
-   - configure the **OAuth consent screen** (User type *External*, publishing
-     status *Testing*, and add yourself as a test user);
-   - create an **OAuth client ID** of type **Desktop app** and download the
-     JSON as `~/.config/ytui/client_secret.json` (or set another path via
-     `client_secret` in the `[auth]` section of config.toml).
+### TUI / CLI (desktop)
 
-3. The first `L`/`C` opens your browser for consent. The token is then stored
-   in `~/.config/ytui/oauth_token.json` and refreshed automatically.
+1. Install from the repo root (Python 3.11+; requires `mpv` installed on the system):
+   ```bash
+   pip install -e .
+   ```
+2. Configure `~/.config/ytui/config.toml`:
+   ```toml
+   [server]
+   url = "https://ytui.example.com"
+   token = "<YTUI_API_TOKEN>"
 
-Notes:
+   [player]
+   command = "mpv"
+   ```
+3. Launch the TUI:
+   ```bash
+   ytui
+   ```
+   or use headless commands:
+   ```bash
+   ytui play <url>
+   ytui search <query>
+   ```
+4. To enable YouTube like/comment actions:
+   ```bash
+   ytui auth push
+   ```
+   This runs OAuth consent in your browser and uploads the resulting token to the server.
 
-- API quota is 10,000 units/day; a like costs 50 units and a comment 50 units —
-  plenty for personal use.
-- While the consent screen is in *Testing* mode, Google expires refresh tokens
-  after 7 days; you may occasionally have to re-consent in the browser.
-- These actions only work on YouTube videos (not BitChute, channels or playlists).
+### Mobile (Android)
 
-## Live notifications
+1. Install dependencies:
+   ```bash
+   cd mobile && flutter pub get
+   ```
+2. On first launch, enter the backend server URL and Bearer token in Settings — the connection is verified against `/health` and `/api/history/watched-ids`.
+3. Build a release APK:
+   ```bash
+   flutter build apk
+   ```
+   (also automated in CI).
 
-When a followed channel goes live, ytui shows a desktop notification
-(via `notify-send`) and an in-app toast, and the live is pinned at the top of
-the home feed with a 🔴 marker while it is on air. Clicking the
-notification brings the home feed to the front, focused on the live video
-(press `Enter` to play it).
-Channels are checked every 5 minutes while ytui runs. Configure in
-`config.toml`:
+## Usage examples
 
-```toml
-[live]
-notifications = true   # set to false to disable
-check_minutes = 5
+```bash
+# search across YouTube and Odysee
+ytui search "linux kernel changelog"
+
+# play a video directly by URL
+ytui play https://youtu.be/dQw4w9WgXcQ
+
+# launch the full terminal UI
+ytui
+
+# push OAuth token so any client can like/comment as you
+ytui auth push
 ```
 
-## Development
+## Development notes
 
-```sh
-pip install -e .[dev]
-ruff check .
-pytest
-```
+- **Backend tests**: `cd backend && pytest` (11 files covering feed, history, channels, lives, streams, playlists, security).
+- **TUI/CLI tests**: `pytest tests/` (7 files: app smoke, API client, models, config, mpv controller, thumbnails).
+- **Mobile tests**: `cd mobile && flutter test` (API client, models).
+- **Lint**: `ruff check` (Python), `flutter analyze` (Dart).
+- CI/CD (Forgejo Actions) runs `backend-tests → build-apk → deploy via SSH + docker compose` on merge.
