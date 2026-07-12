@@ -11,7 +11,9 @@ async def require_token(request: Request) -> None:
     expected: str = request.app.state.settings.api_token
     header = request.headers.get("Authorization", "")
     scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer" or not secrets.compare_digest(token, expected):
+    if scheme.lower() != "bearer" or not secrets.compare_digest(
+        token.encode(), expected.encode()
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing bearer token",
