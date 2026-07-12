@@ -1,4 +1,4 @@
-"""Search screen: yt-dlp search with an input field and mixed result list."""
+"""Search screen: server-side search with an input field and mixed result list."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Input, LoadingIndicator
 
-from ...sources.ytdlp_source import search_videos
+from ...api_client import YtuiApiError
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
@@ -41,26 +41,24 @@ class SearchScreen(BrowseScreen):
         if query:
             self.run_search(query)
 
-    @work(exclusive=True, thread=True)
-    def run_search(self, query: str) -> None:
-        self.app.call_from_thread(self._set_loading, True)
+    @work(exclusive=True)
+    async def run_search(self, query: str) -> None:
+        self._set_loading(True)
         try:
-            videos = search_videos(query, limit=20)
-        except Exception as exc:
-            self.app.call_from_thread(self._set_loading, False)
-            self.app.call_from_thread(
-                self.app.notify, f"Search failed: {exc}", severity="error", timeout=8
-            )
+            videos = await self.app.client.search(query, limit=20)
+        except YtuiApiError as exc:
+            self._set_loading(False)
+            self.app.notify(f"Search failed: {exc.detail}", severity="error", timeout=8)
             return
-        self.app.call_from_thread(self._set_loading, False)
-        self.app.call_from_thread(self._show_results, videos)
+        self._set_loading(False)
+        self._show_results(videos)
 
     def _set_loading(self, loading: bool) -> None:
         self.query_one("#search-loading", LoadingIndicator).display = loading
 
     def _show_results(self, videos) -> None:
         results = self.query_one("#search-results", VideoList)
-        results.set_videos(videos, self.app.cache.watched_ids())
+        results.set_videos(videos, self.app.watched)
         if videos:
             results.focus()
         else:

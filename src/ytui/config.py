@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import tomllib
-import typing
 from pathlib import Path
 
 from platformdirs import user_cache_dir, user_config_dir
@@ -14,21 +13,11 @@ APP_NAME = "ytui"
 DEFAULT_CONFIG_TOML = """\
 # ytui configuration
 
-[feed]
-# Feed backend: "rss" (default, no account needed)
-backend = "rss"
-
-[channels]
-# Channels for the home feed. Accepts YouTube channel IDs (UC...), @handles,
-# or BitChute channel slugs prefixed with "bitchute:" (the name in
-# bitchute.com/channel/<slug>/ URLs).
-# Example:
-# list = [
-#   "UCXuqSBlHAE6Xw-yeJA0Tunw",
-#   "@LinusTechTips",
-#   "bitchute:bitchute",
-# ]
-list = []
+[server]
+# ytui backend server (feed, search, history, playlists, lives).
+# Example: url = "https://ytui.example.com"
+url = ""
+token = ""
 
 [player]
 command = "mpv"
@@ -40,11 +29,6 @@ download_dir = "~/Videos"
 [ui]
 thumbnails = true
 
-[live]
-# Desktop notification (notify-send) when a followed channel goes live.
-notifications = true
-check_minutes = 5
-
 [auth]
 # Path to the OAuth2 client_secret.json (Google Cloud Console, type "Desktop app").
 # Needed for the like ('L') and comment ('C') actions. Requires 'pip install ytui[auth]'.
@@ -52,14 +36,9 @@ check_minutes = 5
 """
 
 
-class FeedConfig(BaseModel):
-    backend: str = "rss"
-
-
-class ChannelsConfig(BaseModel):
-    # Named "list" to match the TOML key; annotate via typing.List to avoid
-    # the field name shadowing the builtin during annotation evaluation.
-    list: typing.List[str] = Field(default_factory=lambda: [])  # noqa: UP006
+class ServerConfig(BaseModel):
+    url: str = ""
+    token: str = ""
 
 
 class PlayerConfig(BaseModel):
@@ -73,22 +52,17 @@ class UIConfig(BaseModel):
     thumbnails: bool = True
 
 
-class LiveConfig(BaseModel):
-    notifications: bool = True
-    check_minutes: int = 5
-
-
 class AuthConfig(BaseModel):
     # Path to the OAuth2 client_secret.json; empty = config_dir()/client_secret.json.
     client_secret: str = ""
 
 
 class Config(BaseModel):
-    feed: FeedConfig = Field(default_factory=FeedConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    model_config = {"extra": "ignore"}
+
+    server: ServerConfig = Field(default_factory=ServerConfig)
     player: PlayerConfig = Field(default_factory=PlayerConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
-    live: LiveConfig = Field(default_factory=LiveConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
 
 
@@ -123,42 +97,6 @@ def _load_doc(path: Path):
         return tomlkit.parse(path.read_text(encoding="utf-8"))
     path.parent.mkdir(parents=True, exist_ok=True)
     return tomlkit.parse(DEFAULT_CONFIG_TOML)
-
-
-def add_channel(channel_id: str, path: Path | None = None) -> bool:
-    """Persist a channel into [channels].list in config.toml, preserving comments.
-
-    Returns True if added, False if it was already present.
-    """
-    import tomlkit
-
-    path = path or config_path()
-    doc = _load_doc(path)
-    channels = doc.setdefault("channels", tomlkit.table())
-    entries = channels.setdefault("list", tomlkit.array())
-    if channel_id in entries:
-        return False
-    entries.append(channel_id)
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
-    return True
-
-
-def remove_channel(channel_id: str, path: Path | None = None) -> bool:
-    """Remove a channel from [channels].list, preserving comments.
-
-    Returns True if removed, False if it was not present.
-    """
-    import tomlkit
-
-    path = path or config_path()
-    doc = _load_doc(path)
-    channels = doc.setdefault("channels", tomlkit.table())
-    entries = channels.setdefault("list", tomlkit.array())
-    if channel_id not in entries:
-        return False
-    entries.remove(channel_id)
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
-    return True
 
 
 def set_option(section: str, key: str, value: object, path: Path | None = None) -> None:

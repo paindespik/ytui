@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -93,8 +94,21 @@ class PlaylistPickerModal(ModalScreen[int | None]):
             yield OptionList(id="playlist-options")
 
     def on_mount(self) -> None:
+        self._load_playlists()
+
+    @work(exclusive=True)
+    async def _load_playlists(self) -> None:
+        from ...api_client import YtuiApiError
+
         options = self.query_one("#playlist-options", OptionList)
-        for playlist in self.app.cache.list_playlists():
+        try:
+            playlists = await self.app.client.playlists()
+        except YtuiApiError as exc:
+            self.app.notify(
+                f"Playlists unavailable: {exc.detail}", severity="error", timeout=8
+            )
+            playlists = []
+        for playlist in playlists:
             options.add_option(
                 Option(f"{playlist.name} ({playlist.item_count})", id=str(playlist.id))
             )
@@ -112,15 +126,25 @@ class PlaylistPickerModal(ModalScreen[int | None]):
         def on_name(name: str | None) -> None:
             if not name:
                 return
-            playlist_id = self.app.cache.create_playlist(name)
-            if playlist_id is None:
-                existing = next(
-                    (p for p in self.app.cache.list_playlists() if p.name == name), None
-                )
-                playlist_id = existing.id if existing else None
-            self.dismiss(playlist_id)
+            self._create_and_dismiss(name)
 
         self.app.push_screen(TextInputModal("New playlist name:"), on_name)
+
+    @work
+    async def _create_and_dismiss(self, name: str) -> None:
+        from ...api_client import YtuiApiError
+
+        try:
+            playlist_id = await self.app.client.create_playlist(name)
+            if playlist_id is None:
+                existing = next(
+                    (p for p in await self.app.client.playlists() if p.name == name), None
+                )
+                playlist_id = existing.id if existing else None
+        except YtuiApiError as exc:
+            self.app.notify(f"Could not create: {exc.detail}", severity="error", timeout=8)
+            playlist_id = None
+        self.dismiss(playlist_id)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

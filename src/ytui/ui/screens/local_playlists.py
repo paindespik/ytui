@@ -1,7 +1,8 @@
-"""Local playlists: management screen (list/new/rename/delete) and content screen."""
+"""Local playlists (server-side): management screen and content screen."""
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -9,7 +10,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, OptionList
 from textual.widgets.option_list import Option
 
-from ...cache import LocalPlaylist
+from ...api_client import LocalPlaylist, YtuiApiError
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.modals import ConfirmModal, TextInputModal
 from ..widgets.player_bar import PlayerBar
@@ -40,10 +41,17 @@ class LocalPlaylistsScreen(Screen):
     def on_screen_resume(self) -> None:
         self._reload()
 
-    def _reload(self) -> None:
+    @work(exclusive=True)
+    async def _reload(self) -> None:
         options = self.query_one("#local-playlists", OptionList)
         options.clear_options()
-        self._playlists = self.app.cache.list_playlists()
+        try:
+            self._playlists = await self.app.client.playlists()
+        except YtuiApiError as exc:
+            self._playlists = []
+            options.add_option(Option(f"(server unreachable: {exc.detail})", disabled=True))
+            options.focus()
+            return
         for playlist in self._playlists:
             label = f"{playlist.name}  ({playlist.item_count} items)"
             options.add_option(Option(label, id=str(playlist.id)))
@@ -76,11 +84,18 @@ class LocalPlaylistsScreen(Screen):
         def on_name(name: str | None) -> None:
             if not name:
                 return
-            if self.app.cache.create_playlist(name) is None:
-                self.app.notify(f"A playlist named {name!r} already exists.", timeout=5)
-            self._reload()
+            self._create_playlist(name)
 
         self.app.push_screen(TextInputModal("New playlist name:"), on_name)
+
+    @work
+    async def _create_playlist(self, name: str) -> None:
+        try:
+            if await self.app.client.create_playlist(name) is None:
+                self.app.notify(f"A playlist named {name!r} already exists.", timeout=5)
+        except YtuiApiError as exc:
+            self.app.notify(f"Could not create: {exc.detail}", severity="error", timeout=8)
+        self._reload()
 
     def action_rename_playlist(self) -> None:
         playlist = self._highlighted_playlist()
@@ -90,11 +105,18 @@ class LocalPlaylistsScreen(Screen):
         def on_name(name: str | None) -> None:
             if not name or name == playlist.name:
                 return
-            if not self.app.cache.rename_playlist(playlist.id, name):
-                self.app.notify(f"A playlist named {name!r} already exists.", timeout=5)
-            self._reload()
+            self._rename_playlist(playlist.id, name)
 
         self.app.push_screen(TextInputModal("Rename playlist:", initial=playlist.name), on_name)
+
+    @work
+    async def _rename_playlist(self, playlist_id: int, name: str) -> None:
+        try:
+            if not await self.app.client.rename_playlist(playlist_id, name):
+                self.app.notify(f"A playlist named {name!r} already exists.", timeout=5)
+        except YtuiApiError as exc:
+            self.app.notify(f"Could not rename: {exc.detail}", severity="error", timeout=8)
+        self._reload()
 
     def action_delete_playlist(self) -> None:
         playlist = self._highlighted_playlist()
@@ -103,13 +125,20 @@ class LocalPlaylistsScreen(Screen):
 
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
-                self.app.cache.delete_playlist(playlist.id)
-                self._reload()
+                self._delete_playlist(playlist.id)
 
         self.app.push_screen(
             ConfirmModal(f"Delete playlist {playlist.name!r} ({playlist.item_count} items)?"),
             on_confirm,
         )
+
+    @work
+    async def _delete_playlist(self, playlist_id: int) -> None:
+        try:
+            await self.app.client.delete_playlist(playlist_id)
+        except YtuiApiError as exc:
+            self.app.notify(f"Could not delete: {exc.detail}", severity="error", timeout=8)
+        self._reload()
 
     def action_cursor_down(self) -> None:
         self.query_one("#local-playlists", OptionList).action_cursor_down()
@@ -134,6 +163,7 @@ class LocalPlaylistContentScreen(BrowseScreen):
     def __init__(self, playlist: LocalPlaylist) -> None:
         super().__init__()
         self.playlist = playlist
+        self._items = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -147,25 +177,38 @@ class LocalPlaylistContentScreen(BrowseScreen):
         self.sub_title = f"Playlist: {self.playlist.name}"
         self._reload()
 
-    def _reload(self) -> None:
+    @work(exclusive=True)
+    async def _reload(self) -> None:
+        try:
+            self._items = await self.app.client.playlist_items(self.playlist.id)
+        except YtuiApiError as exc:
+            self.app.notify(f"Failed to load playlist: {exc.detail}", severity="error", timeout=8)
+            return
         video_list = self.query_one("#local-playlist-list", VideoList)
-        video_list.set_videos(
-            self.app.cache.playlist_items(self.playlist.id), self.app.cache.watched_ids()
-        )
+        video_list.set_videos([item.video for item in self._items], self.app.watched)
         video_list.focus()
 
     def action_play_all(self) -> None:
-        items = self.app.cache.playlist_items(self.playlist.id)
-        if not items:
+        if not self._items:
             self.app.notify("This playlist is empty.", timeout=4)
             return
-        self.app.play_all(items)
+        self.app.play_all([item.video for item in self._items])
 
     def action_remove_entry(self) -> None:
         video = self._highlighted()
         if video is None:
             return
-        self.app.cache.remove_playlist_item(self.playlist.id, video.video_id)
+        item = next((i for i in self._items if i.video.video_id == video.video_id), None)
+        if item is None:
+            return
+        self._remove_item(item.position)
+
+    @work
+    async def _remove_item(self, position: int) -> None:
+        try:
+            await self.app.client.remove_playlist_item(self.playlist.id, position)
+        except YtuiApiError as exc:
+            self.app.notify(f"Could not remove: {exc.detail}", severity="error", timeout=8)
         self._reload()
 
     def action_go_back(self) -> None:

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header
 
+from ...api_client import YtuiApiError
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
@@ -33,9 +35,15 @@ class HistoryScreen(BrowseScreen):
     def on_screen_resume(self) -> None:
         self._reload()
 
-    def _reload(self) -> None:
+    @work(exclusive=True)
+    async def _reload(self) -> None:
+        try:
+            videos = await self.app.client.history()
+        except YtuiApiError as exc:
+            self.app.notify(f"Failed to load history: {exc.detail}", severity="error", timeout=8)
+            return
         video_list = self.query_one("#history-list", VideoList)
-        video_list.set_videos(self.app.cache.watch_history())
+        video_list.set_videos(videos)
         video_list.focus()
 
     def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
@@ -49,7 +57,16 @@ class HistoryScreen(BrowseScreen):
         video = self._highlighted()
         if video is None:
             return
-        self.app.cache.remove_watch(video.video_id)
+        self._remove_entry(video.video_id)
+
+    @work
+    async def _remove_entry(self, video_id: str) -> None:
+        try:
+            await self.app.client.remove_watch(video_id)
+        except YtuiApiError as exc:
+            self.app.notify(f"Failed to remove: {exc.detail}", severity="error", timeout=8)
+            return
+        self.app.watched.discard(video_id)
         self._reload()
         self.app._refresh_watched_markers()
 

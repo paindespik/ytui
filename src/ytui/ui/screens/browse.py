@@ -64,7 +64,7 @@ class BrowseScreen(Screen):
         video = self._highlighted()
         if video is None:
             return
-        self.app.add_channel_to_config(video)
+        self.app.follow_channel(video)
 
     def action_enqueue(self) -> None:
         video = self._highlighted()

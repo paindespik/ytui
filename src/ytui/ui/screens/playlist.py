@@ -8,8 +8,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, LoadingIndicator
 
+from ...api_client import YtuiApiError
 from ...models import Video
-from ...sources.ytdlp_source import playlist_videos
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
@@ -39,14 +39,16 @@ class PlaylistScreen(BrowseScreen):
         self.sub_title = self.playlist.title or "Playlist"
         self.load_videos()
 
-    @work(exclusive=True, thread=True)
-    def load_videos(self) -> None:
+    @work(exclusive=True)
+    async def load_videos(self) -> None:
         try:
-            videos = playlist_videos(self.playlist.url)
-        except Exception as exc:
-            self.app.call_from_thread(self._show_error, str(exc))
+            videos = await self.app.client.playlist_videos(
+                self.playlist.video_id, platform=self.playlist.platform
+            )
+        except YtuiApiError as exc:
+            self._show_error(exc.detail)
             return
-        self.app.call_from_thread(self._show_videos, videos)
+        self._show_videos(videos)
 
     def _show_error(self, message: str) -> None:
         self.query_one("#playlist-loading", LoadingIndicator).display = False
@@ -57,7 +59,7 @@ class PlaylistScreen(BrowseScreen):
         for v in videos:
             v.playlist_id = self.playlist.video_id
         video_list = self.query_one("#playlist-list", VideoList)
-        video_list.set_videos(videos, self.app.cache.watched_ids())
+        video_list.set_videos(videos, self.app.watched)
         video_list.focus()
 
     def action_play_all(self) -> None:

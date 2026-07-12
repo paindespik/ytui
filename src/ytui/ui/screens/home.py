@@ -1,4 +1,4 @@
-"""Home feed screen: merged RSS feed of configured channels."""
+"""Home feed screen: merged feed of followed channels, served by the backend."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Label, LoadingIndicator
 
+from ...api_client import FeedResult, YtuiApiError
 from ...models import Video
-from ...sources.base import FeedResult
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
@@ -61,7 +61,7 @@ class HomeFeedScreen(BrowseScreen):
         if not hasattr(self, "_feed_videos"):
             return
         self.query_one("#feed-list", VideoList).set_videos(
-            self._with_lives(), self.app.cache.watched_ids()
+            self._with_lives(), self.app.watched
         )
 
     @work(exclusive=True)
@@ -69,17 +69,20 @@ class HomeFeedScreen(BrowseScreen):
         loading = self.query_one("#feed-loading", LoadingIndicator)
         loading.display = True
         try:
-            result: FeedResult = await self.app.source.feed(force_refresh=force_refresh)
-        except Exception as exc:
+            result: FeedResult = await self.app.client.feed(refresh=force_refresh)
+        except YtuiApiError as exc:
             loading.display = False
-            self._show_warning(f"Failed to load feed: {exc}")
+            if exc.status_code == 0:
+                self._show_warning(f"Server unreachable: {self.app.config.server.url or '(not configured)'}")
+            else:
+                self._show_warning(f"Failed to load feed: {exc.detail}")
             return
         loading.display = False
         self._feed_videos = result.videos
         pending = self._pending_focus
         self._pending_focus = None
         feed_list = self.query_one("#feed-list", VideoList)
-        feed_list.set_videos(self._with_lives(), self.app.cache.watched_ids())
+        feed_list.set_videos(self._with_lives(), self.app.watched)
         if pending is not None:
             feed_list.focus_video(pending.video_id)
         if result.warnings:
@@ -87,7 +90,7 @@ class HomeFeedScreen(BrowseScreen):
         else:
             self._hide_warning()
         if not result.videos and not result.warnings:
-            self._show_warning("No videos. Add channels to the config or press / to search.")
+            self._show_warning("No videos. Add channels in settings (,) or press / to search.")
 
     def _show_warning(self, text: str) -> None:
         banner = self.query_one("#warning-banner", Label)

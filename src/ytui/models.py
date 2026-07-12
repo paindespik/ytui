@@ -79,3 +79,17 @@ class Video(BaseModel):
         if days < 365:
             return f"{days // 30}mo ago"
         return f"{days // 365}y ago"
+
+
+class VideoDetails(BaseModel):
+    """Full metadata for one video, as served by the backend API."""
+
+    video_id: str = ""
+    title: str = ""
+    channel_id: str = ""
+    channel_title: str = ""
+    description: str = ""
+    view_count: int | None = None
+    like_count: int | None = None
+    duration: int | None = None
+    upload_date: str = ""

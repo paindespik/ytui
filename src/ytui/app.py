@@ -1,19 +1,17 @@
-"""Textual application: screens, sources, playback orchestration."""
+"""Textual application: screens, API client, playback orchestration."""
 
 from __future__ import annotations
+
+import time
 
 from textual.app import App
 from textual.reactive import reactive
 
-import httpx
-
-from .cache import MetaCache, resume_start
-from .config import Config, add_channel
-from .livenotify import check_channel_live, send_live_notification
+from .api_client import YtuiApiError, YtuiClient, resume_start
+from .config import Config
+from .livenotify import send_live_notification
 from .models import Video, video_id_from_url
 from .player.mpv import MpvController, PlayerError, play
-from .sources.base import VideoSource
-from .sources.rss import RSSSource
 from .thumbnails.fetcher import ThumbnailFetcher
 from .ui.screens.channel import ChannelScreen
 from .ui.screens.detail import VideoDetailScreen
@@ -26,6 +24,9 @@ from .ui.screens.search import SearchScreen
 from .ui.screens.settings import SettingsScreen
 from .ui.widgets.modals import PlaylistPickerModal, TextInputModal
 from .ui.widgets.video_list import VideoList
+
+LIVE_POLL_SECONDS = 5 * 60
+POSITION_HEARTBEAT_SECONDS = 10.0
 
 
 class YtuiApp(App):
@@ -81,26 +82,38 @@ class YtuiApp(App):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.config = config
-        self.cache = MetaCache()
-        self.source: VideoSource = RSSSource(config.channels.list, self.cache)
+        self.client = YtuiClient(config.server.url, config.server.token)
         self.thumbnails = ThumbnailFetcher()
         self.player = MpvController()
+        self.watched: set[str] = set()
         self._last_polled_vid: str | None = None
         self._last_polled_duration: float | None = None
+        self._last_position_save = 0.0
         self._live_vids: set[str] = set()
         self._notified_live_ids: set[str] = set()
         self.active_lives: dict[str, Video] = {}
 
     def on_mount(self) -> None:
         self.push_screen("home")
-        # First launch with no channels: go straight to search.
-        if not self.config.channels.list:
-            self.push_screen("search")
+        if not self.config.server.url:
+            self.notify(
+                "No server configured. Set [server] url and token in config.toml.",
+                severity="warning",
+                timeout=10,
+            )
         self.set_interval(2.0, self._poll_player)
-        if self.config.live.notifications and self.config.channels.list:
-            interval = max(1, self.config.live.check_minutes) * 60
-            self.set_interval(interval, self._start_live_check)
+        self.run_worker(self.refresh_watched(), group="watched")
+        if self.config.server.url:
+            self.set_interval(LIVE_POLL_SECONDS, self._start_live_check)
             self.set_timer(15, self._start_live_check)
+
+    async def refresh_watched(self) -> None:
+        """Fetch the watched-ids set from the server and repaint the ✓ markers."""
+        try:
+            self.watched = await self.client.watched_ids()
+        except YtuiApiError:
+            return
+        self._refresh_watched_markers()
 
     # -- live notifications --
 
@@ -108,31 +121,23 @@ class YtuiApp(App):
         self.run_worker(self._check_lives(), group="live-check", exclusive=True)
 
     async def _check_lives(self) -> None:
-        source = self.source
-        if not isinstance(source, RSSSource):
-            return
-        entries = [c for c in self.config.channels.list if not c.startswith("bitchute:")]
-        found: dict[str, Video] = {}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            for entry in entries:
-                try:
-                    channel_id = await source.resolve_channel(entry, client)
-                    name = self.cache.get_channel_name(channel_id) or ""
-                    live = await check_channel_live(client, channel_id, name)
-                except Exception:
-                    continue  # offline / throttled: retry at the next interval
-                if live is None:
-                    continue
-                found[live.video_id] = live
-                if live.video_id not in self._notified_live_ids:
-                    self._notified_live_ids.add(live.video_id)
-                    self.notify(f"\U0001f534 Live: {live.channel_title} \u2014 {live.title}", timeout=10)
-                    self.run_worker(
-                        lambda v=live: self._notify_live_blocking(v),
-                        thread=True,
-                        group="live-notify",
-                        exclusive=False,
-                    )
+        try:
+            lives = await self.client.lives()
+        except YtuiApiError:
+            return  # offline / server unreachable: retry at the next interval
+        found = {video.video_id: video for video in lives}
+        for video in lives:
+            if video.video_id not in self._notified_live_ids:
+                self._notified_live_ids.add(video.video_id)
+                self.notify(
+                    f"\U0001f534 Live: {video.channel_title} \u2014 {video.title}", timeout=10
+                )
+                self.run_worker(
+                    lambda v=video: self._notify_live_blocking(v),
+                    thread=True,
+                    group="live-notify",
+                    exclusive=False,
+                )
         if found != self.active_lives:
             self.active_lives = found
             if isinstance(self.screen, HomeFeedScreen):
@@ -153,6 +158,7 @@ class YtuiApp(App):
     async def on_unmount(self) -> None:
         await self.thumbnails.close()
         await self.player.close()
+        await self.client.close()
 
     # -- playback --
 
@@ -170,9 +176,9 @@ class YtuiApp(App):
             path, title, position, duration = snap
             vid = video_id_from_url(path)
             if vid:
-                if vid not in self.cache.watched_ids():
+                if vid not in self.watched:
                     # mpv advanced to a queued video on its own: add it to history.
-                    self._record_watch(self._video_for_history(vid, title))
+                    self._record_watch(self._video_for_history(vid, title, path))
                 if (
                     vid == self._last_polled_vid
                     and self._last_polled_duration is not None
@@ -181,39 +187,56 @@ class YtuiApp(App):
                     # Growing duration = live stream (DVR window): resuming a live
                     # with --start stalls mpv, so never track its position.
                     self._live_vids.add(vid)
-                    self.cache.clear_position(vid)
+                    self.run_worker(
+                        self._save_position_async(vid, 0.0, None), group="position"
+                    )
                 if vid not in self._live_vids:
-                    self.cache.save_position(vid, position, duration)
+                    now = time.monotonic()
+                    if now - self._last_position_save >= POSITION_HEARTBEAT_SECONDS:
+                        self._last_position_save = now
+                        self.run_worker(
+                            self._save_position_async(vid, position, duration),
+                            group="position",
+                        )
                 self._last_polled_vid = vid
                 self._last_polled_duration = duration
 
-    def _video_for_history(self, video_id: str, title: str) -> Video:
-        video = self.cache.find_cached_video(video_id) or Video(
-            video_id=video_id, title=title or video_id, kind="video"
-        )
-        if not video.playlist_id and self._last_polled_vid:
-            # Inherit the playlist context from the previous video in the queue.
-            prev = self.cache.get_resume(self._last_polled_vid)
-            if prev is not None and prev[2]:
-                video.playlist_id = prev[2]
-        return video
+    async def _save_position_async(
+        self, video_id: str, position: float, duration: float | None
+    ) -> None:
+        try:
+            await self.client.save_position(video_id, position, duration)
+        except YtuiApiError:
+            pass  # best-effort heartbeat
 
-    def _resume_start_for(self, video: Video) -> float:
-        if video.kind != "video":
-            return 0.0
-        row = self.cache.get_resume(video.video_id)
-        if row is None:
-            return 0.0
-        return resume_start(row[0], row[1])
+    def _video_for_history(self, video_id: str, title: str, path: str = "") -> Video:
+        platform = "bitchute" if "bitchute.com/" in path else "youtube"
+        return Video(
+            video_id=video_id, title=title or video_id, kind="video", platform=platform
+        )
 
     def _notify_resume(self, start: float) -> None:
         if start > 0:
             minutes, seconds = divmod(int(start), 60)
             self.notify(f"Resuming at {minutes}:{seconds:02d}", timeout=4)
 
+    async def _resume_start_for(self, video: Video) -> float:
+        if video.kind != "video":
+            return 0.0
+        try:
+            row = await self.client.resume(video.video_id)
+        except YtuiApiError:
+            return 0.0
+        if row is None:
+            return 0.0
+        return resume_start(row[0], row[1])
+
     def play_video(self, video: Video, audio_only: bool | None = None) -> None:
-        start = self._resume_start_for(video)
         self._record_watch(video)
+        self.run_worker(self._play_video_async(video, audio_only), group="player")
+
+    async def _play_video_async(self, video: Video, audio_only: bool | None) -> None:
+        start = await self._resume_start_for(video)
         if audio_only:
             # One-shot audio playback, separate from the controlled queue.
             try:
@@ -224,52 +247,42 @@ class YtuiApp(App):
                 self.notify(str(exc), severity="error", timeout=10)
             return
         self._notify_resume(start)
-        self.run_worker(self._play_async(video.url, start=start or None), group="player")
+        await self._play_async(video.url, start=start or None)
 
     def play_from_history(self, video: Video) -> None:
         """Replay from the history screen: resume position and playlist context."""
-        row = self.cache.get_resume(video.video_id)
-        if row is None or not row[2] or video.kind != "video":
-            self.play_video(video)
+        self._record_watch(video)
+        self.run_worker(self._play_from_history_async(video), group="player")
+
+    async def _play_from_history_async(self, video: Video) -> None:
+        row = None
+        if video.kind == "video":
+            try:
+                row = await self.client.resume(video.video_id)
+            except YtuiApiError:
+                row = None
+        if row is None or not row[2]:
+            await self._play_video_async(video, audio_only=None)
             return
         playlist_id = row[2]
         start = resume_start(row[0], row[1])
-        self._record_watch(video)
         self._notify_resume(start)
-        self.run_worker(
-            lambda: self._resume_playlist_blocking(video, playlist_id, start),
-            thread=True,
-            group="player",
-            exclusive=False,
-        )
-
-    def _resume_playlist_blocking(self, video: Video, playlist_id: str, start: float) -> None:
-        from .sources.ytdlp_source import playlist_videos
-
-        playlist_url = Video(video_id=playlist_id, title="", kind="playlist").url
         try:
-            entries = playlist_videos(playlist_url)
-        except Exception:
-            self.call_from_thread(
-                self.notify, "Playlist unavailable, playing video only.", timeout=5
-            )
-            self.call_from_thread(self._play_resumed, video.url, start, [])
+            entries = await self.client.playlist_videos(playlist_id, platform=video.platform)
+        except YtuiApiError:
+            self.notify("Playlist unavailable, playing video only.", timeout=5)
+            await self._play_resumed_async(video.url, start, [])
             return
         idx = next(
             (i for i, e in enumerate(entries) if e.video_id == video.video_id),
             None,
         )
         if idx is None:
-            self.call_from_thread(
-                self.notify, "Video no longer in playlist, playing video only.", timeout=5
-            )
-            self.call_from_thread(self._play_resumed, video.url, start, [])
+            self.notify("Video no longer in playlist, playing video only.", timeout=5)
+            await self._play_resumed_async(video.url, start, [])
             return
         rest = [e.url for e in entries[idx + 1 :]]
-        self.call_from_thread(self._play_resumed, video.url, start, rest)
-
-    def _play_resumed(self, url: str, start: float, queue: list[str]) -> None:
-        self.run_worker(self._play_resumed_async(url, start, queue), group="player")
+        await self._play_resumed_async(video.url, start, rest)
 
     async def _play_resumed_async(self, url: str, start: float, queue: list[str]) -> None:
         try:
@@ -336,14 +349,20 @@ class YtuiApp(App):
     def _record_watch(self, video: Video) -> None:
         if video.kind == "channel":
             return
-        self.cache.record_watch(video)
+        self.watched.add(video.video_id)
         self._refresh_watched_markers()
+        self.run_worker(self._record_watch_async(video), group="history")
+
+    async def _record_watch_async(self, video: Video) -> None:
+        try:
+            await self.client.record_watch(video)
+        except YtuiApiError:
+            pass  # best-effort: history lives on the server
 
     def _refresh_watched_markers(self) -> None:
-        watched = self.cache.watched_ids()
         for screen in self.screen_stack:
             for video_list in screen.query(VideoList):
-                video_list.refresh_watched(watched)
+                video_list.refresh_watched(self.watched)
 
     # -- navigation / item actions --
 
@@ -363,8 +382,8 @@ class YtuiApp(App):
             return
         self.push_screen(VideoDetailScreen(video))
 
-    def add_channel_to_config(self, video: Video) -> None:
-        """Persist the item's channel into config.toml [channels].list."""
+    def follow_channel(self, video: Video) -> None:
+        """Follow the item's channel on the server."""
         channel_id = video.video_id if video.kind == "channel" else video.channel_id
         if channel_id and video.platform == "bitchute":
             channel_id = f"bitchute:{channel_id}"
@@ -372,12 +391,18 @@ class YtuiApp(App):
             self.notify("No channel ID for this item.", severity="warning", timeout=5)
             return
         name = video.channel_title or video.title or channel_id
-        if add_channel(channel_id):
-            if channel_id not in self.config.channels.list:
-                self.config.channels.list.append(channel_id)
-            self.notify(f"Added {name} to your channels.", timeout=5)
-        else:
-            self.notify(f"{name} is already in your channels.", timeout=5)
+        self.run_worker(self._follow_channel_async(channel_id, name), group="channels")
+
+    async def _follow_channel_async(self, ref: str, name: str) -> None:
+        try:
+            await self.client.follow_channel(ref)
+        except YtuiApiError as exc:
+            if exc.status_code == 409:
+                self.notify(f"{name} is already in your channels.", timeout=5)
+            else:
+                self.notify(f"Could not follow {name}: {exc.detail}", severity="error", timeout=8)
+            return
+        self.notify(f"Added {name} to your channels.", timeout=5)
 
     def download_video(self, video: Video) -> None:
         if video.kind == "channel":
@@ -413,20 +438,18 @@ class YtuiApp(App):
         if not self._youtube_video_or_notify(video):
             return
         self.notify(f"Liking: {video.title}", timeout=4)
-        self.run_worker(
-            lambda: self._like_blocking(video), thread=True, group="youtube-auth", exclusive=False
-        )
+        self.run_worker(self._like_async(video), group="youtube-auth")
 
-    def _like_blocking(self, video: Video) -> None:
-        from . import auth
-
+    async def _like_async(self, video: Video) -> None:
         try:
-            youtube = auth.get_youtube_client(self.config)
-            auth.like_video(youtube, video.video_id)
-        except (auth.AuthError, auth.ApiError) as exc:
-            self.call_from_thread(self.notify, str(exc), severity="error", timeout=10)
+            await self.client.like_video(video.video_id)
+        except YtuiApiError as exc:
+            detail = exc.detail
+            if exc.status_code == 409:
+                detail = f"{detail} — run 'ytui auth push' from this machine first."
+            self.notify(detail, severity="error", timeout=10)
             return
-        self.call_from_thread(self.notify, f"Liked: {video.title}", timeout=5)
+        self.notify(f"Liked: {video.title}", timeout=5)
 
     def comment_video_action(self, video: Video) -> None:
         if not self._youtube_video_or_notify(video):
@@ -435,25 +458,20 @@ class YtuiApp(App):
         def on_text(text: str | None) -> None:
             if not text:
                 return
-            self.run_worker(
-                lambda: self._comment_blocking(video, text),
-                thread=True,
-                group="youtube-auth",
-                exclusive=False,
-            )
+            self.run_worker(self._comment_async(video, text), group="youtube-auth")
 
         self.push_screen(TextInputModal(f"Comment on: {video.title}"), on_text)
 
-    def _comment_blocking(self, video: Video, text: str) -> None:
-        from . import auth
-
+    async def _comment_async(self, video: Video, text: str) -> None:
         try:
-            youtube = auth.get_youtube_client(self.config)
-            auth.post_comment(youtube, video.video_id, text)
-        except (auth.AuthError, auth.ApiError) as exc:
-            self.call_from_thread(self.notify, str(exc), severity="error", timeout=10)
+            await self.client.comment_video(video.video_id, text)
+        except YtuiApiError as exc:
+            detail = exc.detail
+            if exc.status_code == 409:
+                detail = f"{detail} — run 'ytui auth push' from this machine first."
+            self.notify(detail, severity="error", timeout=10)
             return
-        self.call_from_thread(self.notify, f"Comment posted on: {video.title}", timeout=5)
+        self.notify(f"Comment posted on: {video.title}", timeout=5)
 
     def save_to_local_playlist(self, video: Video) -> None:
         if video.kind == "channel":
@@ -463,9 +481,17 @@ class YtuiApp(App):
         def on_picked(playlist_id: int | None) -> None:
             if playlist_id is None:
                 return
-            if self.cache.add_playlist_item(playlist_id, video):
-                self.notify(f"Saved: {video.title}", timeout=4)
-            else:
-                self.notify("Already in that playlist.", timeout=4)
+            self.run_worker(self._save_to_playlist_async(playlist_id, video), group="playlists")
 
         self.push_screen(PlaylistPickerModal(), on_picked)
+
+    async def _save_to_playlist_async(self, playlist_id: int, video: Video) -> None:
+        try:
+            added = await self.client.add_playlist_item(playlist_id, video)
+        except YtuiApiError as exc:
+            self.notify(f"Could not save: {exc.detail}", severity="error", timeout=8)
+            return
+        if added:
+            self.notify(f"Saved: {video.title}", timeout=4)
+        else:
+            self.notify("Already in that playlist.", timeout=4)

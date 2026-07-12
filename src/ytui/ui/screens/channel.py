@@ -8,8 +8,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header, LoadingIndicator
 
+from ...api_client import YtuiApiError
 from ...models import Video
-from ...sources.ytdlp_source import channel_videos
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
@@ -27,12 +27,10 @@ class ChannelScreen(BrowseScreen):
         self.channel = channel
 
     @property
-    def channel_url(self) -> str:
-        if self.channel.kind == "channel":
-            return self.channel.url
-        if self.channel.platform == "bitchute":
-            return f"https://www.bitchute.com/channel/{self.channel.channel_id}/"
-        return f"https://www.youtube.com/channel/{self.channel.channel_id}"
+    def channel_ref(self) -> str:
+        return (
+            self.channel.video_id if self.channel.kind == "channel" else self.channel.channel_id
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -47,14 +45,16 @@ class ChannelScreen(BrowseScreen):
         self.sub_title = self.channel.channel_title or self.channel.title or "Channel"
         self.load_videos()
 
-    @work(exclusive=True, thread=True)
-    def load_videos(self) -> None:
+    @work(exclusive=True)
+    async def load_videos(self) -> None:
         try:
-            videos = channel_videos(self.channel_url)
-        except Exception as exc:
-            self.app.call_from_thread(self._show_error, str(exc))
+            videos = await self.app.client.channel_videos(
+                self.channel_ref, platform=self.channel.platform
+            )
+        except YtuiApiError as exc:
+            self._show_error(exc.detail)
             return
-        self.app.call_from_thread(self._show_videos, videos)
+        self._show_videos(videos)
 
     def _show_error(self, message: str) -> None:
         self.query_one("#channel-loading", LoadingIndicator).display = False
@@ -63,11 +63,11 @@ class ChannelScreen(BrowseScreen):
     def _show_videos(self, videos: list[Video]) -> None:
         self.query_one("#channel-loading", LoadingIndicator).display = False
         video_list = self.query_one("#channel-list", VideoList)
-        video_list.set_videos(videos, self.app.cache.watched_ids())
+        video_list.set_videos(videos, self.app.watched)
         video_list.focus()
 
     def action_add_this_channel(self) -> None:
-        self.app.add_channel_to_config(self.channel)
+        self.app.follow_channel(self.channel)
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

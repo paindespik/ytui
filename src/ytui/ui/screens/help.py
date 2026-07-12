@@ -63,7 +63,7 @@ HELP_TEXT = """\
   L like · C comment (YouTube account)
 
 [b]Settings[/b]
-  x remove channel · b backend · m audio-only · t thumbnails
+  a add channel · x remove channel · m audio-only · t thumbnails
 
 The panel on the right shows the highlighted item's thumbnail
 (sixel/kitty/half-block; disable with ui.thumbnails = false).

@@ -9,8 +9,8 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, LoadingIndicator, Static
 
-from ...models import Video
-from ...sources.ytdlp_source import VideoDetails, video_details
+from ...api_client import YtuiApiError
+from ...models import Video, VideoDetails
 
 
 def _fmt_count(count: int | None) -> str:
@@ -77,14 +77,16 @@ class VideoDetailScreen(Screen):
         self.sub_title = "Video details"
         self.load_details()
 
-    @work(exclusive=True, thread=True)
-    def load_details(self) -> None:
+    @work(exclusive=True)
+    async def load_details(self) -> None:
         try:
-            details = video_details(self.video.url)
-        except Exception as exc:
-            self.app.call_from_thread(self._show_error, str(exc))
+            details = await self.app.client.video_details(
+                self.video.video_id, platform=self.video.platform
+            )
+        except YtuiApiError as exc:
+            self._show_error(exc.detail)
             return
-        self.app.call_from_thread(self._show_details, details)
+        self._show_details(details)
 
     def _show_error(self, message: str) -> None:
         self.query_one("#detail-loading", LoadingIndicator).display = False

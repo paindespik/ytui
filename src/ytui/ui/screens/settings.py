@@ -1,7 +1,8 @@
-"""Settings screen: followed channels, backend and UI toggles, persisted to config.toml."""
+"""Settings screen: followed channels (server-side) and local UI/player toggles."""
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -9,7 +10,8 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, OptionList
 from textual.widgets.option_list import Option
 
-from ...config import add_channel, remove_channel, set_option
+from ...api_client import FollowedChannel, YtuiApiError
+from ...config import set_option
 from ..widgets.modals import ConfirmModal, TextInputModal
 
 
@@ -18,7 +20,6 @@ class SettingsScreen(Screen):
         Binding("escape", "go_back", "Back"),
         Binding("a", "add_channel", "Add channel"),
         Binding("x", "remove_channel", "Remove channel"),
-        Binding("b", "toggle_backend", "Toggle backend"),
         Binding("m", "toggle_audio_only", "Toggle audio-only"),
         Binding("t", "toggle_thumbnails", "Toggle thumbnails"),
         Binding("j", "cursor_down", "Down", show=False),
@@ -48,31 +49,35 @@ class SettingsScreen(Screen):
 
     def on_mount(self) -> None:
         self.sub_title = "Settings"
+        self._channels: list[FollowedChannel] = []
 
     def on_screen_resume(self) -> None:
         self._reload()
 
-    def _reload(self) -> None:
+    @work(exclusive=True)
+    async def _reload(self) -> None:
         config = self.app.config
+        server = config.server.url or "(not configured)"
         self.query_one("#settings-options", Label).update(
-            f"[b]b[/b] backend: [i]{config.feed.backend}[/i]    "
+            f"server: [i]{server}[/i]    "
             f"[b]m[/b] audio only: [i]{config.player.audio_only}[/i]    "
             f"[b]t[/b] thumbnails: [i]{config.ui.thumbnails}[/i]"
         )
         options = self.query_one("#settings-channels", OptionList)
         options.clear_options()
-        cache = self.app.cache
-        for entry in config.channels.list:
-            channel_id = entry
-            if entry.startswith("bitchute:"):
-                pass  # cached under the full 'bitchute:<name>' key
-            elif not entry.startswith("UC"):
-                handle = entry if entry.startswith("@") else f"@{entry}"
-                channel_id = cache.get_handle(handle) or entry
-            name = cache.get_channel_name(channel_id)
-            label = f"{name}  [dim]{entry}[/dim]" if name else entry
-            options.add_option(Option(label, id=entry))
-        if not config.channels.list:
+        try:
+            self._channels = await self.app.client.channels()
+        except YtuiApiError as exc:
+            self._channels = []
+            options.add_option(Option(f"(server unreachable: {exc.detail})", disabled=True))
+            options.focus()
+            return
+        for channel in self._channels:
+            label = (
+                f"{channel.title}  [dim]{channel.ref}[/dim]" if channel.title else channel.ref
+            )
+            options.add_option(Option(label, id=channel.channel_id))
+        if not self._channels:
             options.add_option(Option("(no channels followed)", disabled=True))
         else:
             options.highlighted = 0
@@ -86,15 +91,24 @@ class SettingsScreen(Screen):
         def on_entry(entry: str | None) -> None:
             if not entry:
                 return
-            if add_channel(entry):
-                if entry not in self.app.config.channels.list:
-                    self.app.config.channels.list.append(entry)
-                self.app.notify(f"Added {entry}. Refresh the feed to apply.", timeout=5)
-            else:
-                self.app.notify(f"{entry} is already in your channels.", timeout=5)
-            self._reload()
+            self._add_channel(entry)
 
         self.app.push_screen(TextInputModal(prompt), on_entry)
+
+    @work
+    async def _add_channel(self, entry: str) -> None:
+        try:
+            await self.app.client.follow_channel(entry)
+        except YtuiApiError as exc:
+            if exc.status_code == 409:
+                self.app.notify(f"{entry} is already in your channels.", timeout=5)
+            else:
+                self.app.notify(
+                    f"Could not add {entry}: {exc.detail}", severity="error", timeout=8
+                )
+            return
+        self.app.notify(f"Added {entry}. Refresh the feed to apply.", timeout=5)
+        self._reload()
 
     def action_remove_channel(self) -> None:
         options = self.query_one("#settings-channels", OptionList)
@@ -104,25 +118,26 @@ class SettingsScreen(Screen):
         option = options.get_option_at_index(index)
         if option.id is None:
             return
-        entry = option.id
+        channel = next((c for c in self._channels if c.channel_id == option.id), None)
+        if channel is None:
+            return
 
         def on_confirm(confirmed: bool) -> None:
             if not confirmed:
                 return
-            remove_channel(entry)
-            if entry in self.app.config.channels.list:
-                self.app.config.channels.list.remove(entry)
-            self.app.notify(f"Removed {entry}. Refresh the feed to apply.", timeout=5)
-            self._reload()
+            self._remove_channel(channel)
 
-        self.app.push_screen(ConfirmModal(f"Stop following {entry!r}?"), on_confirm)
+        label = channel.title or channel.ref
+        self.app.push_screen(ConfirmModal(f"Stop following {label!r}?"), on_confirm)
 
-    def action_toggle_backend(self) -> None:
-        config = self.app.config
-        config.feed.backend = "api" if config.feed.backend == "rss" else "rss"
-        set_option("feed", "backend", config.feed.backend)
-        if config.feed.backend == "api":
-            self.app.notify("Note: the api backend is not implemented yet; rss is used.", timeout=6)
+    @work
+    async def _remove_channel(self, channel: FollowedChannel) -> None:
+        try:
+            await self.app.client.unfollow_channel(channel.channel_id)
+        except YtuiApiError as exc:
+            self.app.notify(f"Could not remove: {exc.detail}", severity="error", timeout=8)
+            return
+        self.app.notify(f"Removed {channel.ref}. Refresh the feed to apply.", timeout=5)
         self._reload()
 
     def action_toggle_audio_only(self) -> None:
