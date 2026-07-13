@@ -7,13 +7,18 @@ global semaphore to bound server load.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 import anyio
+import httpx
 
 from ..models import StreamInfo, Video, VideoDetails
+
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
+_YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
 
 _YDL_FLAT_OPTS = {
     "quiet": True,
@@ -273,3 +278,127 @@ async def resolve_streams(
     url: str, max_height: int = 1080, audio_only: bool = False
 ) -> StreamInfo:
     return await _run(_extract_streams, url, max_height, audio_only)
+
+
+def _parse_badge_duration(text: str) -> int | None:
+    """Parse a duration badge like '9:26' or '1:09:26' into seconds."""
+    parts = text.strip().split(":")
+    if not all(p.isdigit() for p in parts) or not 2 <= len(parts) <= 3:
+        return None
+    parts_i = [int(p) for p in parts]
+    seconds = 0
+    for p in parts_i:
+        seconds = seconds * 60 + p
+    return seconds
+
+
+def _walk_lockups(node: object) -> list[dict]:
+    """Recursively collect every lockupViewModel dict with contentType == video."""
+    found: list[dict] = []
+    if isinstance(node, dict):
+        lockup = node.get("lockupViewModel")
+        if isinstance(lockup, dict) and lockup.get("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO":
+            found.append(lockup)
+        for value in node.values():
+            found.extend(_walk_lockups(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_walk_lockups(item))
+    return found
+
+
+def _lockup_to_video(lockup: dict) -> Video | None:
+    content_id = lockup.get("contentId") or ""
+    if not content_id:
+        return None
+    metadata_vm = (lockup.get("metadata") or {}).get("lockupMetadataViewModel") or {}
+    title = ((metadata_vm.get("title") or {}).get("content")) or ""
+    if not title:
+        return None
+
+    channel_title = ""
+    content_metadata = (metadata_vm.get("metadata") or {}).get("contentMetadataViewModel") or {}
+    rows = content_metadata.get("metadataRows") or []
+    if rows:
+        parts = rows[0].get("metadataParts") or []
+        if parts:
+            channel_title = ((parts[0].get("text") or {}).get("content")) or ""
+
+    thumbnail_url = ""
+    image = ((lockup.get("contentImage") or {}).get("thumbnailViewModel") or {}).get("image") or {}
+    sources = image.get("sources") or []
+    if sources:
+        best = max(sources, key=lambda s: s.get("width") or 0)
+        thumbnail_url = best.get("url") or ""
+
+    duration = None
+    overlay = (
+        (lockup.get("contentImage") or {}).get("thumbnailViewModel") or {}
+    ).get("overlays") or []
+    for entry in overlay:
+        bottom = (entry.get("thumbnailOverlayBadgeViewModel") or {}).get("thumbnailBadges") or []
+        for badge in bottom:
+            text = (
+                (badge.get("thumbnailBadgeViewModel") or {}).get("text")
+            ) or ""
+            parsed = _parse_badge_duration(text) if text else None
+            if parsed is not None:
+                duration = parsed
+                break
+        if duration is not None:
+            break
+    if duration is None:
+        overlay_direct = (lockup.get("contentImage") or {}).get(
+            "thumbnailBottomOverlayViewModel"
+        ) or {}
+        badges = overlay_direct.get("thumbnailBadges") or []
+        for badge in badges:
+            text = ((badge.get("thumbnailBadgeViewModel") or {}).get("text")) or ""
+            parsed = _parse_badge_duration(text) if text else None
+            if parsed is not None:
+                duration = parsed
+                break
+
+    return Video(
+        video_id=content_id,
+        title=title,
+        channel_title=channel_title,
+        thumbnail_url=thumbnail_url,
+        duration=duration,
+        kind="video",
+        platform="youtube",
+    )
+
+
+async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
+    """Scrape YouTube's watch page ytInitialData for related/suggested videos."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    headers = {"User-Agent": USER_AGENT, "Accept-Language": "en-US"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
+            resp = await http_client.get(url, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
+        match = _YT_INITIAL_DATA_RE.search(html)
+        if not match:
+            raise UpstreamError("ytInitialData not found")
+        data = json.loads(match.group(1))
+    except UpstreamError:
+        raise
+    except Exception as exc:
+        raise UpstreamError(str(exc)) from exc
+
+    videos: list[Video] = []
+    seen: set[str] = set()
+    for lockup in _walk_lockups(data):
+        try:
+            video = _lockup_to_video(lockup)
+        except Exception:
+            continue
+        if video is None or video.video_id in seen:
+            continue
+        seen.add(video.video_id)
+        videos.append(video)
+        if len(videos) >= limit:
+            break
+    return videos

@@ -14,6 +14,7 @@ from ..models import (
     CommentIn,
     CommentsResponse,
     PlaylistVideosResponse,
+    SearchResponse,
     StreamInfo,
     Video,
     VideoDetails,
@@ -103,6 +104,21 @@ async def video_streams(
         )
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
+
+
+@router.get("/videos/{video_id}/related", response_model=SearchResponse)
+async def related_videos(
+    video_id: str,
+    platform: Platform = "youtube",
+    limit: int = Query(default=20, ge=1, le=40),
+) -> SearchResponse:
+    if platform != "youtube":
+        return SearchResponse(items=[])
+    try:
+        items = await ytdlp.related_videos(video_id, limit=limit)
+    except ytdlp.UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Related fetch failed: {exc}") from exc
+    return SearchResponse(items=items)
 
 
 @router.get("/videos/{video_id}/comments", response_model=CommentsResponse)

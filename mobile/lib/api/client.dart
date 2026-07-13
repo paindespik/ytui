@@ -130,6 +130,15 @@ class YtuiApi {
     return StreamInfo.fromJson(r.data as Map<String, dynamic>);
   }
 
+  Future<List<Video>> related(String videoId,
+      {String platform = 'youtube', int limit = 20}) async {
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}/related',
+        query: {'platform': platform, 'limit': limit});
+    return ((r.data as Map<String, dynamic>)['items'] as List<dynamic>? ?? const [])
+        .map((e) => Video.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<void> likeVideo(String videoId, {String platform = 'youtube'}) =>
       _request('POST', '/api/videos/${_enc(videoId)}/like',
           query: {'platform': platform});

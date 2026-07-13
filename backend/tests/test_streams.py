@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 from ytui_server.services import ytdlp
@@ -202,3 +204,99 @@ def test_entry_to_item_kinds(entry, kind):
 
 def test_entry_to_item_no_id():
     assert ytdlp.entry_to_item({"title": "nope"}) is None
+
+
+# ─── /api/videos/{id}/related ───
+
+
+def _make_lockup(content_id="rel0000001", title="Related video", channel="Chan Related",
+                  duration_text="4:20", thumb_url="https://i.ytimg.com/vi/rel0000001/hq.jpg"):
+    return {
+        "lockupViewModel": {
+            "contentId": content_id,
+            "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+            "metadata": {
+                "lockupMetadataViewModel": {
+                    "title": {"content": title},
+                    "metadata": {
+                        "contentMetadataViewModel": {
+                            "metadataRows": [
+                                {"metadataParts": [{"text": {"content": channel}}]}
+                            ]
+                        }
+                    },
+                }
+            },
+            "contentImage": {
+                "thumbnailViewModel": {
+                    "image": {"sources": [{"url": thumb_url, "width": 360}]},
+                    "overlays": [
+                        {
+                            "thumbnailOverlayBadgeViewModel": {
+                                "thumbnailBadges": [
+                                    {"thumbnailBadgeViewModel": {"text": duration_text}}
+                                ]
+                            }
+                        }
+                    ],
+                }
+            },
+        }
+    }
+
+
+def _yt_initial_data_html(lockups):
+    data = {"contents": {"items": lockups}}
+    return f"<html><script>var ytInitialData = {json.dumps(data)};</script></html>"
+
+
+class FakeResponse:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
+
+
+class FakeAsyncClient:
+    def __init__(self, response=None, error=None, **kwargs):
+        self._response = response
+        self._error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def get(self, url, headers=None):
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
+def test_related_videos(client):
+    html = _yt_initial_data_html([_make_lockup()])
+    fake_client = FakeAsyncClient(response=FakeResponse(html))
+    with patch.object(httpx, "AsyncClient", lambda **kw: fake_client):
+        resp = client.get("/api/videos/vid000000001/related")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["video_id"] == "rel0000001"
+    assert items[0]["title"] == "Related video"
+    assert items[0]["channel_title"] == "Chan Related"
+    assert items[0]["duration"] == 260
+
+
+def test_related_videos_non_youtube_returns_empty(client):
+    resp = client.get("/api/videos/vid000000001/related", params={"platform": "bitchute"})
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_related_videos_network_error(client):
+    fake_client = FakeAsyncClient(error=httpx.RequestError("boom"))
+    with patch.object(httpx, "AsyncClient", lambda **kw: fake_client):
+        resp = client.get("/api/videos/vid000000001/related")
+    assert resp.status_code == 502

@@ -14,6 +14,7 @@ import 'screens/playlist_yt.dart';
 import 'screens/search.dart';
 import 'screens/settings.dart';
 import 'services/background.dart';
+import 'services/background_playback.dart';
 import 'services/live_poll.dart';
 import 'services/notifications.dart';
 import 'state/settings.dart';
@@ -24,6 +25,7 @@ Future<void> main() async {
   MediaKit.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   await initNotifications();
+  await initForegroundTask();
   await registerBackgroundLiveCheck();
 
   runApp(

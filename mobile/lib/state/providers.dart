@@ -40,6 +40,10 @@ final videoDetailsProvider = FutureProvider.autoDispose
     .family<VideoDetails, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).videoDetails(arg.$1, platform: arg.$2));
 
+final relatedProvider = FutureProvider.autoDispose
+    .family<List<Video>, (String, String)>((ref, arg) =>
+        ref.watch(apiProvider).related(arg.$1, platform: arg.$2));
+
 final commentsProvider = FutureProvider.autoDispose
     .family<CommentsPage, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).videoComments(arg.$1, platform: arg.$2));

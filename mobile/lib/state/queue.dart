@@ -30,6 +30,17 @@ class QueueNotifier extends Notifier<PlayQueue> {
     state = PlayQueue(items: [...state.items, video], index: state.index);
   }
 
+  /// Insert [video] right after the current item and jump to it. Keeps the
+  /// items already played so `previous` still works (used by suggestions /
+  /// autoplay of the next video).
+  void playAppend(Video video) {
+    final head = state.items.sublist(0, state.index + 1);
+    final tail = state.index + 1 < state.items.length
+        ? state.items.sublist(state.index + 1)
+        : const <Video>[];
+    state = PlayQueue(items: [...head, video, ...tail], index: state.index + 1);
+  }
+
   void next() {
     if (state.hasNext) state = PlayQueue(items: state.items, index: state.index + 1);
   }

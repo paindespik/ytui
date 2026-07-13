@@ -1,5 +1,7 @@
 /// Integrated player: resolves streams just before playback (URLs expire),
 /// plays through media_kit, records history and heartbeats the position.
+/// Shows YouTube suggestions below the video, autoplays the next one, and
+/// keeps playing in the background (screen off) via a foreground service.
 library;
 
 import 'dart:async';
@@ -11,10 +13,12 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../services/background_playback.dart';
 import '../state/providers.dart';
 import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/responsive.dart';
+import '../widgets/video_tile.dart';
 
 /// Maps raw playback errors to user-friendly French messages.
 String _friendlyError(String raw) {
@@ -52,6 +56,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Timer? _heartbeat;
   StreamSubscription<void>? _completedSub;
   StreamSubscription<String>? _errorSub;
+  StreamSubscription<bool>? _playingSub;
 
   @override
   void initState() {
@@ -60,6 +65,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       final queue = ref.read(queueProvider);
       if (queue.hasNext) {
         ref.read(queueProvider.notifier).next();
+      } else {
+        // End of queue: chain into the first suggestion ("À suivre").
+        _autoplayNext();
       }
     });
     _errorSub = player.stream.error.listen((message) async {
@@ -72,11 +80,32 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       final video = ref.read(queueProvider).current;
       if (video != null) _load(video, resume: false);
     });
+    // Keep the background notification in sync with play/pause state.
+    _playingSub = player.stream.playing.listen((playing) {
+      final video = ref.read(queueProvider).current;
+      if (video == null) return;
+      updatePlaybackNotification(
+        title: video.title,
+        text: playing ? '▶ ${video.channelTitle}' : '⏸ ${video.channelTitle}',
+      );
+    });
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _savePosition());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final video = ref.read(queueProvider).current;
       if (video != null) _load(video);
     });
+  }
+
+  /// Plays the first suggestion for the current video (autoplay at end of queue).
+  Future<void> _autoplayNext() async {
+    final video = ref.read(queueProvider).current;
+    if (video == null) return;
+    try {
+      final related =
+          await ref.read(relatedProvider((video.videoId, video.platform)).future);
+      if (!mounted || related.isEmpty) return;
+      ref.read(queueProvider.notifier).playAppend(related.first);
+    } catch (_) {}
   }
 
   Future<void> _load(Video video, {bool resume = true}) async {
@@ -87,6 +116,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       // Record the watch and fetch resume position + fresh stream URLs.
       unawaited(api.recordWatch(video).catchError((_) {}));
       ref.read(watchedIdsProvider.notifier).markWatched(video.videoId);
+      // Keep playing when the screen turns off (foreground service + wakelock).
+      unawaited(startPlaybackService(
+        title: video.title,
+        text: '▶ ${video.channelTitle}',
+      ).catchError((_) {}));
       double start = 0;
       if (resume) {
         final info = await api.resume(video.videoId).catchError((_) => null);
@@ -128,6 +162,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _heartbeat?.cancel();
     _completedSub?.cancel();
     _errorSub?.cancel();
+    _playingSub?.cancel();
+    unawaited(stopPlaybackService());
     player.dispose();
     super.dispose();
   }
@@ -212,7 +248,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       ],
                     ),
                   )
-                : mkv.Video(controller: controller),
+                : mkv.Video(
+                    controller: controller,
+                    // Keep playing when the screen turns off; the foreground
+                    // service (background_playback.dart) holds the process alive.
+                    pauseUponEnteringBackgroundMode: false,
+                  ),
           ),
 
           // Now playing info + controls + queue — centered on wide screens
@@ -295,14 +336,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                             color: colors.primaryContainer,
                             shape: BoxShape.circle,
                           ),
-                          child: IconButton(
-                            iconSize: 32,
-                            icon: Icon(
-                              Icons.play_arrow_rounded,
-                              color: colors.onPrimaryContainer,
-                            ),
-                            tooltip: 'Play/Pause',
-                            onPressed: () => player.playOrPause(),
+                          child: StreamBuilder<bool>(
+                            stream: player.stream.playing,
+                            initialData: player.state.playing,
+                            builder: (context, snapshot) {
+                              final playing = snapshot.data ?? false;
+                              return IconButton(
+                                iconSize: 32,
+                                icon: Icon(
+                                  playing
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
+                                  color: colors.onPrimaryContainer,
+                                ),
+                                tooltip: playing ? 'Pause' : 'Lecture',
+                                onPressed: () => player.playOrPause(),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -322,87 +372,164 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ),
                   ),
 
-                  // Queue list
-                  if (queue.items.length > 1)
-                    Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.only(top: 8),
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          itemCount: queue.items.length,
-                          itemBuilder: (context, i) {
-                            final item = queue.items[i];
-                            final isActive = i == queue.index;
-
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 4),
-                              decoration: BoxDecoration(
-                                color: isActive
-                                    ? colors.primaryContainer.withValues(alpha: 0.3)
-                                    : colors.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(kRadiusSm),
-                              ),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(kRadiusSm),
-                                onTap: () => ref
-                                    .read(queueProvider.notifier)
-                                    .play(queue.items, startIndex: i),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 10,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      // Index or playing indicator
-                                      SizedBox(
-                                        width: 24,
-                                        child: isActive
-                                            ? Icon(
-                                                Icons.play_arrow_rounded,
-                                                size: 18,
-                                                color: colors.primary,
-                                              )
-                                            : Text(
-                                                '${i + 1}',
-                                                style:
-                                                    theme.textTheme.labelMedium?.copyWith(
-                                                  color: colors.onSurfaceVariant,
-                                                ),
-                                                textAlign: TextAlign.center,
-                                              ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      // Title
-                                      Expanded(
-                                        child: Text(
-                                          item.title,
-                                          style: theme.textTheme.bodyMedium?.copyWith(
-                                            color: isActive
-                                                ? colors.primary
-                                                : colors.onSurface,
-                                            fontWeight:
-                                                isActive ? FontWeight.w600 : null,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                  // Queue + YouTube suggestions (scrollable)
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.only(top: 8, bottom: 16),
+                      children: [
+                        if (queue.items.length > 1) ...[
+                          _sectionHeader(theme, colors, 'File d\'attente'),
+                          for (var i = 0; i < queue.items.length; i++)
+                            _queueTile(theme, colors, queue.items[i], i,
+                                i == queue.index),
+                        ],
+                        _SuggestionsSection(video: video),
+                      ],
                     ),
+                  ),
                 ],
               ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _sectionHeader(ThemeData theme, ColorScheme colors, String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(kGutter, 12, kGutter, 6),
+      child: Text(
+        label,
+        style: theme.textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: colors.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _queueTile(ThemeData theme, ColorScheme colors, Video item, int i,
+      bool isActive) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: isActive
+            ? colors.primaryContainer.withValues(alpha: 0.3)
+            : colors.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(kRadiusSm),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(kRadiusSm),
+        onTap: () => ref
+            .read(queueProvider.notifier)
+            .play(ref.read(queueProvider).items, startIndex: i),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 24,
+                child: isActive
+                    ? Icon(Icons.play_arrow_rounded,
+                        size: 18, color: colors.primary)
+                    : Text(
+                        '${i + 1}',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  item.title,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: isActive ? colors.primary : colors.onSurface,
+                    fontWeight: isActive ? FontWeight.w600 : null,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// YouTube suggestions under the video: the first one is flagged "À suivre"
+/// (played automatically at the end of the queue); tapping any plays it next.
+class _SuggestionsSection extends ConsumerWidget {
+  final Video video;
+
+  const _SuggestionsSection({required this.video});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final async = ref.watch(relatedProvider((video.videoId, video.platform)));
+
+    return async.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: CircularProgressIndicator()),
+      ),
+      error: (_, __) => Padding(
+        padding: const EdgeInsets.all(kGutter),
+        child: Text(
+          'Suggestions indisponibles.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+      ),
+      data: (items) {
+        if (items.isEmpty) return const SizedBox.shrink();
+        final upNext = items.first;
+        final rest = items.skip(1);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kGutter, 12, kGutter, 6),
+              child: Text(
+                'À suivre',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: colors.primary,
+                ),
+              ),
+            ),
+            VideoTile(
+              video: upNext,
+              onTap: () => ref.read(queueProvider.notifier).playAppend(upNext),
+            ),
+            if (rest.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(kGutter, 10, kGutter, 6),
+                child: Text(
+                  'Suggestions',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              for (final item in rest)
+                VideoTile(
+                  video: item,
+                  onTap: () =>
+                      ref.read(queueProvider.notifier).playAppend(item),
+                ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
