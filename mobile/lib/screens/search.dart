@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
-import '../widgets/video_tile.dart';
+import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/responsive.dart';
+import '../widgets/video_tile.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -30,19 +32,29 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: TextField(
-          controller: _controller,
-          autofocus: true,
-          textInputAction: TextInputAction.search,
-          decoration: InputDecoration(
-            hintText: 'Search ${_source == 'odysee' ? 'Odysee' : 'YouTube'}…',
-            border: InputBorder.none,
+        title: Container(
+          height: 40,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(kRadiusLg),
           ),
-          onSubmitted: (value) => setState(() => _query = value.trim()),
+          child: TextField(
+            controller: _controller,
+            autofocus: true,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search ${_source == 'odysee' ? 'Odysee' : 'YouTube'}…',
+              prefixIcon: const Icon(Icons.search),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            ),
+            onSubmitted: (value) => setState(() => _query = value.trim()),
+          ),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.search),
+            icon: const Icon(Icons.arrow_forward),
+            tooltip: 'Rechercher',
             onPressed: () => setState(() => _query = _controller.text.trim()),
           ),
         ],
@@ -50,7 +62,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: kGutter, vertical: 8),
             child: SegmentedButton<String>(
               segments: const [
                 ButtonSegment(
@@ -71,15 +83,27 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ),
           Expanded(
             child: _query.isEmpty
-                ? const Center(child: Text('Type a query'))
+                ? const AppEmpty(
+                    icon: Icons.search,
+                    message: 'Enter a search term to find videos',
+                  )
                 : ref.watch(searchProvider((_query, _source))).when(
                       loading: () => const AppLoading(),
                       error: (e, _) => AppError.from(e,
                           onRetry: () => ref
                               .invalidate(searchProvider((_query, _source)))),
-                      data: (items) => ListView(
-                        children: [for (final v in items) VideoTile(video: v)],
-                      ),
+                      data: (items) => items.isEmpty
+                          ? const AppEmpty(
+                              icon: Icons.search_off,
+                              message: 'No results found',
+                            )
+                          : ResponsiveCenter(
+                              child: ListView(
+                                children: [
+                                  for (final v in items) VideoTile(video: v)
+                                ],
+                              ),
+                            ),
                     ),
           ),
         ],

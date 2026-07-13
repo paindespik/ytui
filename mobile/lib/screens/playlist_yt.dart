@@ -7,8 +7,10 @@ import 'package:go_router/go_router.dart';
 
 import '../state/providers.dart';
 import '../state/queue.dart';
-import '../widgets/video_tile.dart';
+import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/responsive.dart';
+import '../widgets/video_tile.dart';
 
 class YtPlaylistScreen extends ConsumerWidget {
   final String playlistId;
@@ -23,47 +25,70 @@ class YtPlaylistScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final data = ref.watch(ytPlaylistProvider((playlistId, platform)));
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(data.valueOrNull?.$2 ?? 'Playlist'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.playlist_play),
-            tooltip: 'Play all',
-            onPressed: data.valueOrNull == null ||
-                    data.valueOrNull!.$1.isEmpty
-                ? null
-                : () {
-                    ref
-                        .read(queueProvider.notifier)
-                        .play(data.valueOrNull!.$1);
-                    context.push('/player');
-                  },
-          ),
-        ],
+        title: Text(
+          data.valueOrNull?.$2 ?? 'Playlist',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
       ),
       body: data.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
             onRetry: () =>
                 ref.invalidate(ytPlaylistProvider((playlistId, platform)))),
-        data: (result) => result.$1.isEmpty
-            ? const AppEmpty(message: 'No videos in this playlist')
-            : ListView(
-                children: [
-                  for (var i = 0; i < result.$1.length; i++)
-                    VideoTile(
-                      video: result.$1[i],
-                      onTap: () {
-                        ref
-                            .read(queueProvider.notifier)
-                            .play(result.$1, startIndex: i);
+        data: (result) {
+          if (result.$1.isEmpty) {
+            return const AppEmpty(
+              message: 'No videos in this playlist',
+              icon: Icons.playlist_remove,
+            );
+          }
+          final videos = result.$1;
+          return ResponsiveCenter(
+            child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: kGutter),
+              itemCount: videos.length + 1,
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  // Prominent "Play all" header
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                        kGutter, kGutter, kGutter, 8),
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        ref.read(queueProvider.notifier).play(videos);
                         context.push('/player');
                       },
+                      icon: const Icon(Icons.play_arrow),
+                      label: Text('Play all ${videos.length} videos'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: colorScheme.primary,
+                        foregroundColor: colorScheme.onPrimary,
+                        minimumSize: const Size.fromHeight(48),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(kRadiusMd),
+                        ),
+                      ),
                     ),
-                ],
-              ),
+                  );
+                }
+                final videoIndex = index - 1;
+                return VideoTile(
+                  video: videos[videoIndex],
+                  onTap: () {
+                    ref
+                        .read(queueProvider.notifier)
+                        .play(videos, startIndex: videoIndex);
+                    context.push('/player');
+                  },
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }

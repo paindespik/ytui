@@ -17,6 +17,7 @@ import 'services/background.dart';
 import 'services/live_poll.dart';
 import 'services/notifications.dart';
 import 'state/settings.dart';
+import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -87,14 +88,7 @@ class YtuiApp extends ConsumerWidget {
       ref.read(livePollerProvider).start();
     }
 
-    final theme = ThemeData(
-      brightness: Brightness.dark,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Colors.redAccent,
-        brightness: Brightness.dark,
-      ),
-      useMaterial3: true,
-    );
+    final theme = buildAppTheme();
 
     if (!settings.isConfigured) {
       // First launch: force the settings screen until the server is set up.

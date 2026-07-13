@@ -7,6 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/client.dart';
 import '../state/providers.dart';
 import '../state/settings.dart';
+import '../theme.dart';
+import '../widgets/responsive.dart';
+
+/// Success feedback color (green) — distinct from the brand-red primary.
+const _kSuccessBg = Color(0xFF1B5E20);
+const _kSuccessIcon = Color(0xFF4CAF50);
 
 class SettingsScreen extends ConsumerStatefulWidget {
   /// First-launch mode: no back navigation until the server is configured.
@@ -86,99 +92,187 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final channels = widget.firstLaunch ? null : ref.watch(channelsProvider);
+    final colorScheme = Theme.of(context).colorScheme;
+    final isSuccess = _testResult?.startsWith('✓') ?? false;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Settings'),
         automaticallyImplyLeading: !widget.firstLaunch,
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text('Server', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _urlController,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              labelText: 'Server URL',
-              hintText: 'https://ytui.example.com',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _tokenController,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'API token',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              OutlinedButton(
-                onPressed: _testing ? null : _testConnection,
-                child: _testing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Test connection'),
-              ),
-              const SizedBox(width: 12),
-              FilledButton(onPressed: _save, child: const Text('Save')),
-            ],
-          ),
-          if (_testResult != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(_testResult!),
-            ),
-          if (!widget.firstLaunch) ...[
-            const Divider(height: 32),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Followed channels',
-                    style: Theme.of(context).textTheme.titleMedium),
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  onPressed: _addChannel,
-                ),
-              ],
-            ),
-            channels!.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-              error: (e, _) => Text('$e'),
-              data: (items) => Column(
-                children: [
-                  for (final c in items)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(c.title.isEmpty ? c.ref : c.title),
-                      subtitle: Text('${c.platform} · ${c.ref}'),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () async {
-                          await ref
-                              .read(apiProvider)
-                              .unfollowChannel(c.channelId);
-                          ref.invalidate(channelsProvider);
-                          ref.invalidate(feedProvider);
-                        },
+      body: ResponsiveCenter(
+        child: ListView(
+          padding: const EdgeInsets.all(kGutter),
+          children: [
+            // ─────────────────────── Server Section ───────────────────────
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(kGutter),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Server', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _urlController,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                        labelText: 'Server URL',
+                        hintText: 'https://ytui.example.com',
                       ),
                     ),
-                ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _tokenController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'API token',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        OutlinedButton(
+                          onPressed: _testing ? null : _testConnection,
+                          child: _testing
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Test connection'),
+                        ),
+                        const SizedBox(width: 12),
+                        FilledButton(onPressed: _save, child: const Text('Save')),
+                      ],
+                    ),
+                    if (_testResult != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isSuccess
+                              ? _kSuccessBg.withValues(alpha: 0.4)
+                              : colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(kRadiusSm),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isSuccess ? Icons.check_circle : Icons.error,
+                              size: 18,
+                              color: isSuccess
+                                  ? _kSuccessIcon
+                                  : colorScheme.error,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _testResult!,
+                                style: TextStyle(
+                                  color: isSuccess
+                                      ? colorScheme.onSurface
+                                      : colorScheme.onErrorContainer,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
+
+            // ─────────────────── Followed Channels Section ───────────────────
+            if (!widget.firstLaunch) ...[
+              const SizedBox(height: 24),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(kGutter),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Followed channels',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add),
+                            onPressed: _addChannel,
+                            tooltip: 'Follow a channel',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      channels!.when(
+                        loading: () => const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                        error: (e, _) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline,
+                                  size: 18, color: colorScheme.error),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '$e',
+                                  style: TextStyle(color: colorScheme.error),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        data: (items) => items.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 16),
+                                child: Text(
+                                  'No channels followed yet',
+                                  style: TextStyle(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              )
+                            : Column(
+                                children: [
+                                  for (final c in items)
+                                    ListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      title:
+                                          Text(c.title.isEmpty ? c.ref : c.title),
+                                      subtitle: Text('${c.platform} · ${c.ref}'),
+                                      trailing: IconButton(
+                                        icon: const Icon(Icons.delete_outline),
+                                        tooltip: 'Unfollow',
+                                        onPressed: () async {
+                                          await ref
+                                              .read(apiProvider)
+                                              .unfollowChannel(c.channelId);
+                                          ref.invalidate(channelsProvider);
+                                          ref.invalidate(feedProvider);
+                                        },
+                                      ),
+                                    ),
+                                ],
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

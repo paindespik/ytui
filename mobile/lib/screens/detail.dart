@@ -7,8 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../format.dart';
 import '../state/providers.dart';
+import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/responsive.dart';
 
 class DetailScreen extends ConsumerWidget {
   final String videoId;
@@ -19,6 +22,8 @@ class DetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final details = ref.watch(videoDetailsProvider((videoId, platform)));
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Details')),
@@ -27,62 +32,129 @@ class DetailScreen extends ConsumerWidget {
         error: (e, _) => AppError.from(e,
             onRetry: () =>
                 ref.invalidate(videoDetailsProvider((videoId, platform)))),
-        data: (d) => ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Text(d.title, style: Theme.of(context).textTheme.titleLarge),
+        data: (d) => ResponsiveCenter(
+          child: ListView(
+            padding: const EdgeInsets.all(kGutter),
+            children: [
+            // Title
+            Text(
+              d.title,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                height: 1.3,
+              ),
+            ),
             const SizedBox(height: 8),
-            Text(d.channelTitle,
-                style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(height: 8),
+
+            // Channel
+            Text(
+              d.channelTitle,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Metadata chips row
             Wrap(
-              spacing: 16,
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                if (d.viewCount != null) Text('${d.viewCount} views'),
-                if (d.likeCount != null) Text('${d.likeCount} likes'),
-                if (d.uploadDate.isNotEmpty) Text(d.uploadDate),
+                if (d.viewCount != null)
+                  _MetadataChip(
+                    icon: Icons.visibility_outlined,
+                    label: '${compactCount(d.viewCount!)} views',
+                  ),
+                if (d.likeCount != null)
+                  _MetadataChip(
+                    icon: Icons.thumb_up_outlined,
+                    label: '${compactCount(d.likeCount!)} likes',
+                  ),
+                if (d.uploadDate.isNotEmpty)
+                  _MetadataChip(
+                    icon: Icons.calendar_today_outlined,
+                    label: d.uploadDate,
+                  ),
               ],
             ),
             const SizedBox(height: 16),
+
+            // Action buttons (YouTube only)
             if (platform == 'youtube')
               Row(
                 children: [
                   FilledButton.icon(
-                    icon: const Icon(Icons.thumb_up),
+                    icon: const Icon(Icons.thumb_up, size: 18),
                     label: const Text('Like'),
                     onPressed: () => _like(context, ref),
                   ),
                   const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.comment),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.comment_outlined, size: 18),
                     label: const Text('Comment'),
                     onPressed: () => _comment(context, ref),
                   ),
                 ],
               ),
+
+            // Odysee read-only notice
             if (platform == 'odysee')
               Card(
+                color: colors.surfaceContainerHighest,
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   child: Row(
                     children: [
-                      const Icon(Icons.lock_outline, size: 18),
+                      Icon(
+                        Icons.lock_outline,
+                        size: 16,
+                        color: colors.onSurfaceVariant,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text('Odysee likes/comments are read-only',
-                            style: Theme.of(context).textTheme.bodySmall),
+                        child: Text(
+                          'Odysee likes/comments are read-only',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
             const SizedBox(height: 16),
-            Text(d.description, maxLines: 8, overflow: TextOverflow.ellipsis),
+
+            // Description card
+            Card(
+              color: colors.surfaceContainerHigh,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(kRadiusMd),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  d.description,
+                  maxLines: 12,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    height: 1.6,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+
+            // Odysee comments section
             if (platform == 'odysee') ...[
-              const Divider(height: 32),
+              const SizedBox(height: 24),
               _OdyseeComments(videoId: videoId),
             ],
           ],
+          ),
         ),
       ),
     );
@@ -138,6 +210,39 @@ class DetailScreen extends ConsumerWidget {
   }
 }
 
+/// Compact metadata chip with icon + label.
+class _MetadataChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _MetadataChip({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(kRadiusSm),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: colors.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: colors.onSurfaceVariant,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _OdyseeComments extends ConsumerWidget {
   final String videoId;
 
@@ -146,23 +251,42 @@ class _OdyseeComments extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final comments = ref.watch(commentsProvider((videoId, 'odysee')));
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
 
     return comments.when(
-      loading: () => const Center(
+      loading: () => Center(
         child: Padding(
-          padding: EdgeInsets.all(16),
-          child: CircularProgressIndicator(),
+          padding: const EdgeInsets.all(16),
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: colors.primary,
+          ),
         ),
       ),
-      error: (e, _) => Text('Comments unavailable: $e',
-          style: Theme.of(context).textTheme.bodySmall),
+      error: (e, _) => Text(
+        'Comments unavailable: $e',
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: colors.onSurfaceVariant,
+        ),
+      ),
       data: (page) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Comments (${page.total})',
-              style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          if (page.items.isEmpty) const Text('No comments'),
+          Text(
+            'Comments (${page.total})',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (page.items.isEmpty)
+            Text(
+              'No comments yet',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
           for (final c in page.items) _CommentCard(comment: c),
         ],
       ),
@@ -178,25 +302,131 @@ class _CommentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final meta = [
-      if (comment.isPinned) '📌',
-      comment.channelName,
-      if (comment.timestamp != null) _relativeDate(comment.timestamp!),
-      if (comment.likes > 0) '👍 ${comment.likes}',
-      if (comment.replies > 0)
-        '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
-    ].where((s) => s.isNotEmpty).join(' · ');
+    final colors = theme.colorScheme;
+
+    // Extract initial for avatar
+    final initial = comment.channelName.isNotEmpty
+        ? comment.channelName[0].toUpperCase()
+        : '?';
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
+      color: colors.surfaceContainer,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(kRadiusMd),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Column(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(meta, style: theme.textTheme.bodySmall),
-            const SizedBox(height: 4),
-            Text(comment.text),
+            // Avatar circle with initial
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: colors.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                initial,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: colors.onPrimaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Comment content
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header row: author + date + pinned badge
+                  Row(
+                    children: [
+                      if (comment.isPinned) ...[
+                        Icon(
+                          Icons.push_pin,
+                          size: 12,
+                          color: colors.primary,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      Flexible(
+                        child: Text(
+                          comment.channelName,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (comment.timestamp != null) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          _relativeDate(comment.timestamp!),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+
+                  // Comment body
+                  Text(
+                    comment.text,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      height: 1.4,
+                    ),
+                  ),
+
+                  // Engagement row (likes/replies)
+                  if (comment.likes > 0 || comment.replies > 0) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        if (comment.likes > 0) ...[
+                          Icon(
+                            Icons.thumb_up_outlined,
+                            size: 12,
+                            color: colors.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${comment.likes}',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                        if (comment.likes > 0 && comment.replies > 0)
+                          const SizedBox(width: 12),
+                        if (comment.replies > 0) ...[
+                          Icon(
+                            Icons.reply_outlined,
+                            size: 12,
+                            color: colors.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ],
         ),
       ),

@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../state/providers.dart';
+import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
 
 class HomeFeedScreen extends ConsumerWidget {
@@ -20,22 +22,42 @@ class HomeFeedScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ytui'),
+        title: Text.rich(
+          TextSpan(
+            children: [
+              const TextSpan(
+                text: 'yt',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              TextSpan(
+                text: 'ui',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.search),
+            tooltip: 'Rechercher',
             onPressed: () => context.push('/search'),
           ),
           IconButton(
             icon: const Icon(Icons.history),
+            tooltip: 'Historique',
             onPressed: () => context.push('/history'),
           ),
           IconButton(
             icon: const Icon(Icons.playlist_play),
+            tooltip: 'Playlists',
             onPressed: () => context.push('/playlists'),
           ),
           IconButton(
             icon: const Icon(Icons.settings),
+            tooltip: 'Réglages',
             onPressed: () => context.push('/settings'),
           ),
         ],
@@ -55,27 +77,57 @@ class HomeFeedScreen extends ConsumerWidget {
               await ref.read(feedProvider.notifier).refresh();
               ref.invalidate(livesProvider);
             },
-            child: ListView(
+            child: ResponsiveCenter(
+              child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 8),
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 for (final warning in result.warnings)
-                  MaterialBanner(
-                    content: Text(warning),
-                    actions: const [SizedBox.shrink()],
-                    backgroundColor:
-                        Theme.of(context).colorScheme.errorContainer,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: kGutter,
+                      vertical: 4,
+                    ),
+                    child: Material(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(kRadiusMd),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.warning_amber_rounded,
+                              color:
+                                  Theme.of(context).colorScheme.onErrorContainer,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                warning,
+                                style: TextStyle(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onErrorContainer,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 if (videos.isEmpty)
                   const Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Text(
-                      'No videos. Follow channels from Settings.',
-                      textAlign: TextAlign.center,
+                    padding: EdgeInsets.only(top: 64),
+                    child: AppEmpty(
+                      icon: Icons.subscriptions_outlined,
+                      message: 'No videos yet. Follow channels from Settings.',
                     ),
                   ),
                 for (final video in videos)
                   VideoTile(video: video, live: liveIds.contains(video.videoId)),
               ],
+              ),
             ),
           );
         },
