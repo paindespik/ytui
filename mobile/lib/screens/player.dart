@@ -104,7 +104,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       final related =
           await ref.read(relatedProvider((video.videoId, video.platform)).future);
       if (!mounted || related.isEmpty) return;
-      ref.read(queueProvider.notifier).playAppend(related.first);
+      final notifier = ref.read(queueProvider.notifier);
+      notifier.enqueue(related.first);
+      notifier.next();
     } catch (_) {}
   }
 
@@ -377,11 +379,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     child: ListView(
                       padding: const EdgeInsets.only(top: 8, bottom: 16),
                       children: [
-                        if (queue.items.length > 1) ...[
+                        if (queue.index + 1 < queue.items.length) ...[
                           _sectionHeader(theme, colors, 'File d\'attente'),
-                          for (var i = 0; i < queue.items.length; i++)
-                            _queueTile(theme, colors, queue.items[i], i,
-                                i == queue.index),
+                          for (var i = queue.index + 1;
+                              i < queue.items.length;
+                              i++)
+                            _queueTile(theme, colors, queue.items[i], i),
                         ],
                         _SuggestionsSection(video: video),
                       ],
@@ -409,45 +412,40 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  Widget _queueTile(ThemeData theme, ColorScheme colors, Video item, int i,
-      bool isActive) {
+  /// A single upcoming queue entry. [i] is its index into the full queue;
+  /// [position] is its 1-based rank among the upcoming items. Tapping jumps to
+  /// it and plays it now (the others follow it in order).
+  Widget _queueTile(ThemeData theme, ColorScheme colors, Video item, int i) {
+    final position = i - ref.read(queueProvider).index;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: isActive
-            ? colors.primaryContainer.withValues(alpha: 0.3)
-            : colors.surfaceContainerHighest,
+        color: colors.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(kRadiusSm),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(kRadiusSm),
-        onTap: () => ref
-            .read(queueProvider.notifier)
-            .play(ref.read(queueProvider).items, startIndex: i),
+        onTap: () => ref.read(queueProvider.notifier).jumpTo(i),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
               SizedBox(
                 width: 24,
-                child: isActive
-                    ? Icon(Icons.play_arrow_rounded,
-                        size: 18, color: colors.primary)
-                    : Text(
-                        '${i + 1}',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: colors.onSurfaceVariant,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
+                child: Text(
+                  '$position',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   item.title,
                   style: theme.textTheme.bodyMedium?.copyWith(
-                    color: isActive ? colors.primary : colors.onSurface,
-                    fontWeight: isActive ? FontWeight.w600 : null,
+                    color: colors.onSurface,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -507,7 +505,7 @@ class _SuggestionsSection extends ConsumerWidget {
             ),
             VideoTile(
               video: upNext,
-              onTap: () => ref.read(queueProvider.notifier).playAppend(upNext),
+              onTap: () => ref.read(queueProvider.notifier).enqueue(upNext),
             ),
             if (rest.isNotEmpty) ...[
               Padding(
@@ -523,8 +521,7 @@ class _SuggestionsSection extends ConsumerWidget {
               for (final item in rest)
                 VideoTile(
                   video: item,
-                  onTap: () =>
-                      ref.read(queueProvider.notifier).playAppend(item),
+                  onTap: () => ref.read(queueProvider.notifier).enqueue(item),
                 ),
             ],
           ],

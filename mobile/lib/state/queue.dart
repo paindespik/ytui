@@ -30,15 +30,33 @@ class QueueNotifier extends Notifier<PlayQueue> {
     state = PlayQueue(items: [...state.items, video], index: state.index);
   }
 
-  /// Insert [video] right after the current item and jump to it. Keeps the
-  /// items already played so `previous` still works (used by suggestions /
-  /// autoplay of the next video).
-  void playAppend(Video video) {
-    final head = state.items.sublist(0, state.index + 1);
-    final tail = state.index + 1 < state.items.length
-        ? state.items.sublist(state.index + 1)
-        : const <Video>[];
-    state = PlayQueue(items: [...head, video, ...tail], index: state.index + 1);
+  /// Jump to the item at [targetIndex] (an index into the FULL `items`
+  /// list) and play it now. Everything before the old current (plus the old
+  /// current itself) is kept before it so `previous` still works; the other
+  /// still-upcoming items are moved to sit right after it, preserving order.
+  /// Filtering is positional, so duplicate [Video] instances in the queue are
+  /// preserved and an already-played item can be jumped to without duplicating.
+  /// No-op if [targetIndex] is out of range or is already the current index.
+  void jumpTo(int targetIndex) {
+    final items = state.items;
+    if (targetIndex < 0 || targetIndex >= items.length) return;
+    if (targetIndex == state.index) return;
+    final target = items[targetIndex];
+    // History: old current and everything before it, minus the target if it
+    // happens to live there (jumping back to an already-played item).
+    final history = <Video>[
+      for (var i = 0; i <= state.index; i++)
+        if (i != targetIndex) items[i],
+    ];
+    // Upcoming: items after the old current, minus the target (by position).
+    final upcoming = <Video>[
+      for (var i = state.index + 1; i < items.length; i++)
+        if (i != targetIndex) items[i],
+    ];
+    state = PlayQueue(
+      items: [...history, target, ...upcoming],
+      index: history.length,
+    );
   }
 
   void next() {
