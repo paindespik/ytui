@@ -105,6 +105,7 @@ class YtuiApp(App):
         self.run_worker(self.refresh_watched(), group="watched")
         if self.config.server.url:
             self.set_interval(LIVE_POLL_SECONDS, self._start_live_check)
+            self.set_interval(LIVE_POLL_SECONDS, self._refresh_feed)
             self.set_timer(15, self._start_live_check)
 
     async def refresh_watched(self) -> None:
@@ -154,6 +155,13 @@ class YtuiApp(App):
             self.pop_screen()
         if isinstance(self.screen, HomeFeedScreen):
             self.screen.focus_live(video)
+
+    # -- periodic feed refresh --
+
+    def _refresh_feed(self) -> None:
+        """Periodically refresh the home feed if the home screen is visible."""
+        if isinstance(self.screen, HomeFeedScreen):
+            self.screen.load_feed(force_refresh=False, silent=True)
 
     async def on_unmount(self) -> None:
         await self.thumbnails.close()

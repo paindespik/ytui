@@ -65,24 +65,31 @@ class HomeFeedScreen(BrowseScreen):
         )
 
     @work(exclusive=True)
-    async def load_feed(self, force_refresh: bool) -> None:
+    async def load_feed(self, force_refresh: bool, *, silent: bool = False) -> None:
         loading = self.query_one("#feed-loading", LoadingIndicator)
-        loading.display = True
+        if not silent:
+            loading.display = True
         try:
             result: FeedResult = await self.app.client.feed(refresh=force_refresh)
         except YtuiApiError as exc:
-            loading.display = False
+            if not silent:
+                loading.display = False
             if exc.status_code == 0:
                 self._show_warning(f"Server unreachable: {self.app.config.server.url or '(not configured)'}")
             else:
                 self._show_warning(f"Failed to load feed: {exc.detail}")
             return
-        loading.display = False
+        if not silent:
+            loading.display = False
         self._feed_videos = result.videos
         pending = self._pending_focus
         self._pending_focus = None
         feed_list = self.query_one("#feed-list", VideoList)
+        if silent:
+            cursor_row = feed_list.cursor_row
         feed_list.set_videos(self._with_lives(), self.app.watched)
+        if silent and 0 <= cursor_row < len(self._with_lives()):
+            feed_list.move_cursor(row=cursor_row)
         if pending is not None:
             feed_list.focus_video(pending.video_id)
         if result.warnings:

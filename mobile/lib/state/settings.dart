@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 const kServerUrlKey = 'server_url';
 const kServerTokenKey = 'server_token';
 const kSeenLiveIdsKey = 'seen_live_ids';
+const kSeenVideoIdsKey = 'seen_video_ids';
+const kFirstFeedSeedKey = 'first_feed_seed';
 
 class ServerSettings {
   final String url;

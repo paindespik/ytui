@@ -1,0 +1,13 @@
+[Unit]
+Description=ytui desktop video notifications
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/youtube-cli/scripts/ytui-notify.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

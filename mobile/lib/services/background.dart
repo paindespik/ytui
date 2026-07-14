@@ -17,6 +17,7 @@ void callbackDispatcher() {
         await initNotifications();
         final prefs = await SharedPreferences.getInstance();
         await checkLivesAndNotify(prefs);
+        await checkNewVideosAndNotify(prefs);
       } catch (e) {
         debugPrint('ytui live check failed: $e');
       }
