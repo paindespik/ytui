@@ -25,6 +25,7 @@ class VideoList(DataTable):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("g", "scroll_top", "Top", show=False),
         Binding("G", "scroll_bottom", "Bottom", show=False),
+        Binding("right", "select_video", "Play video", show=False),
     ]
 
     class VideoSelected(Message):
@@ -96,3 +97,8 @@ class VideoList(DataTable):
         event.stop()
         if 0 <= event.cursor_row < len(self._videos):
             self.post_message(self.VideoHighlighted(self._videos[event.cursor_row]))
+
+    def action_select_video(self) -> None:
+        """Select the highlighted video (triggered by right arrow)."""
+        if 0 <= self.cursor_row < len(self._videos):
+            self.post_message(self.VideoSelected(self._videos[self.cursor_row]))
