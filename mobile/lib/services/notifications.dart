@@ -22,11 +22,17 @@ int _notifId(String s) {
 final FlutterLocalNotificationsPlugin notificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+/// Plugin init only — safe in the background isolate (no Activity needed).
 Future<void> initNotifications() async {
   const settings = InitializationSettings(
     android: AndroidInitializationSettings('@mipmap/ic_launcher'),
   );
   await notificationsPlugin.initialize(settings);
+}
+
+/// Runtime permission prompt — requires a foreground Activity.
+/// NEVER call from the workmanager background isolate (NPE on Android).
+Future<void> requestNotificationsPermission() async {
   await notificationsPlugin
       .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>()
@@ -89,8 +95,8 @@ Future<void> _ensureNewVideoChannel() async {
 }
 
 Future<void> showNewVideoNotification(
-    String videoId, String title, String channel) {
-  _ensureNewVideoChannel();
+    String videoId, String title, String channel) async {
+  await _ensureNewVideoChannel();
   return notificationsPlugin.show(
     _notifId(videoId),
     channel,

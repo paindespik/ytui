@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../api/client.dart';
 import '../state/providers.dart';
@@ -29,6 +30,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   late final TextEditingController _tokenController;
   String? _testResult;
   bool _testing = false;
+  bool? _ignoringBattery;
 
   @override
   void initState() {
@@ -36,6 +38,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final settings = ref.read(settingsProvider);
     _urlController = TextEditingController(text: settings.url);
     _tokenController = TextEditingController(text: settings.token);
+    _loadBatteryStatus();
+  }
+
+  Future<void> _loadBatteryStatus() async {
+    final ignoring = await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+    if (mounted) setState(() => _ignoringBattery = ignoring);
+  }
+
+  Future<void> _requestBatteryExemption() async {
+    await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+    await _loadBatteryStatus();
   }
 
   @override
@@ -187,6 +200,57 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ),
             ),
+
+            // ─────────────────── Notifications Section ───────────────────
+            if (!widget.firstLaunch) ...[
+              const SizedBox(height: 24),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(kGutter),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Notifications',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      if (_ignoringBattery == false) ...[
+                        Text(
+                          'Battery optimization delays background checks: '
+                          'notifications for new videos can arrive hours late '
+                          'when the app is closed.',
+                          style: TextStyle(color: colorScheme.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.battery_saver),
+                          label: const Text('Disable battery optimization'),
+                          onPressed: _requestBatteryExemption,
+                        ),
+                      ] else
+                        Row(
+                          children: [
+                            const Icon(Icons.check_circle,
+                                size: 18, color: _kSuccessIcon),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _ignoringBattery == null
+                                    ? 'Checking battery optimization…'
+                                    : 'Battery optimization disabled — '
+                                        'background checks run on schedule.',
+                                style: TextStyle(
+                                    color: colorScheme.onSurfaceVariant),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
 
             // ─────────────────── Followed Channels Section ───────────────────
             if (!widget.firstLaunch) ...[

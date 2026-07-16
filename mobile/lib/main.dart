@@ -25,6 +25,7 @@ Future<void> main() async {
   MediaKit.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   await initNotifications();
+  await requestNotificationsPermission();
   await initForegroundTask();
   await registerBackgroundLiveCheck();
 

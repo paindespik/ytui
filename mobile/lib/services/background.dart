@@ -13,13 +13,24 @@ const _liveCheckTask = 'ytui.liveCheck';
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     if (task == _liveCheckTask) {
+      SharedPreferences? prefs;
       try {
         await initNotifications();
-        final prefs = await SharedPreferences.getInstance();
+        prefs = await SharedPreferences.getInstance();
+      } catch (e) {
+        debugPrint('ytui background init failed: $e');
+        return true;
+      }
+      // Each check is isolated: a lives failure must not skip new-video checks.
+      try {
         await checkLivesAndNotify(prefs);
-        await checkNewVideosAndNotify(prefs);
       } catch (e) {
         debugPrint('ytui live check failed: $e');
+      }
+      try {
+        await checkNewVideosAndNotify(prefs);
+      } catch (e) {
+        debugPrint('ytui new-video check failed: $e');
       }
     }
     return true;
