@@ -132,7 +132,12 @@ class Database:
 
     # -- feed cache (TTL, with stale fallback for upstream failures) --
 
-    def get_feed(self, channel_id: str, allow_stale: bool = False) -> list[Video] | None:
+    def get_feed(
+        self,
+        channel_id: str,
+        allow_stale: bool = False,
+        ttl_seconds: int | None = None,
+    ) -> list[Video] | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT fetched_at, videos_json FROM feed_items WHERE channel_id = ?",
@@ -141,7 +146,8 @@ class Database:
         if row is None:
             return None
         fetched_at, videos_json = row
-        if not allow_stale and time.time() - fetched_at > self.feed_ttl_seconds:
+        ttl = self.feed_ttl_seconds if ttl_seconds is None else ttl_seconds
+        if not allow_stale and time.time() - fetched_at > ttl:
             return None
         return [Video.model_validate(v) for v in json.loads(videos_json)]
 

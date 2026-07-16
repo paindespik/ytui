@@ -111,6 +111,14 @@ class YtuiClient:
             [Video.model_validate(v) for v in data["videos"]], data.get("warnings", [])
         )
 
+    async def suggestions(self, refresh: bool = False) -> FeedResult:
+        data = (
+            await self._request("GET", "/api/suggestions", params={"refresh": refresh})
+        ).json()
+        return FeedResult(
+            [Video.model_validate(v) for v in data["videos"]], data.get("warnings", [])
+        )
+
     async def search(
         self, query: str, limit: int = 20, source: str = "youtube"
     ) -> list[Video]:

@@ -21,6 +21,7 @@ class HomeFeedScreen(BrowseScreen):
         Binding("r", "refresh", "Refresh"),
         Binding("/", "search", "Search"),
         Binding("h", "history", "History"),
+        Binding("S", "suggestions", "Suggestions"),
         Binding("P", "local_playlists", "Playlists"),
         Binding("comma", "settings", "Settings"),
         Binding("q", "app.quit", "Quit"),
@@ -115,6 +116,9 @@ class HomeFeedScreen(BrowseScreen):
 
     def action_history(self) -> None:
         self.app.push_screen("history")
+
+    def action_suggestions(self) -> None:
+        self.app.push_screen("suggestions")
 
     def action_local_playlists(self) -> None:
         self.app.push_screen("local_playlists")

@@ -69,6 +69,12 @@ class YtuiApi {
     return FeedResult.fromJson(r.data as Map<String, dynamic>);
   }
 
+  Future<FeedResult> suggestions({bool refresh = false}) async {
+    final r =
+        await _request('GET', '/api/suggestions', query: {'refresh': refresh});
+    return FeedResult.fromJson(r.data as Map<String, dynamic>);
+  }
+
   Future<List<Video>> search(
     String query, {
     int limit = 20,

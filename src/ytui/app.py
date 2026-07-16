@@ -22,6 +22,7 @@ from .ui.screens.local_playlists import LocalPlaylistsScreen
 from .ui.screens.playlist import PlaylistScreen
 from .ui.screens.search import SearchScreen
 from .ui.screens.settings import SettingsScreen
+from .ui.screens.suggestions import SuggestionsScreen
 from .ui.widgets.modals import PlaylistPickerModal, TextInputModal
 from .ui.widgets.video_list import VideoList
 
@@ -77,6 +78,7 @@ class YtuiApp(App):
         "history": HistoryScreen,
         "settings": SettingsScreen,
         "local_playlists": LocalPlaylistsScreen,
+        "suggestions": SuggestionsScreen,
     }
 
     def __init__(self, config: Config) -> None:

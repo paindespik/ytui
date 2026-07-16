@@ -24,6 +24,19 @@ class FeedNotifier extends AsyncNotifier<FeedResult> {
   }
 }
 
+final suggestionsProvider = AsyncNotifierProvider<SuggestionsNotifier, FeedResult>(
+    SuggestionsNotifier.new);
+
+class SuggestionsNotifier extends AsyncNotifier<FeedResult> {
+  @override
+  Future<FeedResult> build() => ref.watch(apiProvider).suggestions();
+
+  Future<void> refresh() async {
+    state = await AsyncValue.guard(
+        () => ref.read(apiProvider).suggestions(refresh: true));
+  }
+}
+
 final searchProvider = FutureProvider.autoDispose
     .family<List<Video>, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).search(arg.$1, source: arg.$2));

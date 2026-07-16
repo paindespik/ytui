@@ -8,9 +8,10 @@ from fastapi import Depends, FastAPI
 
 from . import __version__
 from .db import Database
-from .routers import auth, channels, feed, history, lives, playlists, videos
+from .routers import auth, channels, feed, history, lives, playlists, suggestions, videos
 from .security import require_token
 from .services.feed import FeedService
+from .services.suggestions import SuggestionsService
 from .services.live import LiveMonitor
 from .services.youtube import YouTubeService
 from .settings import Settings
@@ -28,6 +29,9 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
         )
         app.state.db = db
         app.state.feed_service = FeedService(db)
+        app.state.suggestions_service = SuggestionsService(
+            db, ttl_seconds=settings.suggestions_ttl_minutes * 60
+        )
         app.state.youtube_service = YouTubeService(settings.data_dir)
         app.state.live_monitor = LiveMonitor(db, check_minutes=settings.live_check_minutes)
         if start_live_poll:
@@ -45,7 +49,7 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
     async def health() -> dict:
         return {"status": "ok", "version": __version__}
 
-    for router in (feed, videos, channels, history, playlists, lives, auth):
+    for router in (feed, suggestions, videos, channels, history, playlists, lives, auth):
         app.include_router(
             router.router, prefix="/api", dependencies=[Depends(require_token)]
         )

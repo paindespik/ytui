@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     )
     data_dir: Path = Field(default=Path("/data"), validation_alias="YTUI_DATA_DIR")
     feed_ttl_minutes: int = Field(default=15, validation_alias="YTUI_FEED_TTL_MINUTES")
+    suggestions_ttl_minutes: int = Field(
+        default=30, validation_alias="YTUI_SUGGESTIONS_TTL_MINUTES"
+    )
     live_check_minutes: int = Field(default=5, validation_alias="YTUI_LIVE_CHECK_MINUTES")
     client_secret_path: Path | None = Field(
         default=None, validation_alias="YTUI_CLIENT_SECRET_PATH"
