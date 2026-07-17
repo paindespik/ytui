@@ -12,15 +12,20 @@ import subprocess
 from .models import Video
 
 
-def send_live_notification(video: Video) -> bool:
-    """Blocking desktop notification. True if the user clicked the action."""
+def send_live_notification(video: Video) -> str:
+    """Blocking desktop notification.
+
+    Returns the clicked action: "watch" (play in mpv), "default" (open in
+    ytui), or "" if the notification was dismissed or actions are unsupported.
+    """
     if shutil.which("notify-send") is None:
-        return False
+        return ""
     cmd = [
         "notify-send",
         "--app-name=ytui",
         "--icon=video-display",
         "--wait",
+        "--action=watch=▶ Regarder",
         "--action=default=Ouvrir dans ytui",
         f"🔴 Live — {video.channel_title or 'YouTube'}",
         video.title,
@@ -28,9 +33,10 @@ def send_live_notification(video: Video) -> bool:
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
     except OSError:
-        return False
+        return ""
     if res.returncode != 0:
         # Old libnotify without --wait/--action: fire-and-forget fallback.
-        subprocess.run(cmd[:3] + cmd[5:], capture_output=True, text=True)
-        return False
-    return bool(res.stdout.strip())
+        plain = [a for a in cmd if a != "--wait" and not a.startswith("--action=")]
+        subprocess.run(plain, capture_output=True, text=True)
+        return ""
+    return res.stdout.strip()

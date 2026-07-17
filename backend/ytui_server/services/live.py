@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -28,6 +29,9 @@ _CANONICAL_WATCH_RE = re.compile(
 _IS_LIVE_RE = re.compile(r'"isLive"\s*:\s*true')
 _IS_UPCOMING_RE = re.compile(r'"isUpcoming"\s*:\s*true')
 _TITLE_RE = re.compile(r'<meta (?:name="title"|property="og:title") content="([^"]*)"')
+# Channel name from ytInitialPlayerResponse.videoDetails — same JSON block as
+# "isLive", so any page that matches _IS_LIVE_RE also carries it.
+_AUTHOR_RE = re.compile(r'"author"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
 def parse_live_page(page: str, channel_id: str, channel_title: str = "") -> Video | None:
@@ -39,6 +43,13 @@ def parse_live_page(page: str, channel_id: str, channel_title: str = "") -> Vide
         return None
     tm = _TITLE_RE.search(page)
     title = html.unescape(tm.group(1)) if tm else "Live"
+    if not channel_title:
+        am = _AUTHOR_RE.search(page)
+        if am:
+            try:
+                channel_title = json.loads(f'"{am.group(1)}"')
+            except ValueError:
+                channel_title = am.group(1)
     return Video(
         video_id=m.group(1),
         title=title,

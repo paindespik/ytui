@@ -39,6 +39,20 @@ def test_parse_live_page_upcoming():
     assert parse_live_page(UPCOMING_PAGE, "UCx") is None
 
 
+def test_parse_live_page_author_fallback():
+    page = LIVE_PAGE + ' "author":"Speak \\u0026 Machine"'
+    video = parse_live_page(page, "UCx")
+    assert video is not None
+    assert video.channel_title == "Speak & Machine"
+
+
+def test_parse_live_page_author_does_not_override_known_title():
+    page = LIVE_PAGE + ' "author":"Someone Else"'
+    video = parse_live_page(page, "UCx", "Chan")
+    assert video is not None
+    assert video.channel_title == "Chan"
+
+
 def test_lives_empty(client):
     assert client.get("/api/lives").json() == []
 

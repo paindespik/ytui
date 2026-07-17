@@ -148,7 +148,10 @@ class YtuiApp(App):
 
     def _notify_live_blocking(self, video: Video) -> None:
         # Blocks until the notification is dismissed or clicked (notify-send --wait).
-        if send_live_notification(video):
+        action = send_live_notification(video)
+        if action == "watch":
+            self.call_from_thread(self.play_video, video)
+        elif action:
             self.call_from_thread(self._focus_live, video)
 
     def _focus_live(self, video: Video) -> None:
