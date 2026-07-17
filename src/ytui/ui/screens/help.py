@@ -31,6 +31,8 @@ HELP_TEXT = """\
   C               Comment on the video (YouTube account)
   Space           Pause / resume mpv
   n               Next in mpv queue
+  [ / ]           Playback speed −/+ 0.25×
+  v               Cycle subtitles
 
 [b]Home feed[/b]
   r               Refresh feed

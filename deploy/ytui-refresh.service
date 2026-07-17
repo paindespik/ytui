@@ -1,0 +1,6 @@
+[Unit]
+Description=ytui backend weekly no-cache rebuild (fresh yt-dlp)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %h/ytui-deploy/deploy/deploy.sh --no-cache

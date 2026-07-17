@@ -15,6 +15,7 @@ from ..models import (
     CommentsResponse,
     PlaylistVideosResponse,
     SearchResponse,
+    SponsorSegmentsOut,
     StreamInfo,
     Video,
     VideoDetails,
@@ -97,10 +98,14 @@ async def video_streams(
     platform: Platform = "youtube",
     max_height: int = Query(default=1080, ge=144, le=4320),
     audio_only: bool = False,
+    sub_langs: str = "",
 ) -> StreamInfo:
     try:
         return await ytdlp.resolve_streams(
-            _video_url(video_id, platform), max_height=max_height, audio_only=audio_only
+            _video_url(video_id, platform),
+            max_height=max_height,
+            audio_only=audio_only,
+            sub_langs=sub_langs,
         )
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
@@ -119,6 +124,17 @@ async def related_videos(
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Related fetch failed: {exc}") from exc
     return SearchResponse(items=items)
+
+
+@router.get("/videos/{video_id}/sponsor", response_model=SponsorSegmentsOut)
+async def sponsor_segments(
+    video_id: str, request: Request, platform: Platform = "youtube"
+) -> SponsorSegmentsOut:
+    if platform != "youtube":
+        return SponsorSegmentsOut()
+    return SponsorSegmentsOut(
+        segments=await request.app.state.sponsorblock.get(video_id)
+    )
 
 
 @router.get("/videos/{video_id}/comments", response_model=CommentsResponse)

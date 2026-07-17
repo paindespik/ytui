@@ -8,11 +8,14 @@ All Google calls are blocking — callers wrap them in a thread.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 
 INSTALL_HINT = "pip install 'ytui-server[auth]'"
+
+log = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
@@ -69,6 +72,7 @@ class YouTubeService:
             try:
                 creds.refresh(Request())
             except Exception as exc:
+                log.warning("youtube oauth token refresh failed: %s", exc)
                 raise AuthError(f"OAuth token refresh failed: {exc}") from exc
             self.save_token(creds.to_json())
         if not creds.valid:
@@ -81,6 +85,7 @@ class YouTubeService:
         try:
             youtube.videos().rate(id=video_id, rating="like").execute()
         except Exception as exc:
+            log.warning("youtube like_video failed for %s: %s", video_id, exc)
             raise ApiError(_api_message(exc)) from exc
 
     def post_comment(self, video_id: str, text: str) -> None:
@@ -95,6 +100,7 @@ class YouTubeService:
         try:
             youtube.commentThreads().insert(part="snippet", body=body).execute()
         except Exception as exc:
+            log.warning("youtube post_comment failed for %s: %s", video_id, exc)
             raise ApiError(_api_message(exc)) from exc
 
 

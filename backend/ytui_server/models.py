@@ -105,6 +105,13 @@ class VideoDetails(BaseModel):
     upload_date: str = ""
 
 
+class SubtitleTrackOut(BaseModel):
+    lang: str
+    label: str = ""
+    url: str
+    auto: bool = False
+
+
 class StreamInfo(BaseModel):
     kind: Literal["hls", "progressive", "split"]
     url: str
@@ -113,6 +120,7 @@ class StreamInfo(BaseModel):
     title: str = ""
     duration: int | None = None
     expires_at: datetime | None = None
+    subtitles: list[SubtitleTrackOut] = []
 
 
 class FollowedChannel(BaseModel):
@@ -198,3 +206,25 @@ class LiveOut(BaseModel):
 
 class AuthStatusOut(BaseModel):
     authenticated: bool
+
+
+class StatusOut(BaseModel):
+    version: str
+    uptime_seconds: float
+    db_bytes: int
+    history_rows: int
+    channels: int
+    feed_cached_channels: int
+    feed_newest_age_seconds: float | None = None
+    feed_oldest_age_seconds: float | None = None
+    lives_active: int
+
+
+class SponsorSegment(BaseModel):
+    category: str
+    start: float
+    end: float
+
+
+class SponsorSegmentsOut(BaseModel):
+    segments: list[SponsorSegment] = []

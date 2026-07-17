@@ -312,6 +312,27 @@ async def test_push_youtube_token_and_status(client):
     assert await client.auth_status() is True
 
 
+@respx.mock
+async def test_sponsor_segments(client):
+    respx.get(f"{BASE}/api/videos/abc/sponsor").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "segments": [
+                    {"category": "sponsor", "start": 10.0, "end": 42.5},
+                    {"category": "selfpromo", "start": 60.0, "end": 90.0},
+                ]
+            },
+        )
+    )
+    segments = await client.sponsor_segments("abc")
+    assert [(s.category, s.start, s.end) for s in segments] == [
+        ("sponsor", 10.0, 42.5),
+        ("selfpromo", 60.0, 90.0),
+    ]
+    assert respx.calls.last.request.url.params["platform"] == "youtube"
+
+
 def test_resume_start():
     assert resume_start(50.0, 600.0) == 50.0
     assert resume_start(590.0, 600.0) == 0.0  # within 5% of the end

@@ -54,3 +54,24 @@ docker compose -f deploy/docker-compose.yml logs -f ytui-backend   # logs
 docker compose -f deploy/docker-compose.yml up -d --build          # redeploy manuel
 docker compose -f deploy/docker-compose.yml down                   # stop
 ```
+
+## Backups & maintenance
+
+Deux timers systemd *user* sur `server` :
+
+- `ytui-backup.timer` — snapshot quotidien (04:00) de `meta.sqlite` via l'API backup
+  de SQLite (compatible WAL, exécuté dans le conteneur), rétention 14 jours.
+  Les fichiers atterrissent dans `deploy/data/backups/` (volume `/data`).
+- `ytui-refresh.timer` — rebuild hebdomadaire (dimanche 05:00) de l'image Docker
+  sans cache (`deploy/deploy.sh --no-cache`) pour embarquer le dernier yt-dlp.
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp deploy/ytui-backup.{service,timer} deploy/ytui-refresh.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ytui-backup.timer ytui-refresh.timer
+loginctl enable-linger $USER   # obligatoire : timers user sans session ouverte
+```
+
+Backup manuel : `bash deploy/backup.sh` (crée `deploy/data/backups/meta-<date>.sqlite`).
+Vérifier : `systemctl --user list-timers`.

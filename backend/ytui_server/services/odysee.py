@@ -8,6 +8,7 @@ extractor for details/streams/downloads.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,6 +23,8 @@ COMMENTS_URL = "https://comments.odysee.tv/api/v2"
 TIMEOUT = httpx.Timeout(10.0)
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
 _HEADERS = {"User-Agent": USER_AGENT}
+
+log = logging.getLogger(__name__)
 
 
 class OdyseeError(Exception):
@@ -114,6 +117,7 @@ async def search(query: str, limit: int = 20) -> list[Video]:
     except OdyseeError:
         raise
     except Exception as exc:
+        log.warning("odysee search failed: %s", exc)
         raise OdyseeError(f"search failed: {exc}") from exc
     videos: list[Video] = []
     for url in urls:
@@ -162,6 +166,7 @@ async def channel_videos(channel_id: str, limit: int = 50) -> list[Video]:
     except OdyseeError:
         raise
     except Exception as exc:
+        log.warning("odysee channel listing failed for %s: %s", channel_id, exc)
         raise OdyseeError(f"channel listing failed: {exc}") from exc
     return videos[:limit]
 
@@ -215,11 +220,13 @@ async def comments(claim_id: str, page: int = 1, page_size: int = 50) -> Comment
                     reactions = (resp.json().get("result") or {}).get(
                         "others_reactions"
                     ) or {}
-                except Exception:
+                except Exception as exc:
+                    log.warning("odysee reaction.List failed: %s", exc)
                     reactions = {}  # reactions are cosmetic; ignore failures
     except OdyseeError:
         raise
     except Exception as exc:
+        log.warning("odysee comments fetch failed for %s: %s", claim_id, exc)
         raise OdyseeError(f"comments fetch failed: {exc}") from exc
     out: list[CommentOut] = []
     for c in items:

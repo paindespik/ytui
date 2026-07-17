@@ -7,6 +7,7 @@ server database instead of config.toml.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -34,6 +35,28 @@ _CANONICAL_RE = re.compile(
 )
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
+
+log = logging.getLogger(__name__)
+
+
+async def _get_with_retry(
+    client: httpx.AsyncClient, url: str, *, attempts: int = 2, **kwargs
+) -> httpx.Response:
+    """GET with one retry on transport errors and 5xx (upstream blips)."""
+    for attempt in range(attempts):
+        try:
+            resp = await client.get(url, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            retryable = (
+                isinstance(exc, httpx.TransportError)
+                or exc.response.status_code >= 500
+            )
+            if attempt + 1 == attempts or not retryable:
+                raise
+            await asyncio.sleep(0.5 * (attempt + 1))
+    raise AssertionError("unreachable")
 
 
 class FeedResult:
@@ -226,15 +249,16 @@ class FeedService:
                 if cached is not None:
                     return cached, None
             try:
-                resp = await client.get(
+                resp = await _get_with_retry(
+                    client,
                     RSS_URL.format(channel_id=channel_id),
                     headers={"User-Agent": USER_AGENT},
                 )
-                resp.raise_for_status()
                 videos = parse_rss(resp.content)
                 self.db.set_feed(channel_id, videos)
                 return videos, None
             except Exception as exc:
+                log.warning("feed fetch failed for %s: %s", channel.ref, exc)
                 stale = self.db.get_feed(channel_id, allow_stale=True)
                 if stale is not None:
                     return stale, f"{channel.ref}: using cached data ({type(exc).__name__})"
@@ -249,16 +273,17 @@ class FeedService:
             if cached is not None:
                 return cached, None
         try:
-            resp = await client.get(
+            resp = await _get_with_retry(
+                client,
                 BITCHUTE_RSS_URL.format(channel_id=channel.channel_id),
                 headers={"User-Agent": USER_AGENT},
                 follow_redirects=True,
             )
-            resp.raise_for_status()
             videos = parse_bitchute_rss(resp.content, channel_id=channel.channel_id)
             self.db.set_feed(cache_key, videos)
             return videos, None
         except Exception as exc:
+            log.warning("feed fetch failed for %s: %s", channel.ref, exc)
             stale = self.db.get_feed(cache_key, allow_stale=True)
             if stale is not None:
                 return stale, f"{channel.ref}: using cached data ({type(exc).__name__})"
@@ -273,16 +298,17 @@ class FeedService:
             if cached is not None:
                 return cached, None
         try:
-            resp = await client.get(
+            resp = await _get_with_retry(
+                client,
                 ODYSEE_RSS_URL.format(channel_id=channel.channel_id),
                 headers={"User-Agent": USER_AGENT},
                 follow_redirects=True,
             )
-            resp.raise_for_status()
             videos = parse_odysee_rss(resp.content, channel_id=channel.channel_id)
             self.db.set_feed(cache_key, videos)
             return videos, None
         except Exception as exc:
+            log.warning("feed fetch failed for %s: %s", channel.ref, exc)
             stale = self.db.get_feed(cache_key, allow_stale=True)
             if stale is not None:
                 return stale, f"{channel.ref}: using cached data ({type(exc).__name__})"

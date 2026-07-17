@@ -1,0 +1,6 @@
+[Unit]
+Description=ytui backend SQLite backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash %h/ytui-deploy/deploy/backup.sh

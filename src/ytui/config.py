@@ -25,6 +25,10 @@ format = "bestvideo[height<=?1080]+bestaudio/best"
 audio_only = false
 # Directory for 'd' (download video)
 download_dir = "~/Videos"
+# Skip sponsored segments via SponsorBlock (server-side lookup)
+sponsorblock = true
+# Subtitle languages offered in mpv (manual + auto captions). "" disables.
+subtitle_langs = "fr,en"
 
 [ui]
 thumbnails = true
@@ -46,6 +50,8 @@ class PlayerConfig(BaseModel):
     format: str = "bestvideo[height<=?1080]+bestaudio/best"
     audio_only: bool = False
     download_dir: str = "~/Videos"
+    sponsorblock: bool = True
+    subtitle_langs: str = "fr,en"
 
 
 class UIConfig(BaseModel):

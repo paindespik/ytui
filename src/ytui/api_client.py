@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .models import Comment, Video, VideoDetails
+from .models import Comment, SponsorSegment, Video, VideoDetails
 
 
 def _encode(video_id: str) -> str:
@@ -193,6 +193,18 @@ class YtuiClient:
                 timeout=SLOW_TIMEOUT,
             )
         ).json()
+
+    async def sponsor_segments(
+        self, video_id: str, platform: str = "youtube"
+    ) -> list[SponsorSegment]:
+        data = (
+            await self._request(
+                "GET",
+                f"/api/videos/{_encode(video_id)}/sponsor",
+                params={"platform": platform},
+            )
+        ).json()
+        return [SponsorSegment.model_validate(s) for s in data.get("segments", [])]
 
     # -- followed channels --
 

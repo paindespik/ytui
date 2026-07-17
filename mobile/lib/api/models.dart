@@ -118,6 +118,28 @@ class VideoDetails {
       );
 }
 
+class SubtitleTrackInfo {
+  final String lang;
+  final String label;
+  final String url;
+  final bool auto;
+
+  const SubtitleTrackInfo({
+    required this.lang,
+    this.label = '',
+    required this.url,
+    this.auto = false,
+  });
+
+  factory SubtitleTrackInfo.fromJson(Map<String, dynamic> json) =>
+      SubtitleTrackInfo(
+        lang: json['lang'] as String? ?? '',
+        label: json['label'] as String? ?? '',
+        url: json['url'] as String? ?? '',
+        auto: json['auto'] as bool? ?? false,
+      );
+}
+
 class StreamInfo {
   final String kind; // hls | progressive | split
   final String url;
@@ -126,6 +148,7 @@ class StreamInfo {
   final String title;
   final int? duration;
   final DateTime? expiresAt;
+  final List<SubtitleTrackInfo> subtitles;
 
   const StreamInfo({
     required this.kind,
@@ -135,6 +158,7 @@ class StreamInfo {
     this.title = '',
     this.duration,
     this.expiresAt,
+    this.subtitles = const [],
   });
 
   factory StreamInfo.fromJson(Map<String, dynamic> json) => StreamInfo(
@@ -147,6 +171,27 @@ class StreamInfo {
         expiresAt: json['expires_at'] != null
             ? DateTime.tryParse(json['expires_at'] as String)
             : null,
+        subtitles: (json['subtitles'] as List<dynamic>? ?? const [])
+            .map((e) => SubtitleTrackInfo.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class SponsorSegment {
+  final String category;
+  final double start;
+  final double end;
+
+  const SponsorSegment({
+    required this.category,
+    required this.start,
+    required this.end,
+  });
+
+  factory SponsorSegment.fromJson(Map<String, dynamic> json) => SponsorSegment(
+        category: json['category'] as String? ?? '',
+        start: (json['start'] as num? ?? 0).toDouble(),
+        end: (json['end'] as num? ?? 0).toDouble(),
       );
 }
 

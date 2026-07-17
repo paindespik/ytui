@@ -25,6 +25,9 @@ class BrowseScreen(Screen):
         Binding("C", "comment", "Comment", show=False),
         Binding("space", "pause_toggle", "Pause", show=False),
         Binding("n", "playlist_next", "Next in queue", show=False),
+        Binding("bracketright", "speed_up", "Speed +", show=False),
+        Binding("bracketleft", "speed_down", "Speed -", show=False),
+        Binding("v", "cycle_subs", "Subtitles", show=False),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
@@ -115,3 +118,12 @@ class BrowseScreen(Screen):
         if not self.app.player_status and not self.app.player.process_alive():
             return  # only meaningful while playback is active
         await self.app.playlist_next()
+
+    async def action_speed_up(self) -> None:
+        await self.app.change_speed(+0.25)
+
+    async def action_speed_down(self) -> None:
+        await self.app.change_speed(-0.25)
+
+    async def action_cycle_subs(self) -> None:
+        await self.app.cycle_subtitles()

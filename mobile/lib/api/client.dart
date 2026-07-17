@@ -19,6 +19,10 @@ class ApiException implements Exception {
 /// Path-encode an id: Odysee ids contain ':' and '@' — encode everywhere for safety.
 String _enc(String id) => Uri.encodeComponent(id);
 
+/// Subtitle languages requested with every stream resolution (manual tracks
+/// always included server-side; this only gates auto captions).
+const _kSubLangs = 'fr,en';
+
 class YtuiApi {
   final Dio dio;
 
@@ -132,6 +136,7 @@ class YtuiApi {
       'platform': platform,
       'max_height': maxHeight,
       'audio_only': audioOnly,
+      'sub_langs': _kSubLangs,
     });
     return StreamInfo.fromJson(r.data as Map<String, dynamic>);
   }
@@ -142,6 +147,16 @@ class YtuiApi {
         query: {'platform': platform, 'limit': limit});
     return ((r.data as Map<String, dynamic>)['items'] as List<dynamic>? ?? const [])
         .map((e) => Video.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<SponsorSegment>> sponsorSegments(String videoId,
+      {String platform = 'youtube'}) async {
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}/sponsor',
+        query: {'platform': platform});
+    return ((r.data as Map<String, dynamic>)['segments'] as List<dynamic>? ??
+            const [])
+        .map((e) => SponsorSegment.fromJson(e as Map<String, dynamic>))
         .toList();
   }
 

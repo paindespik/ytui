@@ -116,3 +116,11 @@ class VideoDetails(BaseModel):
     like_count: int | None = None
     duration: int | None = None
     upload_date: str = ""
+
+
+class SponsorSegment(BaseModel):
+    """A SponsorBlock skip segment, as served by the backend API."""
+
+    category: str
+    start: float
+    end: float

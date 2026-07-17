@@ -201,6 +201,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
 
+            // ─────────────────── Lecture Section ───────────────────
+            if (!widget.firstLaunch) ...[
+              const SizedBox(height: 24),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(kGutter),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Lecture',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('SponsorBlock'),
+                        subtitle: const Text(
+                            'Passer automatiquement les segments sponsorisés'),
+                        value: ref.watch(sponsorblockProvider),
+                        onChanged: (v) => ref
+                            .read(sponsorblockProvider.notifier)
+                            .setEnabled(v),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
             // ─────────────────── Notifications Section ───────────────────
             if (!widget.firstLaunch) ...[
               const SizedBox(height: 24),

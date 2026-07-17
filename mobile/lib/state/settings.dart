@@ -9,6 +9,7 @@ const kServerTokenKey = 'server_token';
 const kSeenLiveIdsKey = 'seen_live_ids';
 const kSeenVideoIdsKey = 'seen_video_ids';
 const kFirstFeedSeedKey = 'first_feed_seed';
+const kSponsorblockKey = 'sponsorblock_enabled';
 
 class ServerSettings {
   final String url;
@@ -44,3 +45,18 @@ final sharedPreferencesProvider =
 
 final settingsProvider =
     NotifierProvider<SettingsNotifier, ServerSettings>(SettingsNotifier.new);
+
+
+class SponsorblockNotifier extends Notifier<bool> {
+  @override
+  bool build() =>
+      ref.watch(sharedPreferencesProvider).getBool(kSponsorblockKey) ?? true;
+
+  Future<void> setEnabled(bool value) async {
+    await ref.read(sharedPreferencesProvider).setBool(kSponsorblockKey, value);
+    state = value;
+  }
+}
+
+final sponsorblockProvider =
+    NotifierProvider<SponsorblockNotifier, bool>(SponsorblockNotifier.new);

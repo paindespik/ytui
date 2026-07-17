@@ -183,6 +183,49 @@ def test_streams_none_found(client):
     assert resp.status_code == 502
 
 
+def test_streams_subtitles_manual_and_auto(client):
+    info = _info(
+        [PROG],
+        subtitles={"fr": [{"ext": "vtt", "url": "u1", "name": "French"}],
+                   "live_chat": [{"ext": "json", "url": "chat"}]},
+        automatic_captions={"en": [{"ext": "vtt", "url": "u2"}],
+                            "de": [{"ext": "vtt", "url": "u3"}]},
+    )
+    with _patch_ydl(info):
+        resp = client.get(
+            "/api/videos/vid000000001/streams", params={"sub_langs": "en"}
+        )
+    subs = resp.json()["subtitles"]
+    assert [(s["lang"], s["label"], s["url"], s["auto"]) for s in subs] == [
+        ("fr", "French", "u1", False),
+        ("en", "en (auto)", "u2", True),
+    ]
+
+
+def test_streams_subtitles_default_manual_only(client):
+    info = _info(
+        [PROG],
+        subtitles={"fr": [{"ext": "vtt", "url": "u1", "name": "French"}]},
+        automatic_captions={"en": [{"ext": "vtt", "url": "u2"}]},
+    )
+    with _patch_ydl(info):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert [s["lang"] for s in resp.json()["subtitles"]] == ["fr"]
+
+
+def test_streams_subtitles_absent_in_audio_only(client):
+    info = _info(
+        [PROG, AONLY],
+        subtitles={"fr": [{"ext": "vtt", "url": "u1", "name": "French"}]},
+    )
+    with _patch_ydl(info):
+        resp = client.get(
+            "/api/videos/vid000000001/streams",
+            params={"audio_only": True, "sub_langs": "fr"},
+        )
+    assert resp.json()["subtitles"] == []
+
+
 # ─── entry_to_item unit tests (ported) ───
 
 
@@ -251,8 +294,9 @@ def _yt_initial_data_html(lockups):
 
 
 class FakeResponse:
-    def __init__(self, text):
+    def __init__(self, text, status_code=200):
         self.text = text
+        self.status_code = status_code
 
     def raise_for_status(self):
         return None
@@ -287,6 +331,14 @@ def test_related_videos(client):
     assert items[0]["title"] == "Related video"
     assert items[0]["channel_title"] == "Chan Related"
     assert items[0]["duration"] == 260
+
+
+def test_related_videos_rate_limited(client):
+    fake_client = FakeAsyncClient(response=FakeResponse("", status_code=429))
+    with patch.object(httpx, "AsyncClient", lambda **kw: fake_client):
+        resp = client.get("/api/videos/vid000000001/related")
+    assert resp.status_code == 502
+    assert "rate-limited" in resp.json()["detail"]
 
 
 def test_related_videos_non_youtube_returns_empty(client):

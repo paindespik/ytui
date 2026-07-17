@@ -63,6 +63,24 @@ CREATE TABLE IF NOT EXISTS local_playlist_items (
 );
 """
 
+# Each entry moves PRAGMA user_version from i to i+1. Never modify a shipped
+# entry; append a new one at the end.
+_MIGRATIONS: list[str] = [
+    # 1: watch-history sort index (ORDER BY watched_at DESC without full scan)
+    """
+    CREATE INDEX IF NOT EXISTS idx_watch_history_watched_at
+        ON watch_history(watched_at DESC);
+    """,
+    # 2: SponsorBlock segment cache
+    """
+    CREATE TABLE IF NOT EXISTS sponsor_segments (
+        video_id TEXT PRIMARY KEY,
+        fetched_at REAL NOT NULL,
+        segments_json TEXT NOT NULL
+    );
+    """,
+]
+
 
 class PlaylistRow:
     def __init__(self, playlist_id: int, name: str, created_at: float, item_count: int) -> None:
@@ -75,19 +93,52 @@ class PlaylistRow:
 class Database:
     """Thread-safe SQLite wrapper (single connection + lock; calls are fast)."""
 
-    def __init__(self, path: Path, feed_ttl_seconds: int = 15 * 60) -> None:
+    def __init__(
+        self,
+        path: Path,
+        feed_ttl_seconds: int = 15 * 60,
+        history_max_rows: int = 0,
+    ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._lock = threading.Lock()
+        self._path = path
         self.feed_ttl_seconds = feed_ttl_seconds
+        self.history_max_rows = history_max_rows
         with self._lock:
-            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+            self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
+            version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+            for i, script in enumerate(_MIGRATIONS[version:], start=version + 1):
+                self._conn.executescript(script)
+                self._conn.execute(f"PRAGMA user_version = {i}")
             self._conn.commit()
 
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    def stats(self) -> dict:
+        """Row counts and feed-cache freshness for the status endpoint."""
+        with self._lock:
+            history = self._conn.execute(
+                "SELECT COUNT(*) FROM watch_history"
+            ).fetchone()[0]
+            channels = self._conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
+            cached, newest, oldest = self._conn.execute(
+                "SELECT COUNT(*), MAX(fetched_at), MIN(fetched_at) FROM feed_items"
+            ).fetchone()
+        return {
+            "history_rows": history,
+            "channels": channels,
+            "feed_cached_channels": cached,
+            "feed_newest_fetched_at": newest,
+            "feed_oldest_fetched_at": oldest,
+            "db_bytes": self._path.stat().st_size if self._path.exists() else 0,
+        }
 
     # -- handle resolutions --
 
@@ -165,6 +216,34 @@ class Database:
         if videos and videos[0].channel_title:
             self.set_channel_name(channel_id, videos[0].channel_title)
 
+    # -- sponsor segments (SponsorBlock cache) --
+
+    def get_sponsor_segments(
+        self, video_id: str, ttl_seconds: int, allow_stale: bool = False
+    ) -> list[dict] | None:
+        """Cached segments, or None if absent/expired (unless allow_stale)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT fetched_at, segments_json FROM sponsor_segments "
+                "WHERE video_id = ?",
+                (video_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        fetched_at, segments_json = row
+        if not allow_stale and time.time() - fetched_at > ttl_seconds:
+            return None
+        return json.loads(segments_json)
+
+    def set_sponsor_segments(self, video_id: str, segments: list[dict]) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO sponsor_segments "
+                "(video_id, fetched_at, segments_json) VALUES (?, ?, ?)",
+                (video_id, time.time(), json.dumps(segments)),
+            )
+            self._conn.commit()
+
     # -- followed channels --
 
     def list_channels(self) -> list[FollowedChannel]:
@@ -233,6 +312,13 @@ class Database:
                     video.channel_id,
                 ),
             )
+            if self.history_max_rows > 0:
+                self._conn.execute(
+                    "DELETE FROM watch_history WHERE video_id IN ("
+                    "SELECT video_id FROM watch_history "
+                    "ORDER BY watched_at DESC LIMIT -1 OFFSET ?)",
+                    (self.history_max_rows,),
+                )
             self._conn.commit()
 
     def save_position(self, video_id: str, position: float, duration: float | None) -> bool:

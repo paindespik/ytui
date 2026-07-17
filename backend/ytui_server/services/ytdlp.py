@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote_plus, urlparse
@@ -15,9 +16,11 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 import anyio
 import httpx
 
-from ..models import StreamInfo, Video, VideoDetails
+from ..models import StreamInfo, SubtitleTrackOut, Video, VideoDetails
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
+
+log = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
 
 _YDL_FLAT_OPTS = {
@@ -25,6 +28,7 @@ _YDL_FLAT_OPTS = {
     "no_warnings": True,
     "extract_flat": True,
     "skip_download": True,
+    "socket_timeout": 15,
 }
 
 _PLAYLIST_URL_RE = re.compile(r"[?&]list=([\w-]+)")
@@ -32,7 +36,8 @@ _CHANNEL_URL_RE = re.compile(r"youtube\.com/(?:channel/|c/|user/|@)")
 _ODYSEE_PATH_RE = re.compile(r"odysee\.com/(?:@[^/]+(?::\w+)?/)?([^/?#]+:[0-9a-f]+)")
 _LBRY_URI_RE = re.compile(r"lbry://(?:@[^/]+(?:[:#]\w+)?/)?([^/?#:]+)[:#]([0-9a-f]+)")
 
-_SEMAPHORE = asyncio.Semaphore(4)
+_INTERACTIVE_SEM = asyncio.Semaphore(3)  # streams/details: a user is waiting
+_BULK_SEM = asyncio.Semaphore(4)         # search/listings/suggestions
 
 
 class UpstreamError(Exception):
@@ -126,17 +131,18 @@ def _extract_flat_info(url: str, limit: int | None = None) -> tuple[list[Video],
     return items, info.get("title") or ""
 
 
-async def _run(func, *args):
-    async with _SEMAPHORE:
+async def _run(sem: asyncio.Semaphore, func, *args):
+    async with sem:
         try:
             return await anyio.to_thread.run_sync(func, *args)
         except Exception as exc:
+            log.warning("yt-dlp %s failed: %s", func.__name__, exc)
             raise UpstreamError(str(exc)) from exc
 
 
 async def search_videos(query: str, limit: int = 20) -> list[Video]:
     url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
-    return await _run(_extract_flat, url, limit)
+    return await _run(_BULK_SEM, _extract_flat, url, limit)
 
 
 async def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
@@ -147,17 +153,17 @@ async def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
         and not url.endswith("/videos")
     ):
         url += "/videos"
-    return await _run(_extract_flat, url, limit)
+    return await _run(_BULK_SEM, _extract_flat, url, limit)
 
 
 async def playlist_videos(playlist_url: str, limit: int = 200) -> tuple[list[Video], str]:
-    return await _run(_extract_flat_info, playlist_url, limit)
+    return await _run(_BULK_SEM, _extract_flat_info, playlist_url, limit)
 
 
 def _extract_details(url: str) -> VideoDetails:
     import yt_dlp
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     upload_date = info.get("upload_date") or ""
@@ -178,7 +184,7 @@ def _extract_details(url: str) -> VideoDetails:
 
 
 async def video_details(url: str) -> VideoDetails:
-    return await _run(_extract_details, url)
+    return await _run(_INTERACTIVE_SEM, _extract_details, url)
 
 
 def _stream_expiry(url: str) -> datetime | None:
@@ -193,10 +199,12 @@ def _stream_expiry(url: str) -> datetime | None:
     return None
 
 
-def _extract_streams(url: str, max_height: int, audio_only: bool) -> StreamInfo:
+def _extract_streams(
+    url: str, max_height: int, audio_only: bool, sub_langs: str
+) -> StreamInfo:
     import yt_dlp
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
@@ -204,6 +212,39 @@ def _extract_streams(url: str, max_height: int, audio_only: bool) -> StreamInfo:
     duration = info.get("duration")
     duration = int(duration) if duration else None
     formats = info.get("formats") or []
+
+    def _pick_sub_url(fmts: list[dict]) -> str | None:
+        for f in fmts:
+            if f.get("ext") == "vtt":
+                return f.get("url")
+        return fmts[0].get("url") if fmts else None
+
+    subtitles: list[SubtitleTrackOut] = []
+    if not audio_only:
+        for lang, fmts in (info.get("subtitles") or {}).items():
+            if lang.startswith("live_chat"):
+                continue  # chat replay JSON, not a subtitle track
+            sub_url = _pick_sub_url(fmts)
+            if sub_url:
+                subtitles.append(
+                    SubtitleTrackOut(
+                        lang=lang, label=(fmts[0].get("name") or lang), url=sub_url
+                    )
+                )
+        # Manual subs: every language (short list). Auto captions: only the
+        # requested languages, else hundreds of translated variants show up.
+        wanted = [s.strip() for s in sub_langs.split(",") if s.strip()]
+        manual = {s.lang for s in subtitles}
+        for lang in wanted:
+            if lang in manual:
+                continue
+            sub_url = _pick_sub_url((info.get("automatic_captions") or {}).get(lang) or [])
+            if sub_url:
+                subtitles.append(
+                    SubtitleTrackOut(
+                        lang=lang, label=f"{lang} (auto)", url=sub_url, auto=True
+                    )
+                )
 
     def make(kind, url_, video_url=None, audio_url=None):
         return StreamInfo(
@@ -214,6 +255,7 @@ def _extract_streams(url: str, max_height: int, audio_only: bool) -> StreamInfo:
             title=title,
             duration=duration,
             expires_at=_stream_expiry(url_),
+            subtitles=subtitles,
         )
 
     if audio_only:
@@ -275,9 +317,11 @@ def _extract_streams(url: str, max_height: int, audio_only: bool) -> StreamInfo:
 
 
 async def resolve_streams(
-    url: str, max_height: int = 1080, audio_only: bool = False
+    url: str, max_height: int = 1080, audio_only: bool = False, sub_langs: str = ""
 ) -> StreamInfo:
-    return await _run(_extract_streams, url, max_height, audio_only)
+    return await _run(
+        _INTERACTIVE_SEM, _extract_streams, url, max_height, audio_only, sub_langs
+    )
 
 
 def _parse_badge_duration(text: str) -> int | None:
@@ -377,6 +421,8 @@ async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
             resp = await http_client.get(url, headers=headers)
+            if resp.status_code == 429:
+                raise UpstreamError("YouTube rate-limited related videos (429)")
             resp.raise_for_status()
             html = resp.text
         match = _YT_INITIAL_DATA_RE.search(html)
@@ -386,6 +432,7 @@ async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
     except UpstreamError:
         raise
     except Exception as exc:
+        log.warning("yt-dlp related_videos failed: %s", exc)
         raise UpstreamError(str(exc)) from exc
 
     videos: list[Video] = []

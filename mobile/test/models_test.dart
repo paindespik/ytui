@@ -108,6 +108,42 @@ void main() {
           StreamInfo.fromJson({'kind': 'hls', 'url': 'https://x/m.m3u8'});
       expect(info.videoUrl, isNull);
       expect(info.expiresAt, isNull);
+      expect(info.subtitles, isEmpty);
+    });
+
+    test('parses subtitle tracks', () {
+      final info = StreamInfo.fromJson({
+        'kind': 'hls',
+        'url': 'https://x/m.m3u8',
+        'subtitles': [
+          {'lang': 'fr', 'label': 'French', 'url': 'u1', 'auto': false},
+          {'lang': 'en', 'label': 'en (auto)', 'url': 'u2', 'auto': true},
+        ],
+      });
+      expect(info.subtitles, hasLength(2));
+      expect(info.subtitles.first.lang, 'fr');
+      expect(info.subtitles.first.label, 'French');
+      expect(info.subtitles.last.auto, isTrue);
+    });
+  });
+
+  group('SponsorSegment', () {
+    test('parses backend payload', () {
+      final seg = SponsorSegment.fromJson({
+        'category': 'sponsor',
+        'start': 12.5,
+        'end': 42,
+      });
+      expect(seg.category, 'sponsor');
+      expect(seg.start, 12.5);
+      expect(seg.end, 42.0);
+    });
+
+    test('missing fields default safely', () {
+      final seg = SponsorSegment.fromJson(const {});
+      expect(seg.category, '');
+      expect(seg.start, 0.0);
+      expect(seg.end, 0.0);
     });
   });
 

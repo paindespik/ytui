@@ -38,8 +38,16 @@ def build_command(
     audio = player.audio_only if audio_only is None else audio_only
     if audio:
         cmd.append("--no-video")
-    elif player.format:
-        cmd.append(f"--ytdl-format={player.format}")
+    else:
+        if player.format:
+            cmd.append(f"--ytdl-format={player.format}")
+        if player.subtitle_langs:
+            # Expose YouTube subtitle tracks (manual + auto captions) through
+            # mpv's ytdl hook; they are not selected by default. Options without
+            # an argument need the trailing '='.
+            cmd.append(f"--ytdl-raw-options-append=sub-langs={player.subtitle_langs}")
+            cmd.append("--ytdl-raw-options-append=write-subs=")
+            cmd.append("--ytdl-raw-options-append=write-auto-subs=")
     if ipc_socket:
         cmd.append(f"--input-ipc-server={ipc_socket}")
     if start and start > 0:
@@ -74,9 +82,10 @@ def play(
 class PlayerStatus:
     """Snapshot of the controlled mpv instance."""
 
-    def __init__(self, paused: bool, queued: int) -> None:
+    def __init__(self, paused: bool, queued: int, speed: float = 1.0) -> None:
         self.paused = paused
         self.queued = queued
+        self.speed = speed
 
 
 class MpvController:
@@ -206,6 +215,31 @@ class MpvController:
         resp = await self.command("playlist-next")
         return resp is not None and resp.get("error") == "success"
 
+    async def seek_absolute(self, seconds: float) -> bool:
+        resp = await self.command("seek", seconds, "absolute+exact")
+        return resp is not None and resp.get("error") == "success"
+
+    async def set_speed(self, speed: float) -> bool:
+        resp = await self.command("set_property", "speed", round(speed, 2))
+        return resp is not None and resp.get("error") == "success"
+
+    async def speed(self) -> float | None:
+        resp = await self.command("get_property", "speed")
+        if resp is None or resp.get("error") != "success":
+            return None
+        return float(resp.get("data") or 1.0)
+
+    async def cycle_subtitles(self) -> str | None:
+        """Cycle sub tracks; return the new track label, 'off', or None if no player."""
+        resp = await self.command("cycle", "sub")
+        if resp is None or resp.get("error") != "success":
+            return None
+        cur = await self.command("get_property", "current-tracks/sub")
+        if cur is None or cur.get("error") != "success" or not cur.get("data"):
+            return "off"
+        data = cur["data"]
+        return data.get("title") or data.get("lang") or "on"
+
     async def playback_snapshot(self) -> tuple[str, str, float, float] | None:
         """(path, title, time_pos, duration) of the current file, or None if unavailable."""
         values = []
@@ -233,8 +267,12 @@ class MpvController:
         pos = pos_resp.get("data") if pos_resp and pos_resp.get("error") == "success" else -1
         pause_resp = await self.command("get_property", "pause")
         paused = bool(pause_resp.get("data")) if pause_resp else False
+        speed_resp = await self.command("get_property", "speed")
+        speed = 1.0
+        if speed_resp is not None and speed_resp.get("error") == "success":
+            speed = float(speed_resp.get("data") or 1.0)
         queued = max(0, count - pos - 1) if isinstance(pos, int) and pos >= 0 else 0
-        return PlayerStatus(paused=paused, queued=queued)
+        return PlayerStatus(paused=paused, queued=queued, speed=speed)
 
     async def close(self) -> None:
         await self._disconnect()

@@ -9,6 +9,10 @@ cd "$REPO_DIR"
 git fetch origin master
 git reset --hard origin/master
 
+if [[ "${1:-}" == "--no-cache" ]]; then
+    docker compose -f deploy/docker-compose.yml build --no-cache
+fi
+
 docker compose -f deploy/docker-compose.yml up -d --build
 docker image prune -f
 

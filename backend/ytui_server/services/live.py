@@ -87,24 +87,32 @@ class LiveMonitor:
         if not channels:
             self.lives = {}
             return
-        current: dict[str, tuple[Video, datetime]] = {}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            for channel in channels:
+        sem = asyncio.Semaphore(10)
+
+        async def check(channel) -> tuple[str, str, Video | None]:
+            async with sem:
                 try:
                     video = await check_channel_live(
                         client, channel.channel_id, channel.title
                     )
                 except Exception as exc:
                     log.debug("live check failed for %s: %s", channel.channel_id, exc)
-                    continue
-                if video is not None:
-                    previous = self.lives.get(channel.channel_id)
-                    detected_at = (
-                        previous[1]
-                        if previous and previous[0].video_id == video.video_id
-                        else datetime.now(tz=timezone.utc)
-                    )
-                    current[channel.channel_id] = (video, detected_at)
+                    video = None
+                return channel.channel_id, channel.title, video
+
+        current: dict[str, tuple[Video, datetime]] = {}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            results = await asyncio.gather(*(check(c) for c in channels))
+        for channel_id, _title, video in results:
+            if video is None:
+                continue
+            previous = self.lives.get(channel_id)
+            detected_at = (
+                previous[1]
+                if previous and previous[0].video_id == video.video_id
+                else datetime.now(tz=timezone.utc)
+            )
+            current[channel_id] = (video, detected_at)
         self.lives = current
 
     async def _loop(self) -> None:

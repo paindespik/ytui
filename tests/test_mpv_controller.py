@@ -118,6 +118,36 @@ async def test_playback_snapshot(fake_mpv):
     await ctrl.close()
 
 
+async def test_set_speed_and_seek_over_ipc(fake_mpv):
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    assert await ctrl.set_speed(1.5) is True
+    assert await ctrl.seek_absolute(123.0) is True
+    assert ["set_property", "speed", 1.5] in fake_mpv.commands
+    assert ["seek", 123.0, "absolute+exact"] in fake_mpv.commands
+    await ctrl.close()
+
+
+async def test_speed_reads_property(fake_mpv):
+    fake_mpv.properties["speed"] = 1.75
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    assert await ctrl.speed() == 1.75
+    status = await ctrl.status()
+    assert status is not None
+    assert status.speed == 1.75
+    await ctrl.close()
+
+
+async def test_cycle_subtitles_returns_label(fake_mpv):
+    fake_mpv.properties["current-tracks/sub"] = {"lang": "en", "title": "English"}
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    assert await ctrl.cycle_subtitles() == "English"
+    assert ["cycle", "sub"] in fake_mpv.commands
+
+    fake_mpv.properties["current-tracks/sub"] = None
+    assert await ctrl.cycle_subtitles() == "off"
+    await ctrl.close()
+
+
 def test_build_command_flags(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/mpv")
     cmd = build_command(URL, PLAYER, ipc_socket="/tmp/s.sock")
@@ -129,6 +159,20 @@ def test_build_command_flags(monkeypatch):
     audio_cmd = build_command(URL, PLAYER, audio_only=True)
     assert "--no-video" in audio_cmd
     assert not any(a.startswith("--ytdl-format") for a in audio_cmd)
+
+
+def test_build_command_subtitle_flags(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/mpv")
+    cmd = build_command(URL, PLAYER)  # subtitle_langs defaults to "fr,en"
+    assert "--ytdl-raw-options-append=sub-langs=fr,en" in cmd
+    assert "--ytdl-raw-options-append=write-subs=" in cmd
+    assert "--ytdl-raw-options-append=write-auto-subs=" in cmd
+
+    audio_cmd = build_command(URL, PLAYER, audio_only=True)
+    assert not any("sub-langs" in a for a in audio_cmd)
+
+    no_subs = build_command(URL, PlayerConfig(subtitle_langs=""))
+    assert not any("sub-langs" in a or "write-subs" in a for a in no_subs)
 
 
 def test_build_command_with_start(monkeypatch):

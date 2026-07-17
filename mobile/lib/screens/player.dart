@@ -15,6 +15,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../services/background_playback.dart';
 import '../state/providers.dart';
+import '../state/settings.dart';
 import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/responsive.dart';
@@ -54,9 +55,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _retried = false;
   String? _error;
   Timer? _heartbeat;
+  List<SponsorSegment> _segments = const [];
+  DateTime _lastSkip = DateTime.fromMillisecondsSinceEpoch(0);
+  double _rate = 1.0;
+  StreamInfo? _streams;
+  String? _subUrl;
   StreamSubscription<void>? _completedSub;
   StreamSubscription<String>? _errorSub;
   StreamSubscription<bool>? _playingSub;
+  StreamSubscription<Duration>? _positionSub;
 
   @override
   void initState() {
@@ -89,6 +96,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         text: playing ? '▶ ${video.channelTitle}' : '⏸ ${video.channelTitle}',
       );
     });
+    _positionSub = player.stream.position.listen(_maybeSkipSponsor);
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _savePosition());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final video = ref.read(queueProvider).current;
@@ -112,7 +120,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Future<void> _load(Video video, {bool resume = true}) async {
     _loadedVideoId = video.videoId;
-    setState(() => _error = null);
+    setState(() {
+      _error = null;
+      _segments = const [];
+      _streams = null;
+      _subUrl = null;
+    });
     final api = ref.read(apiProvider);
     try {
       // Record the watch and fetch resume position + fresh stream URLs.
@@ -139,9 +152,100 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         // DASH: separate video/audio URLs — attach the audio as an external track.
         await player.setAudioTrack(AudioTrack.uri(streams.audioUrl!));
       }
+      if (mounted) setState(() => _streams = streams);
+      // Rate persists across open() in media_kit; re-apply defensively.
+      if (_rate != 1.0) unawaited(player.setRate(_rate));
+      unawaited(_fetchSegments(video));
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
+  }
+
+  Future<void> _fetchSegments(Video video) async {
+    if (video.platform != 'youtube') return;
+    try {
+      final segs = await ref.read(apiProvider).sponsorSegments(video.videoId);
+      if (mounted && _loadedVideoId == video.videoId) {
+        setState(() => _segments = segs);
+      }
+    } catch (_) {}
+  }
+
+  void _maybeSkipSponsor(Duration position) {
+    if (_segments.isEmpty || !ref.read(sponsorblockProvider)) return;
+    if (DateTime.now().difference(_lastSkip).inMilliseconds < 1000) return;
+    final pos = position.inMilliseconds / 1000.0;
+    for (final seg in _segments) {
+      if (pos >= seg.start && pos < seg.end - 0.5) {
+        _lastSkip = DateTime.now();
+        unawaited(player.seek(Duration(milliseconds: (seg.end * 1000).round())));
+        break;
+      }
+    }
+  }
+
+  static String _fmtRate(double rate) =>
+      rate == rate.roundToDouble() ? '${rate.toInt()}×' : '$rate×';
+
+  void _showSpeedSheet() {
+    const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final rate in rates)
+              ListTile(
+                title: Text(_fmtRate(rate)),
+                trailing: rate == _rate ? const Icon(Icons.check) : null,
+                onTap: () {
+                  setState(() => _rate = rate);
+                  unawaited(player.setRate(rate));
+                  Navigator.pop(sheetContext);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSubtitleSheet() {
+    final tracks = _streams?.subtitles ?? const [];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              title: const Text('Désactivés'),
+              trailing: _subUrl == null ? const Icon(Icons.check) : null,
+              onTap: () {
+                unawaited(player.setSubtitleTrack(SubtitleTrack.no()));
+                setState(() => _subUrl = null);
+                Navigator.pop(sheetContext);
+              },
+            ),
+            for (final track in tracks)
+              ListTile(
+                title: Text(track.label.isNotEmpty ? track.label : track.lang),
+                trailing: _subUrl == track.url ? const Icon(Icons.check) : null,
+                onTap: () {
+                  unawaited(player.setSubtitleTrack(SubtitleTrack.uri(
+                    track.url,
+                    title: track.label,
+                    language: track.lang,
+                  )));
+                  setState(() => _subUrl = track.url);
+                  Navigator.pop(sheetContext);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _savePosition() async {
@@ -165,6 +269,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _completedSub?.cancel();
     _errorSub?.cancel();
     _playingSub?.cancel();
+    _positionSub?.cancel();
     unawaited(stopPlaybackService());
     player.dispose();
     super.dispose();
@@ -369,6 +474,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                           onPressed: queue.hasNext
                               ? () => ref.read(queueProvider.notifier).next()
                               : null,
+                        ),
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: _showSpeedSheet,
+                          child: Text(
+                            _fmtRate(_rate),
+                            style: TextStyle(color: colors.onSurface),
+                          ),
+                        ),
+                        IconButton(
+                          icon: Icon(
+                            _subUrl != null
+                                ? Icons.subtitles
+                                : Icons.subtitles_outlined,
+                          ),
+                          tooltip: 'Sous-titres',
+                          onPressed: (_streams?.subtitles.isEmpty ?? true)
+                              ? null
+                              : _showSubtitleSheet,
                         ),
                       ],
                     ),

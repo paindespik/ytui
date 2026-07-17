@@ -10,7 +10,7 @@ from textual.reactive import reactive
 from .api_client import YtuiApiError, YtuiClient, resume_start
 from .config import Config
 from .livenotify import send_live_notification
-from .models import Video, video_id_from_url
+from .models import SponsorSegment, Video, video_id_from_url
 from .player.mpv import MpvController, PlayerError, play
 from .thumbnails.fetcher import ThumbnailFetcher
 from .ui.screens.channel import ChannelScreen
@@ -94,6 +94,8 @@ class YtuiApp(App):
         self._live_vids: set[str] = set()
         self._notified_live_ids: set[str] = set()
         self.active_lives: dict[str, Video] = {}
+        self._sponsor_segments: dict[str, list[SponsorSegment]] = {}
+        self._sponsor_pending: set[str] = set()
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -103,7 +105,7 @@ class YtuiApp(App):
                 severity="warning",
                 timeout=10,
             )
-        self.set_interval(2.0, self._poll_player)
+        self.set_interval(1.0, self._poll_player)
         self.run_worker(self.refresh_watched(), group="watched")
         if self.config.server.url:
             self.set_interval(LIVE_POLL_SECONDS, self._start_live_check)
@@ -182,6 +184,8 @@ class YtuiApp(App):
             self.player_status = ""
             return
         icon = "⏸ paused" if status.paused else "▶ playing"
+        if status.speed != 1.0:
+            icon += f" {status.speed:g}x"
         queued = f" ({status.queued} queued)" if status.queued else ""
         self.player_status = f"{icon}{queued}"
         snap = await self.player.playback_snapshot()
@@ -192,6 +196,23 @@ class YtuiApp(App):
                 if vid not in self.watched:
                     # mpv advanced to a queued video on its own: add it to history.
                     self._record_watch(self._video_for_history(vid, title, path))
+                if (
+                    self.config.player.sponsorblock
+                    and vid not in self._sponsor_segments
+                    and vid not in self._sponsor_pending
+                ):
+                    # Safety net for items that never went through _record_watch.
+                    self.run_worker(self._fetch_sponsor(vid), group="sponsor")
+                if self.config.player.sponsorblock and vid not in self._live_vids:
+                    for seg in self._sponsor_segments.get(vid, ()):
+                        if seg.start <= position < seg.end - 0.5:
+                            if await self.player.seek_absolute(seg.end):
+                                self.notify(
+                                    "SponsorBlock: skipped "
+                                    f"{seg.category} ({int(seg.end - seg.start)}s)",
+                                    timeout=3,
+                                )
+                            break
                 if (
                     vid == self._last_polled_vid
                     and self._last_polled_duration is not None
@@ -364,12 +385,48 @@ class YtuiApp(App):
         if not await self.player.playlist_next():
             self.notify("Nothing is playing.", timeout=3)
 
+    async def change_speed(self, delta: float) -> None:
+        current = await self.player.speed()
+        if current is None:
+            self.notify("Nothing is playing.", timeout=3)
+            return
+        new = min(3.0, max(0.25, round(current + delta, 2)))
+        if await self.player.set_speed(new):
+            self.notify(f"Speed: {new:g}x", timeout=2)
+
+    async def cycle_subtitles(self) -> None:
+        label = await self.player.cycle_subtitles()
+        if label is None:
+            self.notify("Nothing is playing.", timeout=3)
+            return
+        self.notify(f"Subtitles: {label}", timeout=3)
+
     def _record_watch(self, video: Video) -> None:
         if video.kind == "channel":
             return
         self.watched.add(video.video_id)
         self._refresh_watched_markers()
         self.run_worker(self._record_watch_async(video), group="history")
+        if (
+            self.config.player.sponsorblock
+            and video.kind == "video"
+            and video.platform == "youtube"
+        ):
+            self.run_worker(self._fetch_sponsor(video.video_id), group="sponsor")
+
+    async def _fetch_sponsor(self, video_id: str) -> None:
+        if video_id in self._sponsor_segments or video_id in self._sponsor_pending:
+            return
+        self._sponsor_pending.add(video_id)
+        try:
+            segments = await self.client.sponsor_segments(video_id)
+        except YtuiApiError:
+            segments = []  # don't retry this session
+        finally:
+            self._sponsor_pending.discard(video_id)
+        if len(self._sponsor_segments) > 100:
+            self._sponsor_segments.clear()
+        self._sponsor_segments[video_id] = segments
 
     async def _record_watch_async(self, video: Video) -> None:
         try:

@@ -8,6 +8,7 @@ then interleave the sources round-robin for diversity.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from ..db import Database
 from ..models import Video
@@ -20,6 +21,8 @@ MAX_SUGGESTIONS = 50
 CACHE_KEY = "suggestions:home"
 
 EMPTY_HISTORY_WARNING = "No watch history yet: watch a few videos to get suggestions"
+
+log = logging.getLogger(__name__)
 
 
 def _pick_seeds(history: list[Video], count: int = SEED_COUNT) -> list[Video]:
@@ -94,4 +97,8 @@ class SuggestionsService:
             self.db.set_feed(CACHE_KEY, videos)
         elif not warnings:
             warnings.append(EMPTY_HISTORY_WARNING)
+        log.info(
+            "suggestions: %d seeds, %d videos, %d warnings",
+            len(seeds), len(videos), len(warnings),
+        )
         return FeedResult(videos, warnings)
