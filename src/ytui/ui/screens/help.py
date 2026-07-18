@@ -67,7 +67,7 @@ HELP_TEXT = """\
   c               Reload comments (Odysee, read-only)
 
 [b]Settings[/b]
-  a add channel · x remove channel · m audio-only · t thumbnails
+  Enter open channel · a add channel · x remove channel · m audio-only · t thumbnails
 
 The panel on the right shows the highlighted item's thumbnail
 (sixel/kitty/half-block; disable with ui.thumbnails = false).

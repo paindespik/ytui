@@ -296,6 +296,20 @@ async def test_settings_screen_opens(app):
         assert app.screen.__class__.__name__ == "SettingsScreen"
 
 
+async def test_settings_enter_opens_channel(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen("settings")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "ChannelScreen"
+        assert app.screen.channel.video_id == "UC123"
+        assert app.screen.channel.kind == "channel"
+
+
 async def test_local_playlists_screen_opens(app):
     async with app.run_test() as pilot:
         await pilot.pause()

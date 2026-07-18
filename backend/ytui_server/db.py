@@ -248,6 +248,16 @@ class Database:
 
     def list_channels(self) -> list[FollowedChannel]:
         with self._lock:
+            # Backfill titles for channels added by bare UC id before their
+            # name was known (channel_names is populated on every feed fetch).
+            cur = self._conn.execute(
+                "UPDATE channels SET title = "
+                "(SELECT title FROM channel_names n WHERE n.channel_id = channels.channel_id) "
+                "WHERE title = '' "
+                "AND channel_id IN (SELECT channel_id FROM channel_names)"
+            )
+            if cur.rowcount:
+                self._conn.commit()
             rows = self._conn.execute(
                 "SELECT ref, channel_id, title, platform FROM channels ORDER BY added_at"
             ).fetchall()

@@ -102,3 +102,11 @@ def test_list_and_delete_channel(client):
 def test_delete_unknown_channel(client):
     resp = client.delete("/api/channels/UCunknown")
     assert resp.status_code == 404
+
+
+def test_list_backfills_title_from_channel_names(app, client):
+    """A channel added by bare UC id gets its title once the name is known."""
+    client.post("/api/channels", json={"ref": "UCtest000000000000000000"})
+    assert client.get("/api/channels").json()[0]["title"] == ""
+    app.state.db.set_channel_name("UCtest000000000000000000", "Test Channel")
+    assert client.get("/api/channels").json()[0]["title"] == "Test Channel"

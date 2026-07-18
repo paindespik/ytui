@@ -12,6 +12,7 @@ from textual.widgets.option_list import Option
 
 from ...api_client import FollowedChannel, YtuiApiError
 from ...config import set_option
+from ...models import Video
 from ..widgets.modals import ConfirmModal, TextInputModal
 
 
@@ -43,7 +44,10 @@ class SettingsScreen(Screen):
         yield Header()
         with Vertical():
             yield Label("", id="settings-options")
-            yield Label("Followed channels (a = add, x = remove):", id="settings-channels-title")
+            yield Label(
+                "Followed channels (enter = open, a = add, x = remove):",
+                id="settings-channels-title",
+            )
             yield OptionList(id="settings-channels")
         yield Footer()
 
@@ -82,6 +86,22 @@ class SettingsScreen(Screen):
         else:
             options.highlighted = 0
         options.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option.id is None:
+            return
+        channel = next((c for c in self._channels if c.channel_id == event.option.id), None)
+        if channel is None:
+            return
+        self.app.open_channel(
+            Video(
+                video_id=channel.channel_id,
+                title=channel.title or channel.ref,
+                channel_title=channel.title,
+                kind="channel",
+                platform=channel.platform,
+            )
+        )
 
     def action_add_channel(self) -> None:
         prompt = (
