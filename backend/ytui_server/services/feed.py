@@ -185,7 +185,8 @@ class FeedService:
         self.db = db
 
     async def resolve_ref(self, ref: str, client: httpx.AsyncClient) -> FollowedChannel:
-        """Resolve a channel reference (UC id, @handle or bitchute:slug)."""
+        """Resolve a channel ref: UC id, @handle, bitchute:/odysee:/twitch:
+        prefix, or a bare name (YouTube handle first, then Twitch login)."""
         if ref.startswith(BITCHUTE_PREFIX):
             slug = ref[len(BITCHUTE_PREFIX):]
             return FollowedChannel(
@@ -235,13 +236,41 @@ class FeedService:
             headers={"User-Agent": USER_AGENT},
             follow_redirects=True,
         )
-        resp.raise_for_status()
-        channel_id = extract_channel_id(resp.text)
-        if not channel_id:
-            raise ValueError(f"Could not resolve handle {handle!r} to a channel ID")
-        self.db.set_handle(handle, channel_id)
-        title = self.db.get_channel_name(channel_id) or ""
-        return FollowedChannel(ref=handle, channel_id=channel_id, title=title)
+        if resp.status_code == 404:
+            # The one status that proves the handle doesn't exist.
+            channel_id = None
+        else:
+            # 403/429/5xx are upstream trouble, not "unknown handle":
+            # raise → 502 rather than guessing a Twitch fallback.
+            resp.raise_for_status()
+            channel_id = extract_channel_id(resp.text)
+        if channel_id:
+            self.db.set_handle(handle, channel_id)
+            title = self.db.get_channel_name(channel_id) or ""
+            return FollowedChannel(ref=handle, channel_id=channel_id, title=title)
+        # Bare refs ("Joueur_du_Grenier") fall back to a Twitch login lookup:
+        # YouTube said no, and the name may well be a Twitch channel typed
+        # without the twitch: prefix. Explicit "@handle" refs state YouTube
+        # intent and never fall back.
+        login = ref.lower()
+        if not ref.startswith("@") and twitch.LOGIN_RE.fullmatch(login):
+            try:
+                names = await twitch.resolve_display_names(client, [login])
+            except (httpx.HTTPError, twitch.TwitchError) as exc:
+                log.debug("twitch fallback lookup failed for %r: %s", login, exc)
+                names = {}
+            if login in names:
+                return FollowedChannel(
+                    ref=f"{TWITCH_PREFIX}{login}",
+                    channel_id=login,
+                    title=names[login],
+                    platform="twitch",
+                )
+            raise ValueError(
+                f"Could not resolve {ref!r}: no YouTube handle {handle!r} "
+                f"and no Twitch channel {login!r}"
+            )
+        raise ValueError(f"Could not resolve handle {handle!r} to a channel ID")
 
     async def _fetch_channel(
         self,
