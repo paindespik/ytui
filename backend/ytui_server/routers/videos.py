@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Literal
 
 import anyio
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..models import (
@@ -20,12 +21,12 @@ from ..models import (
     Video,
     VideoDetails,
 )
-from ..services import odysee, ytdlp
+from ..services import odysee, twitch, ytdlp
 from ..services.youtube import ApiError, AuthError
 
 router = APIRouter()
 
-Platform = Literal["youtube", "bitchute", "odysee"]
+Platform = Literal["youtube", "bitchute", "odysee", "twitch"]
 
 _ODYSEE_WRITE_DETAIL = "Odysee likes/comments require a LBRY wallet signature (not supported)"
 
@@ -95,11 +96,29 @@ async def video_details(video_id: str, platform: Platform = "youtube") -> VideoD
 @router.get("/videos/{video_id}/streams", response_model=StreamInfo)
 async def video_streams(
     video_id: str,
+    request: Request,
     platform: Platform = "youtube",
     max_height: int = Query(default=1080, ge=144, le=4320),
     audio_only: bool = False,
     sub_langs: str = "",
 ) -> StreamInfo:
+    if platform == "twitch" and ":" in video_id:
+        # Live id "login:stream_id": try the ad-free playlist proxies first,
+        # then degrade to the direct (ad-fed) stream via yt-dlp below.
+        login = video_id.split(":", 1)[0]
+        proxies = [
+            p.strip()
+            for p in request.app.state.settings.twitch_proxies.split(",")
+            if p.strip()
+        ]
+        if proxies:
+            async with httpx.AsyncClient(timeout=twitch.TIMEOUT) as client:
+                playlist = await twitch.resolve_live_playlist(client, login, proxies)
+            if playlist is not None:
+                entry = request.app.state.live_monitor.lives.get(login)
+                return StreamInfo(
+                    kind="hls", url=playlist, title=entry[0].title if entry else ""
+                )
     try:
         return await ytdlp.resolve_streams(
             _video_url(video_id, platform),

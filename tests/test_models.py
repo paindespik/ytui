@@ -50,6 +50,23 @@ def test_video_url_odysee_playlist():
     assert v.url == "https://odysee.com/$/playlist/pl123"
 
 
+def test_video_url_twitch_live():
+    """Live composite id "login:stream_id" routes to the channel page."""
+    v = Video(video_id="zerator:123456789", title="L", platform="twitch")
+    assert v.url == "https://www.twitch.tv/zerator"
+
+
+def test_video_url_twitch_vod():
+    """VOD v-prefixed id routes to the videos page."""
+    v = Video(video_id="v246974233", title="V", platform="twitch")
+    assert v.url == "https://www.twitch.tv/videos/246974233"
+
+
+def test_video_url_twitch_channel():
+    v = Video(video_id="zerator", title="Z", kind="channel", platform="twitch")
+    assert v.url == "https://www.twitch.tv/zerator"
+
+
 def test_video_platform_defaults_to_youtube():
     assert Video(video_id="abc123", title="v").platform == "youtube"
 

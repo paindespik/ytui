@@ -1,4 +1,5 @@
-/// Foreground live polling: every 5 minutes while the app runs.
+/// Foreground live polling: every 2 minutes while the app runs
+/// (Twitch lives are caught within ~1 min server-side).
 library;
 
 import 'dart:async';
@@ -21,7 +22,7 @@ class LivePoller {
   void start() {
     _timer?.cancel();
     _initial?.cancel();
-    _timer = Timer.periodic(const Duration(minutes: 5), (_) => _check());
+    _timer = Timer.periodic(const Duration(minutes: 2), (_) => _check());
     // First check shortly after startup.
     _initial = Timer(const Duration(seconds: 15), _check);
   }

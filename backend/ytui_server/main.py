@@ -60,7 +60,11 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
                 if c.strip()
             ],
         )
-        app.state.live_monitor = LiveMonitor(db, check_minutes=settings.live_check_minutes)
+        app.state.live_monitor = LiveMonitor(
+            db,
+            check_minutes=settings.live_check_minutes,
+            twitch_check_seconds=settings.twitch_check_seconds,
+        )
         if start_live_poll:
             app.state.live_monitor.start()
         try:

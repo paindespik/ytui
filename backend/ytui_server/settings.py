@@ -20,6 +20,17 @@ class Settings(BaseSettings):
         default=30, validation_alias="YTUI_SUGGESTIONS_TTL_MINUTES"
     )
     live_check_minutes: int = Field(default=5, validation_alias="YTUI_LIVE_CHECK_MINUTES")
+    # Twitch lives are one batched GQL request for all channels, so they can
+    # be polled much faster than the per-channel YouTube scrape.
+    twitch_check_seconds: int = Field(
+        default=60, validation_alias="YTUI_TWITCH_CHECK_SECONDS"
+    )
+    # TTV.LOL-compatible playlist proxies for ad-free Twitch streams, tried in
+    # order with fallback to the direct (ad-fed) stream. Empty disables.
+    twitch_proxies: str = Field(
+        default="https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com",
+        validation_alias="YTUI_TWITCH_PROXIES",
+    )
     history_max_rows: int = Field(default=20000, validation_alias="YTUI_HISTORY_MAX_ROWS")
     log_level: str = Field(default="INFO", validation_alias="YTUI_LOG_LEVEL")
     sponsorblock_categories: str = Field(

@@ -35,7 +35,7 @@ import tomlkit
 # Config
 # ---------------------------------------------------------------------------
 
-POLL_SECONDS = 300  # 5 min — same as LIVE_POLL_SECONDS in the TUI
+POLL_SECONDS = 120  # 2 min — Twitch lives are caught ~1 min server-side
 CACHE_FILE = Path.home() / ".cache" / "ytui" / "notify_seen.json"
 CONFIG_FILE = Path.home() / ".config" / "ytui" / "config.toml"
 
@@ -105,6 +105,7 @@ def fetch_new_videos(
                     "title": v.get("title", ""),
                     "channel": v.get("channel_title", ""),
                     "url": v.get("url", ""),
+                "platform": v.get("platform", "youtube"),
                 }
             )
     return True, seen, new
@@ -337,8 +338,11 @@ def main() -> None:
             for vid, item in current.items():
                 if vid not in lives_seen:
                     log.info("live: %s (%s)", item["title"], item["channel"])
+                    platform = item.get("platform", "youtube")
+                    icon = "🟣" if platform == "twitch" else "🔴"
+                    label = "Twitch" if platform == "twitch" else "Live"
                     notify(
-                        f"🔴 Live — {item['channel'] or 'YouTube'}",
+                        f"{icon} {label} — {item['channel'] or 'YouTube'}",
                         item["title"],
                         item["url"],
                         terminal,

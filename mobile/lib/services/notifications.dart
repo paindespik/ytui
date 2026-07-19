@@ -39,10 +39,15 @@ Future<void> requestNotificationsPermission() async {
       ?.requestNotificationsPermission();
 }
 
-Future<void> showLiveNotification(String videoId, String title, String channel) {
+Future<void> showLiveNotification(String videoId, String title, String channel,
+    {String platform = 'youtube'}) {
+  final icon = platform == 'twitch' ? '\u{1F7E3}' : '\u{1F534}';
+  final summary = platform == 'twitch'
+      ? '$icon $channel is live on Twitch'
+      : '$icon $channel is live';
   return notificationsPlugin.show(
     _notifId(videoId),
-    '🔴 $channel is live',
+    summary,
     title,
     const NotificationDetails(
       android: AndroidNotificationDetails(
@@ -71,8 +76,9 @@ Future<void> checkLivesAndNotify(SharedPreferences prefs) async {
   for (final live in lives) {
     currentIds.add(live.video.videoId);
     if (!seen.contains(live.video.videoId)) {
-      await showLiveNotification(
-          live.video.videoId, live.video.title, live.video.channelTitle);
+      await showLiveNotification(live.video.videoId, live.video.title,
+          live.video.channelTitle,
+          platform: live.video.platform);
     }
   }
   // Keep only ids still live so a channel going live again re-notifies.

@@ -15,6 +15,18 @@ import '../widgets/responsive.dart';
 const _kSuccessBg = Color(0xFF1B5E20);
 const _kSuccessIcon = Color(0xFF4CAF50);
 
+
+/// Human-readable platform labels for the followed-channels list.
+const _platformLabels = <String, String>{
+  'youtube': 'YouTube',
+  'bitchute': 'BitChute',
+  'odysee': 'Odysee',
+  'twitch': 'Twitch',
+};
+
+
+String _platformLabel(String platform) =>
+    _platformLabels[platform] ?? platform;
 class SettingsScreen extends ConsumerStatefulWidget {
   /// First-launch mode: no back navigation until the server is configured.
   final bool firstLaunch;
@@ -343,7 +355,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                       contentPadding: EdgeInsets.zero,
                                       title:
                                           Text(c.title.isEmpty ? c.ref : c.title),
-                                      subtitle: Text('${c.platform} · ${c.ref}'),
+                                      subtitle: Text('${_platformLabel(c.platform)} · ${c.ref}'),
                                       trailing: IconButton(
                                         icon: const Icon(Icons.delete_outline),
                                         tooltip: 'Unfollow',

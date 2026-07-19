@@ -77,9 +77,9 @@ class SettingsScreen(Screen):
             options.focus()
             return
         for channel in self._channels:
-            label = (
-                f"{channel.title}  [dim]{channel.ref}[/dim]" if channel.title else channel.ref
-            )
+            label = f"{channel.title}  [dim]{channel.ref}[/dim]" if channel.title else channel.ref
+            if channel.platform == "twitch":
+                label = f"[#a970ff]Twitch[/] · {label}"
             options.add_option(Option(label, id=channel.channel_id))
         if not self._channels:
             options.add_option(Option("(no channels followed)", disabled=True))
@@ -105,7 +105,7 @@ class SettingsScreen(Screen):
 
     def action_add_channel(self) -> None:
         prompt = (
-            "Add channel (UC id, @handle, bitchute:<slug> or odysee:@name:claim):"
+            "Add channel (UC id, @handle, bitchute:<slug>, odysee:@name:claim or twitch:<login>):"
         )
 
         def on_entry(entry: str | None) -> None:
@@ -123,9 +123,7 @@ class SettingsScreen(Screen):
             if exc.status_code == 409:
                 self.app.notify(f"{entry} is already in your channels.", timeout=5)
             else:
-                self.app.notify(
-                    f"Could not add {entry}: {exc.detail}", severity="error", timeout=8
-                )
+                self.app.notify(f"Could not add {entry}: {exc.detail}", severity="error", timeout=8)
             return
         self.app.notify(f"Added {entry}. Refresh the feed to apply.", timeout=5)
         self._reload()

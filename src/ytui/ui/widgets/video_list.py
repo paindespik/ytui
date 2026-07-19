@@ -10,7 +10,13 @@ from textual.widgets import DataTable
 from ...models import Video
 
 _KIND_MARKS = {"playlist": "▶ ", "channel": "@ "}
-_PLATFORM_LABELS = {"youtube": "YouTube", "bitchute": "BitChute", "odysee": "Odysee"}
+_PLATFORM_LABELS = {
+    "youtube": "YouTube",
+    "bitchute": "BitChute",
+    "odysee": "Odysee",
+    "twitch": "Twitch",
+}
+_TWITCH_STYLE = "#a970ff"  # Twitch brand purple
 
 
 def _source_label(video: Video) -> str:
@@ -62,7 +68,12 @@ class VideoList(DataTable):
                 Text(video.title, style=style),
                 Text(video.channel_title, style=style),
                 Text(video.age, style=style),
-                Text(_source_label(video), style=style),
+                Text(
+                    _source_label(video),
+                    style=(
+                        f"{style} {_TWITCH_STYLE}".strip() if video.platform == "twitch" else style
+                    ),
+                ),
             )
 
     def refresh_watched(self, watched: set[str]) -> None:

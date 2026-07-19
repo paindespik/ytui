@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from ..models import ChannelIn, FollowedChannel
+from ..services.twitch import TwitchError
 
 router = APIRouter()
 
@@ -26,7 +27,7 @@ async def add_channel(body: ChannelIn, request: Request) -> FollowedChannel:
             channel = await feed_service.resolve_ref(ref, client)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, TwitchError) as exc:
             raise HTTPException(
                 status_code=502, detail=f"Channel resolution failed: {exc}"
             ) from exc

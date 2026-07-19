@@ -26,7 +26,10 @@ from .ui.screens.suggestions import SuggestionsScreen
 from .ui.widgets.modals import PlaylistPickerModal, TextInputModal
 from .ui.widgets.video_list import VideoList
 
-LIVE_POLL_SECONDS = 5 * 60
+LIVE_POLL_SECONDS = 5 * 60  # feed refresh cadence
+# The lives poll is cheap (one in-memory GET on the server) and Twitch lives
+# are caught within ~1 min server-side, so clients poll faster than the feed.
+LIVE_CHECK_SECONDS = 60
 POSITION_HEARTBEAT_SECONDS = 10.0
 
 
@@ -108,7 +111,7 @@ class YtuiApp(App):
         self.set_interval(1.0, self._poll_player)
         self.run_worker(self.refresh_watched(), group="watched")
         if self.config.server.url:
-            self.set_interval(LIVE_POLL_SECONDS, self._start_live_check)
+            self.set_interval(LIVE_CHECK_SECONDS, self._start_live_check)
             self.set_interval(LIVE_POLL_SECONDS, self._refresh_feed)
             self.set_timer(15, self._start_live_check)
 
@@ -134,9 +137,16 @@ class YtuiApp(App):
         for video in lives:
             if video.video_id not in self._notified_live_ids:
                 self._notified_live_ids.add(video.video_id)
-                self.notify(
-                    f"\U0001f534 Live: {video.channel_title} \u2014 {video.title}", timeout=10
-                )
+                if video.platform == "twitch":
+                    self.notify(
+                        f"\U0001f7e3 Twitch: {video.channel_title} \u2014 {video.title}",
+                        timeout=10,
+                    )
+                else:
+                    self.notify(
+                        f"\U0001f534 Live: {video.channel_title} \u2014 {video.title}",
+                        timeout=10,
+                    )
                 self.run_worker(
                     lambda v=video: self._notify_live_blocking(v),
                     thread=True,
@@ -221,9 +231,7 @@ class YtuiApp(App):
                     # Growing duration = live stream (DVR window): resuming a live
                     # with --start stalls mpv, so never track its position.
                     self._live_vids.add(vid)
-                    self.run_worker(
-                        self._save_position_async(vid, 0.0, None), group="position"
-                    )
+                    self.run_worker(self._save_position_async(vid, 0.0, None), group="position")
                 if vid not in self._live_vids:
                     now = time.monotonic()
                     if now - self._last_position_save >= POSITION_HEARTBEAT_SECONDS:
@@ -250,9 +258,7 @@ class YtuiApp(App):
             platform = "odysee"
         else:
             platform = "youtube"
-        return Video(
-            video_id=video_id, title=title or video_id, kind="video", platform=platform
-        )
+        return Video(video_id=video_id, title=title or video_id, kind="video", platform=platform)
 
     def _notify_resume(self, start: float) -> None:
         if start > 0:
@@ -274,19 +280,34 @@ class YtuiApp(App):
         self._record_watch(video)
         self.run_worker(self._play_video_async(video, audio_only), group="player")
 
+    async def _playback_url(self, video: Video) -> str:
+        """Ad-free playlist-proxy URL for a Twitch live, else the plain URL.
+
+        Live ids carry "login:stream_id"; VODs and other platforms play
+        directly. Falls back to the direct (ad-fed) URL when resolution fails.
+        """
+        if video.platform != "twitch" or ":" not in video.video_id:
+            return video.url
+        try:
+            streams = await self.client.video_streams(video.video_id, platform="twitch")
+        except YtuiApiError:
+            return video.url
+        return streams.get("url") or video.url
+
     async def _play_video_async(self, video: Video, audio_only: bool | None) -> None:
         start = await self._resume_start_for(video)
+        url = await self._playback_url(video)
         if audio_only:
             # One-shot audio playback, separate from the controlled queue.
             try:
-                play(video.url, self.config.player, audio_only=True, start=start or None)
+                play(url, self.config.player, audio_only=True, start=start or None)
                 self._notify_resume(start)
                 self.notify("Playing audio in mpv…", timeout=4)
             except PlayerError as exc:
                 self.notify(str(exc), severity="error", timeout=10)
             return
         self._notify_resume(start)
-        await self._play_async(video.url, start=start or None)
+        await self._play_async(url, start=start or None)
 
     def play_from_history(self, video: Video) -> None:
         """Replay from the history screen: resume position and playlist context."""
@@ -310,7 +331,7 @@ class YtuiApp(App):
             entries = await self.client.playlist_videos(playlist_id, platform=video.platform)
         except YtuiApiError:
             self.notify("Playlist unavailable, playing video only.", timeout=5)
-            await self._play_resumed_async(video.url, start, [])
+            await self._play_resumed_async(await self._playback_url(video), start, [])
             return
         idx = next(
             (i for i, e in enumerate(entries) if e.video_id == video.video_id),
@@ -318,10 +339,10 @@ class YtuiApp(App):
         )
         if idx is None:
             self.notify("Video no longer in playlist, playing video only.", timeout=5)
-            await self._play_resumed_async(video.url, start, [])
+            await self._play_resumed_async(await self._playback_url(video), start, [])
             return
         rest = [e.url for e in entries[idx + 1 :]]
-        await self._play_resumed_async(video.url, start, rest)
+        await self._play_resumed_async(await self._playback_url(video), start, rest)
 
     async def _play_resumed_async(self, url: str, start: float, queue: list[str]) -> None:
         try:
@@ -339,7 +360,7 @@ class YtuiApp(App):
             self.notify("Channels cannot be enqueued.", severity="warning", timeout=5)
             return
         self._record_watch(video)
-        self.run_worker(self._enqueue_async(video.url), group="player")
+        self.run_worker(self._enqueue_async(video), group="player")
 
     def play_all(self, videos: list[Video]) -> None:
         """Play the first item and append the rest to the mpv queue, in order."""
@@ -349,9 +370,10 @@ class YtuiApp(App):
             return
         for video in playable:
             self._record_watch(video)
-        self.run_worker(self._play_all_async([v.url for v in playable]), group="player")
+        self.run_worker(self._play_all_async(playable), group="player")
 
-    async def _play_all_async(self, urls: list[str]) -> None:
+    async def _play_all_async(self, videos: list[Video]) -> None:
+        urls = [await self._playback_url(v) for v in videos]
         try:
             await self.player.play(urls[0], self.config.player)
             for url in urls[1:]:
@@ -369,7 +391,8 @@ class YtuiApp(App):
         except PlayerError as exc:
             self.notify(str(exc), severity="error", timeout=10)
 
-    async def _enqueue_async(self, url: str) -> None:
+    async def _enqueue_async(self, video: Video) -> None:
+        url = await self._playback_url(video)
         try:
             appended = await self.player.enqueue(url, self.config.player)
         except PlayerError as exc:
@@ -464,6 +487,8 @@ class YtuiApp(App):
             channel_id = f"bitchute:{channel_id}"
         elif channel_id and video.platform == "odysee":
             channel_id = f"odysee:{channel_id}"
+        elif channel_id and video.platform == "twitch":
+            channel_id = f"twitch:{channel_id}"
         if not channel_id:
             self.notify("No channel ID for this item.", severity="warning", timeout=5)
             return

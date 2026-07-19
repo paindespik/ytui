@@ -17,6 +17,7 @@ import httpx
 
 from ..db import Database
 from ..models import Video
+from . import twitch
 
 log = logging.getLogger(__name__)
 
@@ -74,18 +75,36 @@ async def check_channel_live(
 
 
 class LiveMonitor:
-    """In-memory map of currently-live videos, refreshed periodically."""
+    """In-memory map of currently-live videos, refreshed periodically.
 
-    def __init__(self, db: Database, check_minutes: int = 5) -> None:
+    Two independent loops feed the same `lives` map: YouTube channels are
+    scraped one /live page each on a slow cadence (check_minutes), Twitch
+    channels are a single batched GQL request and can be polled much faster
+    (twitch_check_seconds) so lives are caught soon after they start.
+    """
+
+    def __init__(
+        self, db: Database, check_minutes: int = 5, twitch_check_seconds: int = 60
+    ) -> None:
         self.db = db
         self.check_minutes = check_minutes
+        self.twitch_check_seconds = twitch_check_seconds
         self.lives: dict[str, tuple[Video, datetime]] = {}
         self._task: asyncio.Task | None = None
+        self._twitch_task: asyncio.Task | None = None
+
+    def _replace_platform(
+        self, platform: str, current: dict[str, tuple[Video, datetime]]
+    ) -> None:
+        """Swap one platform's entries out of the merged lives map."""
+        merged = {k: v for k, v in self.lives.items() if v[0].platform != platform}
+        merged.update(current)
+        self.lives = merged
 
     async def check_once(self) -> None:
         channels = [c for c in self.db.list_channels() if c.platform == "youtube"]
         if not channels:
-            self.lives = {}
+            self._replace_platform("youtube", {})
             return
         sem = asyncio.Semaphore(10)
 
@@ -113,7 +132,31 @@ class LiveMonitor:
                 else datetime.now(tz=timezone.utc)
             )
             current[channel_id] = (video, detected_at)
-        self.lives = current
+        self._replace_platform("youtube", current)
+
+    async def check_twitch_once(self) -> None:
+        logins = [
+            c.channel_id for c in self.db.list_channels() if c.platform == "twitch"
+        ]
+        if not logins:
+            self._replace_platform("twitch", {})
+            return
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            try:
+                live = await twitch.check_live_batch(client, logins)
+            except Exception as exc:
+                log.debug("twitch live check failed: %s", exc)
+                return  # keep last known state on a transient failure
+        current: dict[str, tuple[Video, datetime]] = {}
+        for login, video in live.items():
+            previous = self.lives.get(login)
+            detected_at = (
+                previous[1]
+                if previous and previous[0].video_id == video.video_id
+                else datetime.now(tz=timezone.utc)
+            )
+            current[login] = (video, detected_at)
+        self._replace_platform("twitch", current)
 
     async def _loop(self) -> None:
         while True:
@@ -123,15 +166,29 @@ class LiveMonitor:
                 log.exception("live poll iteration failed")
             await asyncio.sleep(self.check_minutes * 60)
 
+    async def _twitch_loop(self) -> None:
+        while True:
+            try:
+                await self.check_twitch_once()
+            except Exception:
+                log.exception("twitch live poll iteration failed")
+            await asyncio.sleep(self.twitch_check_seconds)
+
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.get_running_loop().create_task(self._loop())
+        if self._twitch_task is None:
+            self._twitch_task = asyncio.get_running_loop().create_task(
+                self._twitch_loop()
+            )
 
     async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+        for task in (self._task, self._twitch_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._task = None
+        self._twitch_task = None

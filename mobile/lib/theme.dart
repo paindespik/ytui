@@ -10,6 +10,9 @@ import 'package:flutter/material.dart';
 /// Brand accent — the ytui red used across desktop/TUI as well.
 const Color kBrandRed = Color(0xFFE53935);
 
+/// Twitch brand accent — live pill, channel badge, notification dot.
+const Color kTwitchPurple = Color(0xFF9146FF);
+
 /// Shared corner radii.
 const double kRadiusSm = 8;
 const double kRadiusMd = 12;

@@ -49,21 +49,24 @@ class HomeFeedScreen(BrowseScreen):
         self.load_feed(force_refresh=True)
 
     def _with_lives(self) -> list[Video]:
-        """Feed videos with active lives pinned on top (deduplicated, 🔴-prefixed)."""
+        """Feed videos with active lives pinned on top (deduplicated).
+
+        Lives are prefixed with a colored dot: \U0001f534 YouTube, \U0001f7e3 Twitch
+        (the Source column also shows a purple "Twitch" label).
+        """
         lives = list(self.app.active_lives.values())
         live_ids = {v.video_id for v in lives}
-        pinned = [
-            v.model_copy(update={"title": f"\U0001f534 {v.title}"}) for v in lives
-        ]
+        pinned: list[Video] = []
+        for v in lives:
+            dot = "\U0001f7e3" if v.platform == "twitch" else "\U0001f534"
+            pinned.append(v.model_copy(update={"title": f"{dot} {v.title}"}))
         return pinned + [v for v in self._feed_videos if v.video_id not in live_ids]
 
     def refresh_lives(self) -> None:
         """Re-render the list when the set of active lives changed."""
         if not hasattr(self, "_feed_videos"):
             return
-        self.query_one("#feed-list", VideoList).set_videos(
-            self._with_lives(), self.app.watched
-        )
+        self.query_one("#feed-list", VideoList).set_videos(self._with_lives(), self.app.watched)
 
     @work(exclusive=True)
     async def load_feed(self, force_refresh: bool, *, silent: bool = False) -> None:
@@ -76,7 +79,9 @@ class HomeFeedScreen(BrowseScreen):
             if not silent:
                 loading.display = False
             if exc.status_code == 0:
-                self._show_warning(f"Server unreachable: {self.app.config.server.url or '(not configured)'}")
+                self._show_warning(
+                    f"Server unreachable: {self.app.config.server.url or '(not configured)'}"
+                )
             else:
                 self._show_warning(f"Failed to load feed: {exc.detail}")
             return

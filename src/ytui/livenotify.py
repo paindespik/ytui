@@ -20,6 +20,10 @@ def send_live_notification(video: Video) -> str:
     """
     if shutil.which("notify-send") is None:
         return ""
+    if video.platform == "twitch":
+        summary = f"🟣 Twitch — {video.channel_title or 'Twitch'}"
+    else:
+        summary = f"🔴 Live — {video.channel_title or 'YouTube'}"
     cmd = [
         "notify-send",
         "--app-name=ytui",
@@ -27,7 +31,7 @@ def send_live_notification(video: Video) -> str:
         "--wait",
         "--action=watch=▶ Regarder",
         "--action=default=Ouvrir dans ytui",
-        f"🔴 Live — {video.channel_title or 'YouTube'}",
+        summary,
         video.title,
     ]
     try:

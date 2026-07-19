@@ -16,6 +16,7 @@ import httpx
 
 from ..db import Database
 from ..models import FollowedChannel, Video
+from . import twitch
 
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 HANDLE_URL = "https://www.youtube.com/{handle}"
@@ -24,6 +25,7 @@ BITCHUTE_RSS_URL = "https://api.bitchute.com/feeds/rss/channel/{channel_id}"
 _BITCHUTE_EMBED_RE = re.compile(r"/embed/([\w-]+)/?")
 ODYSEE_PREFIX = "odysee:"
 ODYSEE_RSS_URL = "https://odysee.com/$/rss/{channel_id}"
+TWITCH_PREFIX = "twitch:"
 _ODYSEE_LINK_RE = re.compile(r"odysee\.com/(?:@[^/]+/)?([^/?#]+:[0-9a-f]+)")
 _ODYSEE_CHANNEL_URL_RE = re.compile(r"odysee\.com/(@[^/?#:]+:\w+)")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
@@ -209,6 +211,17 @@ class FeedService:
                 title=title,
                 platform="odysee",
             )
+        twitch_login = twitch.parse_login(ref)
+        if twitch_login is not None:
+            names = await twitch.resolve_display_names(client, [twitch_login])
+            if twitch_login not in names:
+                raise ValueError(f"Unknown Twitch channel {twitch_login!r}")
+            return FollowedChannel(
+                ref=f"{TWITCH_PREFIX}{twitch_login}",
+                channel_id=twitch_login,
+                title=names[twitch_login],
+                platform="twitch",
+            )
         if ref.startswith("UC"):
             title = self.db.get_channel_name(ref) or ""
             return FollowedChannel(ref=ref, channel_id=ref, title=title)
@@ -239,6 +252,10 @@ class FeedService:
     ) -> tuple[list[Video], str | None]:
         """Fetch one channel's feed. Returns (videos, warning)."""
         async with semaphore:
+            if channel.platform == "twitch":
+                # No RSS/VOD feed in the merged home feed; Twitch lives
+                # surface through /api/lives instead.
+                return [], None
             if channel.platform == "bitchute":
                 return await self._fetch_bitchute(channel, client, force_refresh)
             if channel.platform == "odysee":

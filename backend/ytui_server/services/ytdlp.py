@@ -62,6 +62,8 @@ def entry_to_item(entry: dict) -> Video | None:
                 entry_id = f"{m.group(1)}:{m.group(2)}"
     elif "bitchute.com" in url:
         platform = "bitchute"
+    elif "twitch.tv/" in url:
+        platform = "twitch"
     else:
         platform = "youtube"
     kind = "video"
