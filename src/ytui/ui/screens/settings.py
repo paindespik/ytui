@@ -118,14 +118,22 @@ class SettingsScreen(Screen):
     @work
     async def _add_channel(self, entry: str) -> None:
         try:
-            await self.app.client.follow_channel(entry)
+            channel = await self.app.client.follow_channel(entry)
         except YtuiApiError as exc:
             if exc.status_code == 409:
                 self.app.notify(f"{entry} is already in your channels.", timeout=5)
             else:
                 self.app.notify(f"Could not add {entry}: {exc.detail}", severity="error", timeout=8)
             return
-        self.app.notify(f"Added {entry}. Refresh the feed to apply.", timeout=5)
+        name = channel.title or entry
+        if channel.platform == "twitch":
+            self.app.notify(
+                f"Added {name} (Twitch). Lives pin to the top of Home when the "
+                "channel goes live \U0001f7e3 — Twitch adds no videos to the feed.",
+                timeout=8,
+            )
+        else:
+            self.app.notify(f"Added {name}. Refresh the feed to apply.", timeout=5)
         self._reload()
 
     def action_remove_channel(self) -> None:
