@@ -41,7 +41,7 @@ class LocalPlaylistsScreen(Screen):
     def on_screen_resume(self) -> None:
         self._reload()
 
-    @work(exclusive=True)
+    @work(exclusive=True, group="reload")
     async def _reload(self) -> None:
         options = self.query_one("#local-playlists", OptionList)
         options.clear_options()
@@ -177,7 +177,7 @@ class LocalPlaylistContentScreen(BrowseScreen):
         self.sub_title = f"Playlist: {self.playlist.name}"
         self._reload()
 
-    @work(exclusive=True)
+    @work(exclusive=True, group="reload")
     async def _reload(self) -> None:
         try:
             self._items = await self.app.client.playlist_items(self.playlist.id)

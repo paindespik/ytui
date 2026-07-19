@@ -39,6 +39,7 @@ class FakeClient:
         self._history: list[Video] = []
         self._playlists: dict[int, tuple[str, list[Video]]] = {}
         self._next_playlist_id = 1
+        self.unfollowed: str | None = None
 
     async def close(self) -> None:
         pass
@@ -72,7 +73,7 @@ class FakeClient:
         return FollowedChannel(ref, "UCnew")
 
     async def unfollow_channel(self, channel_id: str) -> None:
-        pass
+        self.unfollowed = channel_id
 
     async def history(self, limit: int = 200) -> list[Video]:
         return list(self._history)
@@ -308,6 +309,43 @@ async def test_settings_enter_opens_channel(app):
         assert app.screen.__class__.__name__ == "ChannelScreen"
         assert app.screen.channel.video_id == "UC123"
         assert app.screen.channel.kind == "channel"
+
+
+async def test_settings_remove_channel_confirms_with_enter(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.push_screen("settings")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "ConfirmModal"
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.unfollowed == "UC123"
+
+
+async def test_playlist_delete_confirms_with_enter(app):
+    """Modal-confirmed mutations survive the resume-triggered reload."""
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pid = await app.client.create_playlist("mix")
+        assert pid is not None
+        app.push_screen("local_playlists")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "ConfirmModal"
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert await app.client.playlists() == []
 
 
 async def test_local_playlists_screen_opens(app):

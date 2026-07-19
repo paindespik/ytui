@@ -35,7 +35,7 @@ class HistoryScreen(BrowseScreen):
     def on_screen_resume(self) -> None:
         self._reload()
 
-    @work(exclusive=True)
+    @work(exclusive=True, group="reload")
     async def _reload(self) -> None:
         try:
             videos = await self.app.client.history()

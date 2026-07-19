@@ -58,7 +58,10 @@ class SettingsScreen(Screen):
     def on_screen_resume(self) -> None:
         self._reload()
 
-    @work(exclusive=True)
+    # Own group: an exclusive reload in the default group would cancel the
+    # _add_channel/_remove_channel workers when the modal pops and the screen
+    # resumes (the request died mid-flight — channels never got removed).
+    @work(exclusive=True, group="reload")
     async def _reload(self) -> None:
         config = self.app.config
         server = config.server.url or "(not configured)"

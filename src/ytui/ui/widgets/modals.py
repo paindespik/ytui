@@ -57,7 +57,7 @@ class ConfirmModal(ModalScreen[bool]):
 
     CSS = _MODAL_CSS
     BINDINGS = [
-        Binding("y", "confirm", "Yes"),
+        Binding("y,enter", "confirm", "Yes"),
         Binding("escape,n", "cancel", "No"),
     ]
 
@@ -68,7 +68,7 @@ class ConfirmModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self._prompt)
-            yield Label("[b]y[/b] = yes    [b]n[/b]/Escape = no")
+            yield Label("[b]y[/b]/Enter = yes    [b]n[/b]/Escape = no")
 
     def action_confirm(self) -> None:
         self.dismiss(True)
