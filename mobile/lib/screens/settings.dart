@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:go_router/go_router.dart';
 
 import '../api/client.dart';
 import '../state/providers.dart';
@@ -356,6 +357,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                       title:
                                           Text(c.title.isEmpty ? c.ref : c.title),
                                       subtitle: Text('${_platformLabel(c.platform)} · ${c.ref}'),
+                                      onTap: () => context.push(
+                                        '/channel/${Uri.encodeComponent(c.channelId)}'
+                                        '?platform=${c.platform}'
+                                        '&title=${Uri.encodeComponent(c.title.isEmpty ? c.ref : c.title)}',
+                                      ),
                                       trailing: IconButton(
                                         icon: const Icon(Icons.delete_outline),
                                         tooltip: 'Unfollow',
