@@ -26,7 +26,7 @@ def video_id_from_url(url: str) -> str | None:
 class Channel(BaseModel):
     channel_id: str
     title: str = ""
-    platform: Literal["youtube", "bitchute", "odysee", "twitch"] = "youtube"
+    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
 
     @property
     def rss_url(self) -> str:
@@ -48,7 +48,7 @@ class Video(BaseModel):
     duration: int | None = None  # seconds
     thumbnail_url: str = ""
     kind: Literal["video", "playlist", "channel"] = "video"
-    platform: Literal["youtube", "bitchute", "odysee", "twitch"] = "youtube"
+    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
     playlist_id: str = ""  # parent YouTube playlist when launched from PlaylistScreen
 
     @property
@@ -72,6 +72,15 @@ class Video(BaseModel):
             if self.video_id.startswith("v") and self.video_id[1:].isdigit():
                 return f"https://www.twitch.tv/videos/{self.video_id[1:]}"
             return f"https://www.twitch.tv/{self.video_id}"
+        if self.platform == "tiktok":
+            if self.kind == "channel":
+                return f"https://www.tiktok.com/@{self.video_id}"
+            if ":" in self.video_id:
+                # Live id "username:room_id": the /live page plays the stream.
+                return f"https://www.tiktok.com/@{self.video_id.split(':', 1)[0]}/live"
+            if self.channel_id:
+                return f"https://www.tiktok.com/@{self.channel_id}/video/{self.video_id}"
+            return f"https://www.tiktok.com/embed/{self.video_id}"
         if self.kind == "playlist":
             return f"https://www.youtube.com/playlist?list={self.video_id}"
         if self.kind == "channel":

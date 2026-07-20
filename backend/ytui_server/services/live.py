@@ -17,7 +17,7 @@ import httpx
 
 from ..db import Database
 from ..models import Video
-from . import twitch
+from . import tiktok, twitch
 
 log = logging.getLogger(__name__)
 
@@ -77,21 +77,28 @@ async def check_channel_live(
 class LiveMonitor:
     """In-memory map of currently-live videos, refreshed periodically.
 
-    Two independent loops feed the same `lives` map: YouTube channels are
-    scraped one /live page each on a slow cadence (check_minutes), Twitch
-    channels are a single batched GQL request and can be polled much faster
-    (twitch_check_seconds) so lives are caught soon after they start.
+    Three independent loops feed the same `lives` map: YouTube channels are
+    scraped one /live page each on a slow cadence (check_minutes); Twitch
+    channels are a single batched GQL request and TikTok channels one light
+    unsigned GET each, both polled much faster (twitch/tiktok_check_seconds)
+    so lives are caught soon after they start.
     """
 
     def __init__(
-        self, db: Database, check_minutes: int = 5, twitch_check_seconds: int = 60
+        self,
+        db: Database,
+        check_minutes: int = 5,
+        twitch_check_seconds: int = 60,
+        tiktok_check_seconds: int = 60,
     ) -> None:
         self.db = db
         self.check_minutes = check_minutes
         self.twitch_check_seconds = twitch_check_seconds
+        self.tiktok_check_seconds = tiktok_check_seconds
         self.lives: dict[str, tuple[Video, datetime]] = {}
         self._task: asyncio.Task | None = None
         self._twitch_task: asyncio.Task | None = None
+        self._tiktok_task: asyncio.Task | None = None
 
     def _replace_platform(
         self, platform: str, current: dict[str, tuple[Video, datetime]]
@@ -158,6 +165,41 @@ class LiveMonitor:
             current[login] = (video, detected_at)
         self._replace_platform("twitch", current)
 
+    async def check_tiktok_once(self) -> None:
+        channels = [c for c in self.db.list_channels() if c.platform == "tiktok"]
+        if not channels:
+            self._replace_platform("tiktok", {})
+            return
+        sem = asyncio.Semaphore(10)
+
+        async def check(channel) -> tuple[str, Video | None]:
+            async with sem:
+                try:
+                    video = await tiktok.check_live(
+                        client, channel.channel_id, channel.title
+                    )
+                except Exception as exc:
+                    log.debug(
+                        "tiktok live check failed for %s: %s", channel.channel_id, exc
+                    )
+                    video = None
+                return channel.channel_id, video
+
+        current: dict[str, tuple[Video, datetime]] = {}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            results = await asyncio.gather(*(check(c) for c in channels))
+        for username, video in results:
+            if video is None:
+                continue
+            previous = self.lives.get(username)
+            detected_at = (
+                previous[1]
+                if previous and previous[0].video_id == video.video_id
+                else datetime.now(tz=timezone.utc)
+            )
+            current[username] = (video, detected_at)
+        self._replace_platform("tiktok", current)
+
     async def _loop(self) -> None:
         while True:
             try:
@@ -174,6 +216,14 @@ class LiveMonitor:
                 log.exception("twitch live poll iteration failed")
             await asyncio.sleep(self.twitch_check_seconds)
 
+    async def _tiktok_loop(self) -> None:
+        while True:
+            try:
+                await self.check_tiktok_once()
+            except Exception:
+                log.exception("tiktok live poll iteration failed")
+            await asyncio.sleep(self.tiktok_check_seconds)
+
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.get_running_loop().create_task(self._loop())
@@ -181,9 +231,13 @@ class LiveMonitor:
             self._twitch_task = asyncio.get_running_loop().create_task(
                 self._twitch_loop()
             )
+        if self._tiktok_task is None:
+            self._tiktok_task = asyncio.get_running_loop().create_task(
+                self._tiktok_loop()
+            )
 
     async def stop(self) -> None:
-        for task in (self._task, self._twitch_task):
+        for task in (self._task, self._twitch_task, self._tiktok_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -192,3 +246,4 @@ class LiveMonitor:
                     pass
         self._task = None
         self._twitch_task = None
+        self._tiktok_task = None

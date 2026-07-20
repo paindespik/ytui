@@ -51,14 +51,14 @@ class HomeFeedScreen(BrowseScreen):
     def _with_lives(self) -> list[Video]:
         """Feed videos with active lives pinned on top (deduplicated).
 
-        Lives are prefixed with a colored dot: \U0001f534 YouTube, \U0001f7e3 Twitch
-        (the Source column also shows a purple "Twitch" label).
+        Lives are prefixed with a colored dot: \U0001f534 YouTube, \U0001f7e3 Twitch,
+        \U0001f3b5 TikTok (the Source column also shows a colored platform label).
         """
         lives = list(self.app.active_lives.values())
         live_ids = {v.video_id for v in lives}
         pinned: list[Video] = []
         for v in lives:
-            dot = "\U0001f7e3" if v.platform == "twitch" else "\U0001f534"
+            dot = {"twitch": "\U0001f7e3", "tiktok": "\U0001f3b5"}.get(v.platform, "\U0001f534")
             pinned.append(v.model_copy(update={"title": f"{dot} {v.title}"}))
         return pinned + [v for v in self._feed_videos if v.video_id not in live_ids]
 

@@ -83,6 +83,8 @@ class SettingsScreen(Screen):
             label = f"{channel.title}  [dim]{channel.ref}[/dim]" if channel.title else channel.ref
             if channel.platform == "twitch":
                 label = f"[#a970ff]Twitch[/] · {label}"
+            elif channel.platform == "tiktok":
+                label = f"[#ff0050]TikTok[/] · {label}"
             options.add_option(Option(label, id=channel.channel_id))
         if not self._channels:
             options.add_option(Option("(no channels followed)", disabled=True))
@@ -108,7 +110,8 @@ class SettingsScreen(Screen):
 
     def action_add_channel(self) -> None:
         prompt = (
-            "Add channel (UC id, @handle, bitchute:<slug>, odysee:@name:claim or twitch:<login>):"
+            "Add channel (UC id, @handle, bitchute:<slug>, odysee:@name:claim, "
+            "twitch:<login> or tiktok:<user>):"
         )
 
         def on_entry(entry: str | None) -> None:
@@ -133,6 +136,12 @@ class SettingsScreen(Screen):
             self.app.notify(
                 f"Added {name} (Twitch). Lives pin to the top of Home when the "
                 "channel goes live \U0001f7e3 — Twitch adds no videos to the feed.",
+                timeout=8,
+            )
+        elif channel.platform == "tiktok":
+            self.app.notify(
+                f"Added {name} (TikTok). Lives pin to the top of Home when the "
+                "channel goes live \U0001f3b5 — TikTok adds no videos to the feed.",
                 timeout=8,
             )
         else:

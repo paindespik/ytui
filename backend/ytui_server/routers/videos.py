@@ -3,6 +3,7 @@ and like/comment actions."""
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 import anyio
@@ -21,12 +22,14 @@ from ..models import (
     Video,
     VideoDetails,
 )
-from ..services import odysee, twitch, ytdlp
+from ..services import odysee, tiktok, twitch, ytdlp
 from ..services.youtube import ApiError, AuthError
 
 router = APIRouter()
 
-Platform = Literal["youtube", "bitchute", "odysee", "twitch"]
+log = logging.getLogger(__name__)
+
+Platform = Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"]
 
 _ODYSEE_WRITE_DETAIL = "Odysee likes/comments require a LBRY wallet signature (not supported)"
 
@@ -119,6 +122,19 @@ async def video_streams(
                 return StreamInfo(
                     kind="hls", url=playlist, title=entry[0].title if entry else ""
                 )
+    if platform == "tiktok" and ":" in video_id:
+        # Live id "username:room_id": direct webcast resolution (yt-dlp's
+        # TikTokLiveIE wrongly fails on FLV-only rooms); yt-dlp fallback below.
+        username = video_id.split(":", 1)[0]
+        try:
+            async with httpx.AsyncClient(timeout=tiktok.TIMEOUT) as client:
+                resolved = await tiktok.resolve_live_stream(client, username)
+        except (httpx.HTTPError, tiktok.TikTokError) as exc:
+            log.debug("tiktok live resolve failed for %s: %s", username, exc)
+            resolved = None
+        if resolved is not None:
+            url, title = resolved
+            return StreamInfo(kind="hls", url=url, title=title)
     try:
         return await ytdlp.resolve_streams(
             _video_url(video_id, platform),

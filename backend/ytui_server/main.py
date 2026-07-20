@@ -64,6 +64,7 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
             db,
             check_minutes=settings.live_check_minutes,
             twitch_check_seconds=settings.twitch_check_seconds,
+            tiktok_check_seconds=settings.tiktok_check_seconds,
         )
         if start_live_poll:
             app.state.live_monitor.start()

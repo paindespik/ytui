@@ -41,10 +41,16 @@ Future<void> requestNotificationsPermission() async {
 
 Future<void> showLiveNotification(String videoId, String title, String channel,
     {String platform = 'youtube'}) {
-  final icon = platform == 'twitch' ? '\u{1F7E3}' : '\u{1F534}';
-  final summary = platform == 'twitch'
-      ? '$icon $channel is live on Twitch'
-      : '$icon $channel is live';
+  final icon = switch (platform) {
+    'twitch' => '\u{1F7E3}',
+    'tiktok' => '\u{1F3B5}',
+    _ => '\u{1F534}',
+  };
+  final summary = switch (platform) {
+    'twitch' => '$icon $channel is live on Twitch',
+    'tiktok' => '$icon $channel is live on TikTok',
+    _ => '$icon $channel is live',
+  };
   return notificationsPlugin.show(
     _notifId(videoId),
     summary,

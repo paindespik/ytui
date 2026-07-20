@@ -84,20 +84,30 @@ class VideoTile extends ConsumerWidget {
                             top: 4,
                             left: 4,
                             child: Semantics(
-                              label: video.platform == 'twitch' ? 'Twitch' : 'Live',
+                              label: switch (video.platform) {
+                                'twitch' => 'Twitch',
+                                'tiktok' => 'TikTok',
+                                _ => 'Live',
+                              },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 6,
                                   vertical: 2,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: video.platform == 'twitch'
-                                      ? kTwitchPurple
-                                      : kBrandRed,
+                                  color: switch (video.platform) {
+                                    'twitch' => kTwitchPurple,
+                                    'tiktok' => kTikTokRed,
+                                    _ => kBrandRed,
+                                  },
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Text(
-                                  video.platform == 'twitch' ? 'TWITCH' : 'LIVE',
+                                  switch (video.platform) {
+                                    'twitch' => 'TWITCH',
+                                    'tiktok' => 'TIKTOK',
+                                    _ => 'LIVE',
+                                  },
                                   style: textTheme.labelSmall?.copyWith(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,

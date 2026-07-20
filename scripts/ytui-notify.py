@@ -35,7 +35,8 @@ import tomlkit
 # Config
 # ---------------------------------------------------------------------------
 
-POLL_SECONDS = 120  # 2 min — Twitch lives are caught ~1 min server-side
+POLL_SECONDS = 60  # Twitch/TikTok lives are caught ~1 min server-side → notify ≤ ~2 min in
+NOTIFY_WAIT_TIMEOUT = 3600  # reap a --wait notify-send the server never closes (wedged daemon)
 CACHE_FILE = Path.home() / ".cache" / "ytui" / "notify_seen.json"
 CONFIG_FILE = Path.home() / ".config" / "ytui" / "config.toml"
 
@@ -138,6 +139,7 @@ def fetch_lives(base_url: str, token: str) -> tuple[bool, dict[str, dict[str, st
                 "title": v.get("title", ""),
                 "channel": v.get("channel_title", ""),
                 "url": v.get("url", ""),
+                "platform": v.get("platform", "youtube"),
             }
     return True, current
 
@@ -280,7 +282,15 @@ def _notify_and_dispatch(summary: str, body: str, url: str, terminal: str) -> No
         body,
     ]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=NOTIFY_WAIT_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        log.warning(
+            "notify-send --wait exceeded %ss (notification server unresponsive?) — reaped",
+            NOTIFY_WAIT_TIMEOUT,
+        )
+        return
     except OSError as exc:
         log.warning("notify-send failed: %s", exc)
         return
@@ -339,8 +349,8 @@ def main() -> None:
                 if vid not in lives_seen:
                     log.info("live: %s (%s)", item["title"], item["channel"])
                     platform = item.get("platform", "youtube")
-                    icon = "🟣" if platform == "twitch" else "🔴"
-                    label = "Twitch" if platform == "twitch" else "Live"
+                    icon = {"twitch": "🟣", "tiktok": "🎵"}.get(platform, "🔴")
+                    label = {"twitch": "Twitch", "tiktok": "TikTok"}.get(platform, "Live")
                     notify(
                         f"{icon} {label} — {item['channel'] or 'YouTube'}",
                         item["title"],

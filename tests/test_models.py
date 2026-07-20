@@ -67,6 +67,24 @@ def test_video_url_twitch_channel():
     assert v.url == "https://www.twitch.tv/zerator"
 
 
+def test_video_url_tiktok_live():
+    """Live composite id "username:room_id" routes to the /live page."""
+    v = Video(video_id="weathernewslive:755123", title="L", platform="tiktok")
+    assert v.url == "https://www.tiktok.com/@weathernewslive/live"
+
+
+def test_video_url_tiktok_channel():
+    v = Video(video_id="weathernewslive", title="W", kind="channel", platform="tiktok")
+    assert v.url == "https://www.tiktok.com/@weathernewslive"
+
+
+def test_video_url_tiktok_video():
+    v = Video(video_id="7300000000", title="V", channel_id="user", platform="tiktok")
+    assert v.url == "https://www.tiktok.com/@user/video/7300000000"
+    bare = Video(video_id="7300000000", title="V", platform="tiktok")
+    assert bare.url == "https://www.tiktok.com/embed/7300000000"
+
+
 def test_video_platform_defaults_to_youtube():
     assert Video(video_id="abc123", title="v").platform == "youtube"
 

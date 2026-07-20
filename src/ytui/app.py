@@ -142,6 +142,11 @@ class YtuiApp(App):
                         f"\U0001f7e3 Twitch: {video.channel_title} \u2014 {video.title}",
                         timeout=10,
                     )
+                elif video.platform == "tiktok":
+                    self.notify(
+                        f"\U0001f3b5 TikTok: {video.channel_title} \u2014 {video.title}",
+                        timeout=10,
+                    )
                 else:
                     self.notify(
                         f"\U0001f534 Live: {video.channel_title} \u2014 {video.title}",
@@ -281,15 +286,16 @@ class YtuiApp(App):
         self.run_worker(self._play_video_async(video, audio_only), group="player")
 
     async def _playback_url(self, video: Video) -> str:
-        """Ad-free playlist-proxy URL for a Twitch live, else the plain URL.
+        """Resolved stream URL for a Twitch/TikTok live, else the plain URL.
 
         Live ids carry "login:stream_id"; VODs and other platforms play
-        directly. Falls back to the direct (ad-fed) URL when resolution fails.
+        directly. Falls back to the page URL when resolution fails (Twitch:
+        direct ad-fed stream; TikTok: /live page via yt-dlp).
         """
-        if video.platform != "twitch" or ":" not in video.video_id:
+        if video.platform not in ("twitch", "tiktok") or ":" not in video.video_id:
             return video.url
         try:
-            streams = await self.client.video_streams(video.video_id, platform="twitch")
+            streams = await self.client.video_streams(video.video_id, platform=video.platform)
         except YtuiApiError:
             return video.url
         return streams.get("url") or video.url
@@ -489,6 +495,8 @@ class YtuiApp(App):
             channel_id = f"odysee:{channel_id}"
         elif channel_id and video.platform == "twitch":
             channel_id = f"twitch:{channel_id}"
+        elif channel_id and video.platform == "tiktok":
+            channel_id = f"tiktok:{channel_id}"
         if not channel_id:
             self.notify("No channel ID for this item.", severity="warning", timeout=5)
             return

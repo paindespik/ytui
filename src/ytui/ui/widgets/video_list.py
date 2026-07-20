@@ -15,8 +15,11 @@ _PLATFORM_LABELS = {
     "bitchute": "BitChute",
     "odysee": "Odysee",
     "twitch": "Twitch",
+    "tiktok": "TikTok",
 }
 _TWITCH_STYLE = "#a970ff"  # Twitch brand purple
+_TIKTOK_STYLE = "#ff0050"  # TikTok brand red-pink
+_PLATFORM_STYLES = {"twitch": _TWITCH_STYLE, "tiktok": _TIKTOK_STYLE}
 
 
 def _source_label(video: Video) -> str:
@@ -70,9 +73,7 @@ class VideoList(DataTable):
                 Text(video.age, style=style),
                 Text(
                     _source_label(video),
-                    style=(
-                        f"{style} {_TWITCH_STYLE}".strip() if video.platform == "twitch" else style
-                    ),
+                    style=f"{style} {_PLATFORM_STYLES.get(video.platform, '')}".strip(),
                 ),
             )
 

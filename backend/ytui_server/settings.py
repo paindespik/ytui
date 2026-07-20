@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     twitch_check_seconds: int = Field(
         default=60, validation_alias="YTUI_TWITCH_CHECK_SECONDS"
     )
+    # TikTok liveness is one unsigned GET per followed channel
+    # (api-live/user/room), light enough for the same cadence as Twitch.
+    tiktok_check_seconds: int = Field(
+        default=60, validation_alias="YTUI_TIKTOK_CHECK_SECONDS"
+    )
     # TTV.LOL-compatible playlist proxies for ad-free Twitch streams, tried in
     # order with fallback to the direct (ad-fed) stream. Empty disables.
     twitch_proxies: str = Field(

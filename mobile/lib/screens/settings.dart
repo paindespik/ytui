@@ -23,6 +23,7 @@ const _platformLabels = <String, String>{
   'bitchute': 'BitChute',
   'odysee': 'Odysee',
   'twitch': 'Twitch',
+  'tiktok': 'TikTok',
 };
 
 

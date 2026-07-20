@@ -16,7 +16,7 @@ import httpx
 
 from ..db import Database
 from ..models import FollowedChannel, Video
-from . import twitch
+from . import tiktok, twitch
 
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 HANDLE_URL = "https://www.youtube.com/{handle}"
@@ -26,6 +26,7 @@ _BITCHUTE_EMBED_RE = re.compile(r"/embed/([\w-]+)/?")
 ODYSEE_PREFIX = "odysee:"
 ODYSEE_RSS_URL = "https://odysee.com/$/rss/{channel_id}"
 TWITCH_PREFIX = "twitch:"
+TIKTOK_PREFIX = "tiktok:"
 _ODYSEE_LINK_RE = re.compile(r"odysee\.com/(?:@[^/]+/)?([^/?#]+:[0-9a-f]+)")
 _ODYSEE_CHANNEL_URL_RE = re.compile(r"odysee\.com/(@[^/?#:]+:\w+)")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
@@ -185,8 +186,8 @@ class FeedService:
         self.db = db
 
     async def resolve_ref(self, ref: str, client: httpx.AsyncClient) -> FollowedChannel:
-        """Resolve a channel ref: UC id, @handle, bitchute:/odysee:/twitch:
-        prefix, or a bare name (YouTube handle first, then Twitch login)."""
+        """Resolve a channel ref: UC id, @handle, bitchute:/odysee:/twitch:/
+        tiktok: prefix, or a bare name (YouTube handle first, then Twitch login)."""
         if ref.startswith(BITCHUTE_PREFIX):
             slug = ref[len(BITCHUTE_PREFIX):]
             return FollowedChannel(
@@ -211,6 +212,20 @@ class FeedService:
                 channel_id=odysee_id,
                 title=title,
                 platform="odysee",
+            )
+        tiktok_user = tiktok.parse_username(ref)
+        if tiktok_user is not None:
+            try:
+                data = await tiktok.fetch_user_room(client, tiktok_user)
+            except tiktok.TikTokError as exc:
+                # Unknown user (or unusable payload) → 404 like other bad refs.
+                raise ValueError(str(exc)) from exc
+            nickname = (data.get("user") or {}).get("nickname") or ""
+            return FollowedChannel(
+                ref=f"{TIKTOK_PREFIX}{tiktok_user}",
+                channel_id=tiktok_user,
+                title=nickname or f"@{tiktok_user}",
+                platform="tiktok",
             )
         twitch_login = twitch.parse_login(ref)
         if twitch_login is not None:
@@ -284,6 +299,10 @@ class FeedService:
             if channel.platform == "twitch":
                 # No RSS/VOD feed in the merged home feed; Twitch lives
                 # surface through /api/lives instead.
+                return [], None
+            if channel.platform == "tiktok":
+                # Live-only platform: lives surface through /api/lives, no
+                # video feed.
                 return [], None
             if channel.platform == "bitchute":
                 return await self._fetch_bitchute(channel, client, force_refresh)

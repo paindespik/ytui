@@ -13,6 +13,9 @@ const Color kBrandRed = Color(0xFFE53935);
 /// Twitch brand accent — live pill, channel badge, notification dot.
 const Color kTwitchPurple = Color(0xFF9146FF);
 
+/// TikTok brand accent — live pill, channel badge, notification dot.
+const Color kTikTokRed = Color(0xFFFE2C55);
+
 /// Shared corner radii.
 const double kRadiusSm = 8;
 const double kRadiusMd = 12;

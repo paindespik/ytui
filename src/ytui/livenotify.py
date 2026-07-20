@@ -22,6 +22,8 @@ def send_live_notification(video: Video) -> str:
         return ""
     if video.platform == "twitch":
         summary = f"🟣 Twitch — {video.channel_title or 'Twitch'}"
+    elif video.platform == "tiktok":
+        summary = f"🎵 TikTok — {video.channel_title or 'TikTok'}"
     else:
         summary = f"🔴 Live — {video.channel_title or 'YouTube'}"
     cmd = [
