@@ -53,6 +53,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   String? _loadedVideoId;
   bool _retried = false;
+  bool _errorCheckPending = false;
   String? _error;
   Timer? _heartbeat;
   List<SponsorSegment> _segments = const [];
@@ -78,6 +79,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
     });
     _errorSub = player.stream.error.listen((message) async {
+      // libmpv also surfaces non-fatal decoder noise while playback keeps
+      // running (e.g. h264 "Late SEI" on TikTok FLV lives). Genuine load
+      // failures fire before playback starts (playing=false, handled below);
+      // a mid-stream death flips `playing` to false moments later — so when
+      // the error arrives mid-playback, defer and recheck instead of either
+      // trusting or swallowing it.
+      if (player.state.playing) {
+        if (_errorCheckPending) return;
+        _errorCheckPending = true;
+        await Future<void>.delayed(const Duration(seconds: 1));
+        _errorCheckPending = false;
+        if (!mounted || player.state.playing) return;
+      }
       // Expired/broken stream URL: re-resolve once, then surface the error.
       if (_retried) {
         if (mounted) setState(() => _error = message);
@@ -118,6 +132,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     } catch (_) {}
   }
 
+  /// Composite "channel:broadcast_id" ids (Twitch/TikTok) are live streams:
+  /// unseekable (a resume-seek stalls FLV lives) with no meaningful resume
+  /// position (mpv reports the rolling live buffer as duration).
+  static bool _isLiveId(Video video) =>
+      (video.platform == 'twitch' || video.platform == 'tiktok') &&
+      video.videoId.contains(':');
+
   Future<void> _load(Video video, {bool resume = true}) async {
     _loadedVideoId = video.videoId;
     setState(() {
@@ -137,7 +158,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         text: '▶ ${video.channelTitle}',
       ).catchError((_) {}));
       double start = 0;
-      if (resume) {
+      if (resume && !_isLiveId(video)) {
         final info = await api.resume(video.videoId).catchError((_) => null);
         if (info != null) start = resumeStart(info.position, info.duration);
       }
@@ -250,7 +271,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Future<void> _savePosition() async {
     final video = ref.read(queueProvider).current;
-    if (video == null) return;
+    if (video == null || _isLiveId(video)) return;
     final pos = player.state.position;
     final dur = player.state.duration;
     if (dur.inSeconds == 0) return;
