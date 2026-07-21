@@ -34,14 +34,14 @@ TWITCH_WS_URL = "wss://irc-ws.chat.twitch.tv:443"
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")  # Twitch color tag; reject junk
 
 
-def _extract_json_after(s: str, anchor: str) -> str | None:
+def _extract_json_after(s: str, anchor: str, start: int = 0) -> str | None:
     """Return the JSON object literal that follows `anchor` in `s`, or None.
 
     Brace-balances while respecting string/escape state, so it stops at the
     matching close brace (ytInitialData / INNERTUBE_CONTEXT do not end at a
     predictable delimiter a naive regex could anchor on).
     """
-    idx = s.find(anchor)
+    idx = s.find(anchor, start)
     if idx == -1:
         return None
     start = s.find("{", idx)
@@ -68,6 +68,28 @@ def _extract_json_after(s: str, anchor: str) -> str | None:
             if depth == 0:
                 return s[start : i + 1]
     return None
+
+
+def _find_json(s: str, anchor: str) -> dict | None:
+    """First JSON object after any `anchor` occurrence that actually parses.
+
+    Live pages sometimes carry an earlier spurious `ytInitialData` token whose
+    following brace block is a single-quoted JS object (not JSON); walk the
+    occurrences and return the first whose balanced ``{...}`` decodes.
+    """
+    pos = 0
+    while True:
+        idx = s.find(anchor, pos)
+        if idx == -1:
+            return None
+        pos = idx + len(anchor)
+        blob = _extract_json_after(s, anchor, idx)
+        if not blob:
+            continue
+        try:
+            return json.loads(blob)
+        except ValueError:
+            continue
 
 
 def _parse_live_actions(lcc: dict) -> tuple[list[ChatMessage], str | None, int]:
@@ -216,48 +238,40 @@ class ChatManager:
             # session cookies the get_live_chat POST returns 200 with empty actions.
             client.cookies.set("SOCS", "CAI", domain=".youtube.com")
             await client.get("https://www.youtube.com/")
-            page = (await client.get(f"https://www.youtube.com/watch?v={video_id}")).text
-            raw = _extract_json_after(page, "ytInitialData")
-            if not raw:
-                room.active = False
-                return
-            data = json.loads(raw)
-            try:
-                reload_cont = data["contents"]["twoColumnWatchNextResults"][
-                    "conversationBar"
-                ]["liveChatRenderer"]["continuations"][0]["reloadContinuationData"][
-                    "continuation"
-                ]
-            except (KeyError, IndexError, TypeError):
-                room.active = False  # not live / chat disabled
-                return
-            api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', page)
-            ctx_raw = _extract_json_after(page, '"INNERTUBE_CONTEXT":')
-            if not api_key_match or not ctx_raw:
-                room.active = False
-                return
-            api_key = api_key_match.group(1)
-            ctx = json.loads(ctx_raw)
-            visitor = ctx.get("client", {}).get("visitorData", "")
-
-            # First fetch is a GET.
-            first_page = (
-                await client.get(
-                    f"https://www.youtube.com/live_chat?continuation={reload_cont}"
-                )
-            ).text
-            first_raw = _extract_json_after(first_page, "ytInitialData")
-            if not first_raw:
-                room.active = False
-                return
-            lcc = (
-                json.loads(first_raw)
-                .get("continuationContents", {})
-                .get("liveChatContinuation")
-            )
+            reload_cont = api_key = ctx = None
+            lcc = None
+            for _ in range(4):  # transient watch pages omit the chat data; retry
+                page = (await client.get(f"https://www.youtube.com/watch?v={video_id}")).text
+                data = _find_json(page, "ytInitialData") or {}
+                try:
+                    reload_cont = data["contents"]["twoColumnWatchNextResults"][
+                        "conversationBar"
+                    ]["liveChatRenderer"]["continuations"][0]["reloadContinuationData"][
+                        "continuation"
+                    ]
+                except (KeyError, IndexError, TypeError):
+                    reload_cont = None
+                api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', page)
+                ctx = _find_json(page, '"INNERTUBE_CONTEXT":')
+                if reload_cont and api_key_match and ctx:
+                    api_key = api_key_match.group(1)
+                    first_page = (
+                        await client.get(
+                            f"https://www.youtube.com/live_chat?continuation={reload_cont}"
+                        )
+                    ).text
+                    lcc = (
+                        (_find_json(first_page, "ytInitialData") or {})
+                        .get("continuationContents", {})
+                        .get("liveChatContinuation")
+                    )
+                    if lcc:
+                        break
+                await asyncio.sleep(2)
             if not lcc:
-                room.active = False
+                room.active = False  # not live / chat disabled / unavailable
                 return
+            visitor = ctx.get("client", {}).get("visitorData", "")
             msgs, cont, timeout = _parse_live_actions(lcc)
             for m in msgs:
                 room.add(m)

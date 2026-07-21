@@ -6,6 +6,7 @@ from ytui_server.models import ChatMessage
 from ytui_server.services.livechat import (
     YT_DEFAULT_TIMEOUT_MS,
     ChatManager,
+    _find_json,
     _parse_live_actions,
     _parse_privmsg,
     _Room,
@@ -126,3 +127,14 @@ async def test_chat_manager_cursor_delta():
 def test_chat_unsupported_platform(client):
     r = client.get("/api/lives/x/chat?platform=odysee")
     assert r.status_code == 501
+
+
+def test_find_json_skips_unparseable_match():
+    # First 'ytInitialData' points at a single-quoted JS object (invalid JSON);
+    # _find_json must skip it and return the real assignment's JSON.
+    s = "if(ytInitialData){'x':1}; var ytInitialData = {\"a\": {\"b\": 2}};"
+    assert _find_json(s, "ytInitialData") == {"a": {"b": 2}}
+
+
+def test_find_json_none_when_absent():
+    assert _find_json("nothing here", "ytInitialData") is None
