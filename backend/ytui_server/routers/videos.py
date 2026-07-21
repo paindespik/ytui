@@ -3,12 +3,14 @@ and like/comment actions."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import urllib.parse
 from typing import Literal
 
 import anyio
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..models import (
     Channel,
@@ -22,7 +24,7 @@ from ..models import (
     Video,
     VideoDetails,
 )
-from ..services import odysee, tiktok, twitch, ytdlp
+from ..services import dash, odysee, tiktok, twitch, ytdlp
 from ..services.youtube import ApiError, AuthError
 
 router = APIRouter()
@@ -144,6 +146,35 @@ async def video_streams(
         )
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
+
+
+@router.get("/videos/{video_id}/mpd")
+async def video_mpd(
+    video_id: str,
+    request: Request,
+    platform: Platform = "youtube",
+    max_height: int = Query(default=1080, ge=144, le=4320),
+) -> Response:
+    try:
+        split = await ytdlp.resolve_split_mp4(_video_url(video_id, platform), max_height)
+    except ytdlp.UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
+    if split is None:
+        raise HTTPException(status_code=404, detail="No split MP4 formats")
+    client = request.app.state.proxy_client
+    video_ranges, audio_ranges = await asyncio.gather(
+        dash.probe_ranges(client, split.video_url),
+        dash.probe_ranges(client, split.audio_url),
+    )
+    if video_ranges is None or audio_ranges is None:
+        raise HTTPException(status_code=404, detail="sidx not found")
+    proxy = lambda u: "/api/proxy?url=" + urllib.parse.quote(u, safe="")  # noqa: E731
+    mpd_xml = dash.build_mpd(split, proxy, video_ranges, audio_ranges)
+    return Response(
+        content=mpd_xml,
+        media_type="application/dash+xml",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/videos/{video_id}/related", response_model=SearchResponse)

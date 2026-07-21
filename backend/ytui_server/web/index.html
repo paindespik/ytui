@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101014">
+  <title>ytui</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/views.css">
+</head>
+<body>
+  <div id="app" class="app" hidden>
+    <nav class="sidebar" id="sidebar">
+      <a class="brand" href="#/">
+        <img src="icon.svg" alt="" width="28" height="28">
+        <span>ytui</span>
+      </a>
+      <a href="#/" data-nav="/">Accueil</a>
+      <a href="#/suggestions" data-nav="/suggestions">Suggestions</a>
+      <a href="#/search" data-nav="/search">Recherche</a>
+      <a href="#/lives" data-nav="/lives">Lives</a>
+      <a href="#/history" data-nav="/history">Historique</a>
+      <a href="#/playlists" data-nav="/playlists">Playlists</a>
+      <a href="#/settings" data-nav="/settings">Réglages</a>
+      <button class="nav-help" id="nav-help" title="Raccourcis clavier (?)">? Aide</button>
+    </nav>
+    <main id="view" class="view" tabindex="-1"></main>
+  </div>
+  <div id="toasts" class="toasts"></div>
+  <div id="modal-root"></div>
+  <script src="vendor/hls.min.js"></script>
+  <script src="vendor/dash.all.min.js"></script>
+  <script src="vendor/mpegts.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

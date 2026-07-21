@@ -5,8 +5,11 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .db import Database
@@ -17,6 +20,8 @@ from .routers import (
     history,
     lives,
     playlists,
+    proxy,
+    session,
     status,
     suggestions,
     videos,
@@ -30,6 +35,19 @@ from .services.youtube import YouTubeService
 from .settings import Settings
 
 
+class _WebStaticFiles(StaticFiles):
+    """Static SPA files: always revalidate (cheap 304s via ETag).
+
+    Without an explicit Cache-Control, browsers apply heuristic caching and
+    may keep serving stale JS modules after a deploy.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(settings: Settings | None = None, start_live_poll: bool = True) -> FastAPI:
     settings = settings or Settings()
     logging.basicConfig(
@@ -40,6 +58,12 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.started_at = time.monotonic()
+        proxy_client = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(10.0, read=30.0),
+            headers={"User-Agent": proxy.PROXY_UA},
+        )
+        app.state.proxy_client = proxy_client
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         db = Database(
             settings.data_dir / "meta.sqlite",
@@ -72,6 +96,7 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
             yield
         finally:
             await app.state.live_monitor.stop()
+            await proxy_client.aclose()
             db.close()
 
     app = FastAPI(title="ytui-server", version=__version__, lifespan=lifespan)
@@ -91,10 +116,16 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
         lives,
         auth,
         status,
+        proxy,
     ):
         app.include_router(
             router.router, prefix="/api", dependencies=[Depends(require_token)]
         )
+    app.include_router(session.router, prefix="/api")
+
+    web_dir = Path(__file__).parent / "web"
+    if web_dir.is_dir():
+        app.mount("/", _WebStaticFiles(directory=web_dir, html=True), name="web")
     return app
 
 

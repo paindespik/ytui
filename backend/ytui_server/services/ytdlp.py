@@ -10,6 +10,9 @@ import asyncio
 import json
 import logging
 import re
+import threading
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote_plus, urlparse
 
@@ -38,6 +41,35 @@ _LBRY_URI_RE = re.compile(r"lbry://(?:@[^/]+(?:[:#]\w+)?/)?([^/?#:]+)[:#]([0-9a-
 
 _INTERACTIVE_SEM = asyncio.Semaphore(3)  # streams/details: a user is waiting
 _BULK_SEM = asyncio.Semaphore(4)         # search/listings/suggestions
+
+
+# TTL cache for full (non-flat) extract_info results. The web player hits
+# /streams then /mpd for the same video back to back; without this, each
+# request pays a full multi-second yt-dlp extraction.
+_INFO_CACHE: dict[str, tuple[float, dict]] = {}
+_INFO_CACHE_LOCK = threading.Lock()
+_INFO_CACHE_TTL = 300.0  # seconds; stream URLs themselves last ~6 h
+_INFO_CACHE_MAX = 32
+
+
+def _extract_info_cached(url: str) -> dict:
+    """extract_info with a small module-level TTL cache (thread-safe)."""
+    now = time.monotonic()
+    with _INFO_CACHE_LOCK:
+        cached = _INFO_CACHE.get(url)
+        if cached is not None and now - cached[0] < _INFO_CACHE_TTL:
+            return cached[1]
+    import yt_dlp
+
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    with _INFO_CACHE_LOCK:
+        if url not in _INFO_CACHE and len(_INFO_CACHE) >= _INFO_CACHE_MAX:
+            oldest = min(_INFO_CACHE, key=lambda k: _INFO_CACHE[k][0])
+            del _INFO_CACHE[oldest]
+        _INFO_CACHE[url] = (time.monotonic(), info)
+    return info
 
 
 class UpstreamError(Exception):
@@ -204,11 +236,7 @@ def _stream_expiry(url: str) -> datetime | None:
 def _extract_streams(
     url: str, max_height: int, audio_only: bool, sub_langs: str
 ) -> StreamInfo:
-    import yt_dlp
-
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info = _extract_info_cached(url)
 
     title = info.get("title") or ""
     duration = info.get("duration")
@@ -324,6 +352,64 @@ async def resolve_streams(
     return await _run(
         _INTERACTIVE_SEM, _extract_streams, url, max_height, audio_only, sub_langs
     )
+
+
+@dataclass
+class SplitMp4:
+    """Best avc1 video-only + mp4a audio-only pair for DASH MPD generation."""
+
+    video_url: str
+    width: int
+    height: int
+    video_codec: str
+    video_bitrate: int  # bps
+    audio_url: str
+    audio_codec: str
+    audio_bitrate: int  # bps
+    duration: int  # seconds
+
+
+def _extract_split_mp4(url: str, max_height: int) -> SplitMp4 | None:
+    # avc1/mp4a only: one MP4 sidx parser, universal browser support.
+    info = _extract_info_cached(url)
+    formats = info.get("formats") or []
+    videos = [
+        f
+        for f in formats
+        if (f.get("vcodec") or "").startswith("avc1")
+        and f.get("acodec") in (None, "none")
+        and f.get("ext") == "mp4"
+        and not (f.get("protocol") or "").startswith("m3u8")
+        and (f.get("height") or 0) <= max_height
+    ]
+    audios = [
+        f
+        for f in formats
+        if (f.get("acodec") or "").startswith("mp4a")
+        and f.get("vcodec") in (None, "none")
+        and f.get("ext") in ("m4a", "mp4")
+    ]
+    if not videos or not audios:
+        return None
+    bv = max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
+    ba = max(audios, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+    height = bv.get("height") or 0
+    duration = info.get("duration")
+    return SplitMp4(
+        video_url=bv["url"],
+        width=bv.get("width") or height * 16 // 9,
+        height=height,
+        video_codec=bv.get("vcodec") or "",
+        video_bitrate=int((bv.get("tbr") or 0) * 1000) or 2_000_000,
+        audio_url=ba["url"],
+        audio_codec=ba.get("acodec") or "",
+        audio_bitrate=int((ba.get("abr") or ba.get("tbr") or 0) * 1000) or 128_000,
+        duration=int(duration) if duration else 0,
+    )
+
+
+async def resolve_split_mp4(url: str, max_height: int) -> SplitMp4 | None:
+    return await _run(_INTERACTIVE_SEM, _extract_split_mp4, url, max_height)
 
 
 def _parse_badge_duration(text: str) -> int | None:

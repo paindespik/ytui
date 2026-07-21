@@ -222,6 +222,10 @@ class LiveOut(BaseModel):
     detected_at: datetime
 
 
+class SessionIn(BaseModel):
+    token: str
+
+
 class AuthStatusOut(BaseModel):
     authenticated: bool
 

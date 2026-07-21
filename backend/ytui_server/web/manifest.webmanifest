@@ -1,0 +1,12 @@
+{
+  "name": "ytui",
+  "short_name": "ytui",
+  "description": "Client multi-plateformes YouTube / Twitch / Odysee / BitChute / TikTok",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#101014",
+  "theme_color": "#101014",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
