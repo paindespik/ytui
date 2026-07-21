@@ -204,12 +204,29 @@ def test_pick_stream_url_sdk_fallback():
     assert tiktok._pick_stream_url(stream) == "https://cdn/or.flv"
 
 
-def test_pick_stream_url_sdk_prefers_hls():
+def test_pick_stream_url_sdk_prefers_flv():
+    # TikTok's HLS URLs 403 in practice, so FLV wins within the SDK blob too.
     sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv", "hls": "https://cdn/or.m3u8"}})
     assert (
         tiktok._pick_stream_url({"flv_pull_url": {}, "live_core_sdk_data": sdk})
-        == "https://cdn/or.m3u8"
+        == "https://cdn/or.flv"
     )
+
+
+def test_pick_stream_url_prefers_flv_over_flat_hls():
+    # ali.mage.astropho-style room: flat HLS present (but 403s live), SDK has FLV.
+    sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv", "hls": "https://cdn/or.m3u8"}})
+    stream = {
+        "hls_pull_url": "https://flat/index.m3u8",
+        "flv_pull_url": {},
+        "live_core_sdk_data": sdk,
+    }
+    assert tiktok._pick_stream_url(stream) == "https://cdn/or.flv"
+
+
+def test_pick_stream_url_hls_only_fallback():
+    # No FLV anywhere → HLS is still returned as a last resort.
+    assert tiktok._pick_stream_url({"hls_pull_url": "https://only.m3u8"}) == "https://only.m3u8"
 
 
 def test_pick_stream_url_flat_flv_beats_sdk():
@@ -242,11 +259,12 @@ def test_resolve_live_stream_flv_only():
     assert resolved == ("https://pull-flv/hd1.flv", "Morning forecast")
 
 
-def test_resolve_live_stream_prefers_hls():
+def test_resolve_live_stream_prefers_flv():
+    # FLV is preferred over HLS (TikTok HLS pull URLs frequently 403).
     resolved = _run_resolve(
         _room_info(hls="https://pull-hls/index.m3u8", flv={"HD1": "https://pull-flv/hd1.flv"})
     )
-    assert resolved == ("https://pull-hls/index.m3u8", "Morning forecast")
+    assert resolved == ("https://pull-flv/hd1.flv", "Morning forecast")
 
 
 def test_resolve_live_stream_sdk_blob():

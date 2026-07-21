@@ -153,39 +153,53 @@ def _sdk_streams(stream_url: dict) -> dict[str, dict]:
     return out
 
 
+def _sdk_ordered(sdk: dict[str, dict]) -> list[dict]:
+    """SDK quality entries, best first, with audio-only ('ao') last."""
+    ordered = [sdk[q] for q in _SDK_QUALITY_PREFERENCE if q in sdk]
+    ordered += [v for q, v in sdk.items() if q not in _SDK_QUALITY_PREFERENCE and q != "ao"]
+    if "ao" in sdk:
+        ordered.append(sdk["ao"])
+    return ordered
+
+
 def _pick_stream_url(stream_url: dict) -> str:
-    """Best playable URL: flat HLS, then the HLS quality map, then flat FLV by
-    quality, then TikTok's newer live_core_sdk_data blob (HLS, FLV, then CMAF)."""
-    url = stream_url.get("hls_pull_url") or ""
-    if url:
-        return url
+    """Best playable URL for mpv / mpegts.js / hls.js.
+
+    FLV is preferred: TikTok's HLS pull URLs (both the flat fields and the SDK
+    blob) frequently answer 403 while the FLV endpoints stream fine, so HLS and
+    CMAF are kept only as last-resort fallbacks.
+    """
+    flv_map = stream_url.get("flv_pull_url")
+    sdk = _sdk_streams(stream_url)
+
+    # 1. FLV — the reliable path (flat by quality, then the SDK blob).
+    if isinstance(flv_map, dict):
+        for quality in _FLV_PREFERENCE:
+            if flv_map.get(quality):
+                return flv_map[quality]
+        for candidate in flv_map.values():
+            if candidate:
+                return candidate
+    for entry in _sdk_ordered(sdk):
+        if entry.get("flv"):
+            return entry["flv"]
+
+    # 2. HLS fallback (flat URL, quality map, then the SDK blob).
+    if stream_url.get("hls_pull_url"):
+        return stream_url["hls_pull_url"]
     hls_map = stream_url.get("hls_pull_url_map")
     if isinstance(hls_map, dict):
         for candidate in hls_map.values():
             if candidate:
                 return candidate
-    flv_map = stream_url.get("flv_pull_url")
-    if isinstance(flv_map, dict):
-        for quality in _FLV_PREFERENCE:
-            candidate = flv_map.get(quality) or ""
-            if candidate:
-                return candidate
-        for candidate in flv_map.values():
-            if candidate:
-                return candidate
-    # Flat fields empty (increasingly common): fall back to the SDK blob.
-    sdk = _sdk_streams(stream_url)
-    if sdk:
-        ordered = [sdk[q] for q in _SDK_QUALITY_PREFERENCE if q in sdk]
-        ordered += [
-            v for q, v in sdk.items() if q not in _SDK_QUALITY_PREFERENCE and q != "ao"
-        ]
-        if "ao" in sdk:
-            ordered.append(sdk["ao"])
-        for proto in ("hls", "flv", "cmaf"):
-            for entry in ordered:
-                if entry.get(proto):
-                    return entry[proto]
+    for entry in _sdk_ordered(sdk):
+        if entry.get("hls"):
+            return entry["hls"]
+
+    # 3. CMAF — last resort.
+    for entry in _sdk_ordered(sdk):
+        if entry.get("cmaf"):
+            return entry["cmaf"]
     return ""
 
 
