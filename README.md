@@ -1,6 +1,6 @@
 # ytui
 
-A self-hosted, multi-client YouTube (plus BitChute and Odysee) viewing system. A shared FastAPI backend aggregates RSS feeds, resolves playable stream URLs via `yt-dlp`, and stores history, playlists, and channels server-side in SQLite. Three independent front-ends — a Textual-based terminal UI, a headless argparse CLI, and a Flutter Android app — all consume the same REST API over a Bearer-token-authenticated connection, so state (watch history, resume position, followed channels, local playlists) stays in sync across every device.
+A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch and TikTok) viewing system. A shared FastAPI backend aggregates RSS feeds, resolves playable stream URLs via `yt-dlp`, and stores history, playlists, and channels server-side in SQLite. Four independent front-ends — a Textual-based terminal UI, a headless argparse CLI, a Flutter Android app, and a browser SPA served by the backend itself — all consume the same REST API, so state (watch history, resume position, followed channels, local playlists) stays in sync across every device.
 
 ## Features
 
@@ -10,18 +10,21 @@ A self-hosted, multi-client YouTube (plus BitChute and Odysee) viewing system. A
 - **Live notifications** — the server polls followed channels' `/live` pages every 5 min; clients poll `/api/lives` and surface desktop/mobile notifications, pinning live videos in the feed.
 - **YouTube interactions** — an OAuth2 "token push" model: the desktop client completes OAuth consent and uploads the token to the server, which then handles like/comment actions via the YouTube Data API v3 on behalf of every client.
 - **Search** — YouTube and Odysee search via `yt-dlp`/the LBRY API, from any client.
-- **Three clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/auth`), and a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling).
+- **Four clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/auth`), a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling), and a zero-build browser SPA (vanilla ES modules; dash.js/hls.js/mpegts.js playback through a same-origin stream proxy, server-generated DASH manifests for >360p YouTube, session-cookie auth, TUI-style keyboard shortcuts).
 
 ## Architecture
 
 ```
 Clients (TUI / CLI / Mobile) --Bearer-token REST--> FastAPI backend (uvicorn)
-                                                      ├─ FeedService (RSS merge)
-                                                      ├─ YtdlpService (search/streams)
-                                                      ├─ YouTubeService (OAuth2 like/comment)
-                                                      ├─ OdyseeService (LBRY API)
-                                                      └─ LiveMonitor (live polling)
-                                                      → SQLite (meta.sqlite)
+Browser SPA (session cookie) --same-origin REST-->  ├─ StaticFiles (ytui_server/web)
+                                                    ├─ Stream proxy (/api/proxy, /api/proxy/hls)
+                                                    ├─ DASH MPD generator (/api/videos/{id}/mpd)
+                                                    ├─ FeedService (RSS merge)
+                                                    ├─ YtdlpService (search/streams)
+                                                    ├─ YouTubeService (OAuth2 like/comment)
+                                                    ├─ OdyseeService (LBRY API)
+                                                    └─ LiveMonitor (live polling)
+                                                    → SQLite (meta.sqlite)
 
 Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
             (backend-tests → build-apk → deploy via SSH + docker compose)
@@ -33,6 +36,7 @@ Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
 | TUI      | Python 3.11+, Textual, textual-image, mpv |
 | CLI      | Python 3.11+, argparse, asyncio (shares the httpx REST client with the TUI) |
 | Mobile   | Dart/Flutter 3.6+, Riverpod, GoRouter, dio, media_kit, flutter_local_notifications |
+| Web      | Vanilla JS (ES modules, no build), dash.js, hls.js, mpegts.js — served by the backend |
 
 ## Setup
 
@@ -99,6 +103,15 @@ Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
    flutter build apk
    ```
    (also automated in CI).
+
+### Web (browser)
+
+Nothing to install: the SPA ships inside the backend wheel and is served at the
+backend root (e.g. `https://ytui.example.com/`). Open it, enter the
+`YTUI_API_TOKEN` on the login page (stored as an HttpOnly session cookie), and
+everything works from there — including >360p YouTube playback via
+server-generated DASH manifests proxied through the backend. Press `?` for the
+keyboard shortcuts.
 
 ## Usage examples
 
