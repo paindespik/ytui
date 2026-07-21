@@ -5,6 +5,7 @@ import { navigate } from "../js/router.js";
 import { prefs } from "../js/state.js";
 import {
   el,
+  channelPath,
   spinner,
   emptyState,
   errorToast,
@@ -49,10 +50,20 @@ export async function render(view) {
       return;
     }
     channelList.replaceChildren(
-      ...channels.map((c) =>
-        el(
+      ...channels.map((c) => {
+        const open = () => navigate(channelPath(c.channel_id, c.platform, c.title));
+        return el(
           "div",
-          { class: "row" },
+          {
+            class: "row",
+            tabindex: "0",
+            role: "button",
+            title: "Voir les vidéos de la chaîne",
+            onclick: open,
+            onkeydown: (e) => {
+              if (e.key === "Enter") open();
+            },
+          },
           el(
             "div",
             { class: "txt" },
@@ -66,7 +77,8 @@ export async function render(view) {
               class: "btn icon danger",
               title: "Ne plus suivre",
               text: "✕",
-              onclick: async () => {
+              onclick: async (e) => {
+                e.stopPropagation();
                 const ok = await confirmModal(
                   `Ne plus suivre « ${c.title || c.channel_id} » ?`,
                   { confirmLabel: "Ne plus suivre" },
@@ -82,8 +94,8 @@ export async function render(view) {
               },
             }),
           ),
-        ),
-      ),
+        );
+      }),
     );
   }
 
