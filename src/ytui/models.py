@@ -122,6 +122,16 @@ class Comment(BaseModel):
     is_pinned: bool = False
 
 
+class ChatMessage(BaseModel):
+    """A single live-chat message, as served by the backend API (read-only)."""
+
+    id: str = ""
+    author: str = ""
+    text: str = ""
+    color: str | None = None
+    timestamp: float = 0.0
+
+
 class VideoDetails(BaseModel):
     """Full metadata for one video, as served by the backend API."""
 

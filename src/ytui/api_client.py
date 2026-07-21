@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .models import Comment, SponsorSegment, Video, VideoDetails
+from .models import ChatMessage, Comment, SponsorSegment, Video, VideoDetails
 
 
 def _encode(video_id: str) -> str:
@@ -337,3 +337,16 @@ class YtuiClient:
     async def lives(self) -> list[Video]:
         data = (await self._request("GET", "/api/lives")).json()
         return [Video.model_validate(entry["video"]) for entry in data]
+
+    async def live_chat(
+        self, video_id: str, platform: str = "youtube", cursor: int = 0
+    ) -> tuple[list[ChatMessage], int, bool]:
+        data = (
+            await self._request(
+                "GET",
+                f"/api/lives/{_encode(video_id)}/chat",
+                params={"platform": platform, "cursor": cursor},
+            )
+        ).json()
+        msgs = [ChatMessage.model_validate(m) for m in data["messages"]]
+        return msgs, data.get("cursor", 0), data.get("active", True)

@@ -301,4 +301,11 @@ class YtuiApi {
         .map((e) => LiveItem.fromJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  Future<ChatPage> liveChat(String videoId,
+      {required String platform, int cursor = 0}) async {
+    final r = await _request('GET', '/api/lives/${_enc(videoId)}/chat',
+        query: {'platform': platform, 'cursor': cursor});
+    return ChatPage.fromJson(r.data as Map<String, dynamic>);
+  }
 }

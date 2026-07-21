@@ -18,6 +18,7 @@ from .ui.screens.detail import VideoDetailScreen
 from .ui.screens.help import HelpScreen
 from .ui.screens.history import HistoryScreen
 from .ui.screens.home import HomeFeedScreen
+from .ui.screens.livechat import LiveChatScreen
 from .ui.screens.local_playlists import LocalPlaylistsScreen
 from .ui.screens.playlist import PlaylistScreen
 from .ui.screens.search import SearchScreen
@@ -314,6 +315,10 @@ class YtuiApp(App):
             return
         self._notify_resume(start)
         await self._play_async(url, start=start or None)
+        if video.platform in ("youtube", "twitch") and (
+            video.video_id in self.active_lives or ":" in video.video_id
+        ):
+            self.push_screen(LiveChatScreen(video))
 
     def play_from_history(self, video: Video) -> None:
         """Replay from the history screen: resume position and playlist context."""

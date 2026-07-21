@@ -29,6 +29,7 @@ from .routers import (
 from .security import require_token
 from .services.feed import FeedService
 from .services.live import LiveMonitor
+from .services.livechat import ChatManager
 from .services.sponsorblock import SponsorBlockService
 from .services.suggestions import SuggestionsService
 from .services.youtube import YouTubeService
@@ -90,11 +91,13 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
             twitch_check_seconds=settings.twitch_check_seconds,
             tiktok_check_seconds=settings.tiktok_check_seconds,
         )
+        app.state.chat_manager = ChatManager()
         if start_live_poll:
             app.state.live_monitor.start()
         try:
             yield
         finally:
+            await app.state.chat_manager.shutdown()
             await app.state.live_monitor.stop()
             await proxy_client.aclose()
             db.close()

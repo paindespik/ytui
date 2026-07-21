@@ -302,7 +302,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final video = queue.current;
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-
     ref.listen(queueProvider, (previous, next) {
       final current = next.current;
       if (current != null && current.videoId != _loadedVideoId) {
@@ -323,6 +322,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       );
     }
+
+    final inLives = (ref.watch(livesProvider).valueOrNull ?? const <LiveItem>[])
+        .any((l) => l.video.videoId == video.videoId);
+    final chatEnabled =
+        (video.platform == 'youtube' || video.platform == 'twitch') &&
+            (_isLiveId(video) || inLives);
 
     return Scaffold(
       appBar: AppBar(
@@ -519,21 +524,26 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ),
                   ),
 
-                  // Queue + YouTube suggestions (scrollable)
+                  // Queue + suggestions, or the live chat panel for lives
                   Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.only(top: 8, bottom: 16),
-                      children: [
-                        if (queue.index + 1 < queue.items.length) ...[
-                          _sectionHeader(theme, colors, 'File d\'attente'),
-                          for (var i = queue.index + 1;
-                              i < queue.items.length;
-                              i++)
-                            _queueTile(theme, colors, queue.items[i], i),
-                        ],
-                        _SuggestionsSection(video: video),
-                      ],
-                    ),
+                    child: chatEnabled
+                        ? _LiveChatSection(
+                            video: video,
+                            key: ValueKey(video.videoId),
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.only(top: 8, bottom: 16),
+                            children: [
+                              if (queue.index + 1 < queue.items.length) ...[
+                                _sectionHeader(theme, colors, 'File d\'attente'),
+                                for (var i = queue.index + 1;
+                                    i < queue.items.length;
+                                    i++)
+                                  _queueTile(theme, colors, queue.items[i], i),
+                              ],
+                              _SuggestionsSection(video: video),
+                            ],
+                          ),
                   ),
                 ],
               ),
@@ -672,6 +682,138 @@ class _SuggestionsSection extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Read-only live chat panel: polls the backend every 3 s while the live
+/// plays, appends new messages (capped at 200) and auto-scrolls to the end.
+class _LiveChatSection extends ConsumerStatefulWidget {
+  final Video video;
+
+  const _LiveChatSection({required this.video, super.key});
+
+  @override
+  ConsumerState<_LiveChatSection> createState() => _LiveChatSectionState();
+}
+
+class _LiveChatSectionState extends ConsumerState<_LiveChatSection> {
+  final List<ChatMessage> _messages = [];
+  int _cursor = 0;
+  bool _active = true;
+  Timer? _timer;
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _poll());
+    _poll();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _poll() async {
+    try {
+      if (!mounted) return;
+      final page = await ref.read(apiProvider).liveChat(
+            widget.video.videoId,
+            platform: widget.video.platform,
+            cursor: _cursor,
+          );
+      if (!mounted) return;
+      setState(() {
+        _messages.addAll(page.messages);
+        if (_messages.length > 200) {
+          _messages.removeRange(0, _messages.length - 200);
+        }
+        _cursor = page.cursor;
+        _active = page.active;
+      });
+      if (!page.active) _timer?.cancel();
+      if (page.messages.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent);
+          }
+        });
+      }
+    } on ApiException {
+      // Transient error — skip this tick.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(kGutter, 12, kGutter, 6),
+          child: Text(
+            'Chat en direct',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: colors.primary,
+            ),
+          ),
+        ),
+        Expanded(
+          child: _messages.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.all(kGutter),
+                  child: Text(
+                    _active ? 'En attente de messages…' : 'Le direct est terminé.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  controller: _scroll,
+                  padding: const EdgeInsets.only(top: 4, bottom: 16),
+                  itemCount: _messages.length,
+                  itemBuilder: (context, i) {
+                    final m = _messages[i];
+                    final authorColor =
+                        (m.color != null && m.color!.length == 7)
+                            ? Color(
+                                int.parse('FF${m.color!.substring(1)}', radix: 16))
+                            : kTwitchPurple;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: kGutter, vertical: 3),
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: '${m.author}  ',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: authorColor,
+                              ),
+                            ),
+                            TextSpan(
+                              text: m.text,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: colors.onSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 }

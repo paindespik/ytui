@@ -335,6 +335,46 @@ class CommentsPage {
       );
 }
 
+class ChatMessage {
+  final String id;
+  final String author;
+  final String text;
+  final String? color;
+  final double timestamp;
+
+  const ChatMessage({
+    required this.id,
+    required this.author,
+    required this.text,
+    this.color,
+    this.timestamp = 0,
+  });
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: json['id'] as String,
+        author: json['author'] as String? ?? '',
+        text: json['text'] as String? ?? '',
+        color: json['color'] as String?,
+        timestamp: (json['timestamp'] as num? ?? 0).toDouble(),
+      );
+}
+
+class ChatPage {
+  final List<ChatMessage> messages;
+  final int cursor;
+  final bool active;
+
+  const ChatPage({required this.messages, this.cursor = 0, this.active = true});
+
+  factory ChatPage.fromJson(Map<String, dynamic> json) => ChatPage(
+        messages: (json['messages'] as List<dynamic>? ?? const [])
+            .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        cursor: json['cursor'] as int? ?? 0,
+        active: json['active'] as bool? ?? true,
+      );
+}
+
 class LiveItem {
   final Video video;
   final DateTime detectedAt;

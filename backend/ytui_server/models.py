@@ -217,6 +217,20 @@ class CommentsResponse(BaseModel):
     total: int = 0
 
 
+class ChatMessage(BaseModel):
+    id: str
+    author: str
+    text: str
+    color: str | None = None
+    timestamp: float = 0.0
+
+
+class ChatResponse(BaseModel):
+    messages: list[ChatMessage] = []
+    cursor: int = 0
+    active: bool = True
+
+
 class LiveOut(BaseModel):
     video: Video
     detected_at: datetime
