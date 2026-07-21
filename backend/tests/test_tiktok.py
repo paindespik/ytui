@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -42,18 +43,27 @@ def _user_room(status=2, room_id="7551234567890123456", nickname="Weather News")
     }
 
 
-def _room_info(status=2, hls="", hls_map=None, flv=None):
+def _sdk_blob(qualities):
+    """live_core_sdk_data blob from {quality: {"flv":.., "hls":.., "cmaf":..}}."""
+    stream_data = json.dumps({"data": {q: {"main": v} for q, v in qualities.items()}})
+    return {"pull_data": {"stream_data": stream_data}}
+
+
+def _room_info(status=2, hls="", hls_map=None, flv=None, sdk=None):
     """webcast/room/info payload (verified shape, reduced)."""
+    stream_url = {
+        "hls_pull_url": hls,
+        "hls_pull_url_map": hls_map or {},
+        "flv_pull_url": flv or {},
+    }
+    if sdk is not None:
+        stream_url["live_core_sdk_data"] = sdk
     return {
         "data": {
             "status": status,
             "title": "Morning forecast",
             "owner": {"nickname": "Weather News", "display_id": "weathernewslive"},
-            "stream_url": {
-                "hls_pull_url": hls,
-                "hls_pull_url_map": hls_map or {},
-                "flv_pull_url": flv or {},
-            },
+            "stream_url": stream_url,
         },
         "extra": {},
     }
@@ -181,6 +191,36 @@ def test_pick_stream_url_preference():
     assert tiktok._pick_stream_url({}) == ""
 
 
+def test_pick_stream_url_sdk_fallback():
+    # Flat fields empty (TikTok's newer rooms): URLs live in the SDK blob.
+    sdk = _sdk_blob(
+        {
+            "origin": {"flv": "https://cdn/or.flv", "hls": "", "cmaf": "https://cdn/or.m3u8"},
+            "ao": {"flv": "https://cdn/ao.flv", "hls": "", "cmaf": ""},
+        }
+    )
+    stream = {"hls_pull_url": "", "flv_pull_url": {}, "live_core_sdk_data": sdk}
+    # No HLS anywhere → best FLV from the preferred (non-"ao") quality.
+    assert tiktok._pick_stream_url(stream) == "https://cdn/or.flv"
+
+
+def test_pick_stream_url_sdk_prefers_hls():
+    sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv", "hls": "https://cdn/or.m3u8"}})
+    assert (
+        tiktok._pick_stream_url({"flv_pull_url": {}, "live_core_sdk_data": sdk})
+        == "https://cdn/or.m3u8"
+    )
+
+
+def test_pick_stream_url_flat_flv_beats_sdk():
+    # A populated flat FLV still wins over the SDK blob (no regression).
+    sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv"}})
+    assert (
+        tiktok._pick_stream_url({"flv_pull_url": {"HD1": "https://flat.flv"}, "live_core_sdk_data": sdk})
+        == "https://flat.flv"
+    )
+
+
 def _run_resolve(room_info_payload):
     routes = {
         "api-live/user/room": _user_room(),
@@ -207,6 +247,13 @@ def test_resolve_live_stream_prefers_hls():
         _room_info(hls="https://pull-hls/index.m3u8", flv={"HD1": "https://pull-flv/hd1.flv"})
     )
     assert resolved == ("https://pull-hls/index.m3u8", "Morning forecast")
+
+
+def test_resolve_live_stream_sdk_blob():
+    # Flat flv empty, URL only in live_core_sdk_data (alimage_p1000-style room).
+    sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv", "hls": "", "cmaf": ""}})
+    resolved = _run_resolve(_room_info(flv={}, sdk=sdk))
+    assert resolved == ("https://cdn/or.flv", "Morning forecast")
 
 
 def test_resolve_live_stream_dead_room():

@@ -12,6 +12,7 @@ reports FLV-only rooms (e.g. game streams with an empty hls_pull_url) as
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -34,6 +35,8 @@ TIKTOK_URL_RE = re.compile(r"(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]{1,24})")
 _USER_NOT_FOUND = 19881007
 _LIVE_STATUS = 2
 _FLV_PREFERENCE = ("FULL_HD1", "HD1", "SD2", "SD1")
+# Quality keys inside live_core_sdk_data (best first); "ao" is audio-only, last.
+_SDK_QUALITY_PREFERENCE = ("origin", "uhd", "hd", "sd", "ld")
 
 
 class TikTokError(Exception):
@@ -124,8 +127,35 @@ async def check_live(
     )
 
 
+def _sdk_streams(stream_url: dict) -> dict[str, dict]:
+    """Parse TikTok's newer live_core_sdk_data.pull_data.stream_data blob.
+
+    Returns {quality: {"hls": url, "flv": url, "cmaf": url}}. TikTok now leaves
+    the flat hls_/flv_pull_url fields empty for many rooms and only populates
+    this JSON-encoded blob.
+    """
+    sdk = stream_url.get("live_core_sdk_data")
+    if not isinstance(sdk, dict):
+        return {}
+    raw = (sdk.get("pull_data") or {}).get("stream_data")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        data = json.loads(raw).get("data")
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for quality, entry in data.items():
+        main = (entry or {}).get("main") or {}
+        out[quality] = {proto: main.get(proto) or "" for proto in ("hls", "flv", "cmaf")}
+    return out
+
+
 def _pick_stream_url(stream_url: dict) -> str:
-    """Best playable URL: HLS, then the HLS quality map, then FLV by quality."""
+    """Best playable URL: flat HLS, then the HLS quality map, then flat FLV by
+    quality, then TikTok's newer live_core_sdk_data blob (HLS, FLV, then CMAF)."""
     url = stream_url.get("hls_pull_url") or ""
     if url:
         return url
@@ -135,15 +165,27 @@ def _pick_stream_url(stream_url: dict) -> str:
             if candidate:
                 return candidate
     flv_map = stream_url.get("flv_pull_url")
-    if not isinstance(flv_map, dict):
-        return ""
-    for quality in _FLV_PREFERENCE:
-        candidate = flv_map.get(quality) or ""
-        if candidate:
-            return candidate
-    for candidate in flv_map.values():
-        if candidate:
-            return candidate
+    if isinstance(flv_map, dict):
+        for quality in _FLV_PREFERENCE:
+            candidate = flv_map.get(quality) or ""
+            if candidate:
+                return candidate
+        for candidate in flv_map.values():
+            if candidate:
+                return candidate
+    # Flat fields empty (increasingly common): fall back to the SDK blob.
+    sdk = _sdk_streams(stream_url)
+    if sdk:
+        ordered = [sdk[q] for q in _SDK_QUALITY_PREFERENCE if q in sdk]
+        ordered += [
+            v for q, v in sdk.items() if q not in _SDK_QUALITY_PREFERENCE and q != "ao"
+        ]
+        if "ao" in sdk:
+            ordered.append(sdk["ao"])
+        for proto in ("hls", "flv", "cmaf"):
+            for entry in ordered:
+                if entry.get(proto):
+                    return entry[proto]
     return ""
 
 
