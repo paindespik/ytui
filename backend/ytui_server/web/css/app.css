@@ -461,3 +461,16 @@ kbd {
 
 .side-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .side-panel .rows .row .row-thumb { flex-basis: 110px; }
+
+/* ─── Chat en direct ─── */
+
+.chat-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.chat-msg { font-size: 14px; line-height: 1.35; word-break: break-word; }
+.chat-author { font-weight: 600; color: var(--accent); }

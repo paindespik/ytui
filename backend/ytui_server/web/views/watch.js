@@ -97,6 +97,20 @@ export async function render(view, { params }) {
     el("div", { class: "section-title", text: "À suivre" }),
     relatedPanel,
   );
+  const chatLiveNow = (platform === "youtube" || platform === "twitch") && live;
+  const chatPanel = el("div", { class: "chat-body" });
+  const chatSection = el(
+    "div",
+    { class: "chat-section", hidden: !chatLiveNow },
+    el("div", { class: "section-title", text: "Chat en direct" }),
+    chatPanel,
+  );
+  const queueSection = el(
+    "div",
+    { hidden: chatLiveNow },
+    el("div", { class: "section-title", text: "File d'attente" }),
+    queuePanel,
+  );
 
   view.append(
     el(
@@ -117,8 +131,8 @@ export async function render(view, { params }) {
       el(
         "aside",
         { class: "side-panel" },
-        el("div", { class: "section-title", text: "File d'attente" }),
-        queuePanel,
+        queueSection,
+        chatSection,
         relatedSection,
       ),
     ),
@@ -281,6 +295,75 @@ export async function render(view, { params }) {
     }
   }
 
+  // ─── Chat en direct (lecture seule, YouTube + Twitch) ───
+  let chatCursor = 0;
+  let chatTimer = null;
+  let chatSeen = false;
+  const chatWaiting = el("div", { class: "sub", text: "En attente de messages…" });
+  const hexColor = (c) => (c && /^#[0-9A-Fa-f]{6}$/.test(c) ? c : "");
+
+  function stopChat() {
+    if (chatTimer) {
+      clearInterval(chatTimer);
+      chatTimer = null;
+    }
+  }
+
+  async function pollChat() {
+    let page;
+    try {
+      page = await api.liveChat(id, platform, chatCursor);
+    } catch {
+      return; // tick raté, on réessaie au suivant
+    }
+    chatCursor = page.cursor || 0;
+    const msgs = page.messages || [];
+    if (msgs.length) chatWaiting.remove();
+    const atBottom =
+      chatPanel.scrollHeight - chatPanel.scrollTop - chatPanel.clientHeight < 40;
+    for (const m of msgs) {
+      chatSeen = true;
+      const author = el("span", { class: "chat-author", text: (m.author || "") + "  " });
+      const color = hexColor(m.color);
+      if (color) author.style.color = color;
+      chatPanel.append(el("div", { class: "chat-msg" }, author, el("span", { text: m.text || "" })));
+    }
+    while (chatPanel.childElementCount > 200) chatPanel.firstElementChild.remove();
+    if (atBottom) chatPanel.scrollTop = chatPanel.scrollHeight;
+    if (!page.active) {
+      stopChat();
+      if (!chatSeen) {
+        chatWaiting.textContent = "Le direct est terminé.";
+        chatPanel.append(chatWaiting);
+      }
+    }
+  }
+
+  function startChat() {
+    if (chatTimer) return;
+    chatSection.hidden = false;
+    queueSection.hidden = true;
+    chatPanel.append(chatWaiting);
+    chatTimer = setInterval(pollChat, 3000);
+    pollChat();
+  }
+
+  async function initChat() {
+    if (platform !== "youtube" && platform !== "twitch") return;
+    if (live) {
+      startChat(); // id composite Twitch → direct en cours
+      return;
+    }
+    if (platform === "youtube") {
+      try {
+        const out = await api.lives();
+        if ((out || []).some((it) => it.video && it.video.video_id === id)) startChat();
+      } catch {
+        /* pas de chat disponible */
+      }
+    }
+  }
+
   // Fin de lecture : suivant, sinon autoplay de la première suggestion
   // (enqueue + next — sémantique mobile exacte).
   async function onEnded() {
@@ -326,12 +409,14 @@ export async function render(view, { params }) {
 
   renderQueue();
   loadRelated();
+  initChat();
   player.load(video).catch((err) => {
     errorToast(err);
     showOverlay(err.detail || "Lecture impossible");
   });
 
   return () => {
+    stopChat();
     queue.removeEventListener("change", onQueueChange);
     videoEl.removeEventListener("ended", onEnded);
     player.destroy();

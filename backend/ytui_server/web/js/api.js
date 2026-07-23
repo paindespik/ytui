@@ -62,6 +62,8 @@ export const api = {
   search: (q, source = "youtube", limit = 20) =>
     request("GET", "/api/search", { query: { q, source, limit } }),
   lives: () => request("GET", "/api/lives"),
+  liveChat: (videoId, platform = "youtube", cursor = 0) =>
+    request("GET", `/api/lives/${id(videoId)}/chat`, { query: { platform, cursor } }),
   channelVideos: (channelId, platform = "youtube", limit = 50) =>
     request("GET", `/api/channels/${id(channelId)}/videos`, { query: { platform, limit } }),
   playlistVideos: (playlistId, platform = "youtube", limit = 200) =>
