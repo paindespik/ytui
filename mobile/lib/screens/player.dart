@@ -7,6 +7,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
@@ -65,6 +66,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   StreamSubscription<String>? _errorSub;
   StreamSubscription<bool>? _playingSub;
   StreamSubscription<Duration>? _positionSub;
+  bool _immersive = false;
+
+  /// Landscape → fullscreen: hide the system bars (immersive) while the video
+  /// fills the screen, mirroring the YouTube app. Idempotent so it can be
+  /// called on every build.
+  void _applyImmersive(bool on) {
+    if (_immersive == on) return;
+    _immersive = on;
+    if (on) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -291,6 +309,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _errorSub?.cancel();
     _playingSub?.cancel();
     _positionSub?.cancel();
+    if (_immersive) {
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+    }
     unawaited(stopPlaybackService());
     player.dispose();
     super.dispose();
@@ -311,6 +335,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     });
 
     if (video == null) {
+      _applyImmersive(false);
       return Scaffold(
         body: Center(
           child: Text(
@@ -320,6 +345,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
           ),
         ),
+      );
+    }
+    // Landscape → fullscreen video, YouTube-style: fill the screen with the
+    // video surface and hide the app chrome + system bars.
+    final fullscreen =
+        MediaQuery.of(context).orientation == Orientation.landscape &&
+            _error == null;
+    _applyImmersive(fullscreen);
+
+    if (fullscreen) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SizedBox.expand(child: _videoSurface()),
       );
     }
 
@@ -381,12 +419,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                       ],
                     ),
                   )
-                : mkv.Video(
-                    controller: controller,
-                    // Keep playing when the screen turns off; the foreground
-                    // service (background_playback.dart) holds the process alive.
-                    pauseUponEnteringBackgroundMode: false,
-                  ),
+                : _videoSurface(),
           ),
 
           // Now playing info + controls + queue — centered on wide screens
@@ -551,6 +584,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// The media_kit video surface, shared by the portrait 16:9 box and the
+  /// landscape fullscreen layout.
+  Widget _videoSurface() {
+    return mkv.Video(
+      controller: controller,
+      // Keep playing when the screen turns off; the foreground service
+      // (background_playback.dart) holds the process alive.
+      pauseUponEnteringBackgroundMode: false,
     );
   }
 
