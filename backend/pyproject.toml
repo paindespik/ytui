@@ -39,6 +39,11 @@ packages = ["ytui_server"]
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+# Pin the historical default rule set so an unpinned ruff upgrade (e.g. 0.16
+# expanding its stable defaults) can't turn CI red on untouched code.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
