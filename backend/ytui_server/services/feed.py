@@ -16,7 +16,7 @@ import httpx
 
 from ..db import Database
 from ..models import FollowedChannel, Video
-from . import tiktok, twitch
+from . import odysee, tiktok, twitch
 
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 HANDLE_URL = "https://www.youtube.com/{handle}"
@@ -202,11 +202,18 @@ class FeedService:
                 raise ValueError(f"Could not parse Odysee channel URL {ref!r}")
             odysee_id = m.group(1)
         if odysee_id:
-            if not odysee_id.startswith("@") or ":" not in odysee_id:
+            if not odysee_id.startswith("@"):
                 raise ValueError(
-                    f"Invalid Odysee channel {odysee_id!r} (expected @name:claim)"
+                    f"Invalid Odysee channel {odysee_id!r} (expected @name or @name:claim)"
                 )
-            title = odysee_id.rsplit(":", 1)[0]
+            if ":" in odysee_id:
+                title = odysee_id.rsplit(":", 1)[0]
+            else:
+                # Bare handle ('odysee:@name'): resolve the claim_id via the SDK.
+                try:
+                    odysee_id, title = await odysee.resolve_channel(odysee_id, client)
+                except odysee.OdyseeError as exc:
+                    raise ValueError(str(exc)) from exc
             return FollowedChannel(
                 ref=f"{ODYSEE_PREFIX}{odysee_id}",
                 channel_id=odysee_id,

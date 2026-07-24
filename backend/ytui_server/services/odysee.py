@@ -171,6 +171,41 @@ async def channel_videos(channel_id: str, limit: int = 50) -> list[Video]:
     return videos[:limit]
 
 
+async def resolve_channel(
+    handle: str, client: httpx.AsyncClient | None = None
+) -> tuple[str, str]:
+    """Resolve a bare Odysee channel handle ('@name') to ('@name:claim_id', title).
+
+    Odysee channel refs need the claim_id; users only know the handle. This
+    resolves 'lbry://@name' via the SDK proxy to the canonical id and title.
+    """
+    name = handle if handle.startswith("@") else f"@{handle}"
+    url = f"lbry://{name}"
+    owns_client = client is None
+    try:
+        if client is None:
+            client = httpx.AsyncClient(timeout=TIMEOUT)
+        try:
+            result = await _proxy_call(client, "resolve", {"urls": [url]})
+        finally:
+            if owns_client:
+                await client.aclose()
+    except OdyseeError:
+        raise
+    except Exception as exc:
+        log.warning("odysee channel resolve failed for %s: %s", name, exc)
+        raise OdyseeError(f"channel resolve failed: {exc}") from exc
+    claim = result.get(url)
+    if not isinstance(claim, dict) or "error" in claim:
+        raise OdyseeError(f"Unknown Odysee channel {name!r}")
+    claim_id = claim.get("claim_id") or ""
+    resolved_name = claim.get("name") or name
+    if claim.get("value_type") != "channel" or not claim_id:
+        raise OdyseeError(f"{name!r} is not an Odysee channel")
+    title = (claim.get("value") or {}).get("title") or resolved_name
+    return f"{resolved_name}:{claim_id}", title
+
+
 async def comments(claim_id: str, page: int = 1, page_size: int = 50) -> CommentsResponse:
     """List comments for a claim (public Commentron API) with reaction counts."""
     try:

@@ -57,6 +57,31 @@ def test_add_odysee_channel_invalid(client):
     assert resp.status_code == 404
 
 
+def test_add_odysee_channel_bare_handle(client):
+    with patch(
+        "ytui_server.services.feed.odysee.resolve_channel",
+        new=AsyncMock(return_value=("@didi18:e5753ece", "Didi18")),
+    ):
+        resp = client.post("/api/channels", json={"ref": "odysee:@didi18"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["platform"] == "odysee"
+    assert body["channel_id"] == "@didi18:e5753ece"
+    assert body["title"] == "Didi18"
+    assert body["ref"] == "odysee:@didi18:e5753ece"
+
+
+def test_add_odysee_bare_handle_unknown(client):
+    from ytui_server.services.odysee import OdyseeError
+
+    with patch(
+        "ytui_server.services.feed.odysee.resolve_channel",
+        new=AsyncMock(side_effect=OdyseeError("Unknown Odysee channel '@nope'")),
+    ):
+        resp = client.post("/api/channels", json={"ref": "odysee:@nope"})
+    assert resp.status_code == 404
+
+
 def test_add_handle_resolves(client):
     async def fake_get(url, **kwargs):
         return httpx.Response(200, text=CHANNEL_PAGE, request=httpx.Request("GET", str(url)))
