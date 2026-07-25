@@ -13,3 +13,4 @@ android/app/src/main/java/io/flutter/plugins/
 android/key.properties
 *.jks
 *.keystore
+android/.kotlin/

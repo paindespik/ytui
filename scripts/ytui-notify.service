@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/youtube-cli/scripts/ytui-notify.py
+# Adjust the path if your checkout lives elsewhere.
+ExecStart=/usr/bin/python3 %h/ytui/scripts/ytui-notify.py
 Restart=always
 RestartSec=30
 

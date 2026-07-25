@@ -1,4 +1,4 @@
-# Déploiement du backend ytui sur `server`
+# Déploiement du backend ytui
 
 Le backend tourne en Docker (compose, `restart: unless-stopped`), exposé en loopback
 sur `127.0.0.1:8776` derrière le nginx natif de l'hôte sur `https://ytui.example.com`.
@@ -18,7 +18,7 @@ chmod 600 deploy/.env
 docker compose -f deploy/docker-compose.yml up -d --build
 curl http://127.0.0.1:8776/health   # → {"status":"ok",...}
 
-# 4. nginx + certificat (le DNS *.example.com pointe déjà sur le serveur)
+# 4. nginx + certificat (le DNS de votre domaine doit pointer sur le serveur)
 sudo cp deploy/nginx-ytui.conf /etc/nginx/sites-enabled/ytui.conf
 sudo certbot certonly --webroot -w /var/www/letsencrypt -d ytui.example.com
 sudo nginx -t && sudo systemctl reload nginx
@@ -45,7 +45,7 @@ Secrets Forgejo requis (repo → Settings → Actions → Secrets) :
 |---|---|
 | `DEPLOY_SSH_KEY` | clé privée dédiée (la publique est dans `authorized_keys` de deploy@server) |
 | `DEPLOY_HOST` | IP de l'hôte joignable depuis le conteneur runner (ex. `172.17.0.1`) |
-| `DEPLOY_USER` | `deploy` |
+| `DEPLOY_USER` | `<utilisateur ssh du serveur>` |
 
 ## Opérations courantes
 
@@ -57,7 +57,7 @@ docker compose -f deploy/docker-compose.yml down                   # stop
 
 ## Backups & maintenance
 
-Deux timers systemd *user* sur `server` :
+Deux timers systemd *user* sur le serveur :
 
 - `ytui-backup.timer` — snapshot quotidien (04:00) de `meta.sqlite` via l'API backup
   de SQLite (compatible WAL, exécuté dans le conteneur), rétention 14 jours.

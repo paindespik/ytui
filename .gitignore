@@ -9,3 +9,15 @@ build/
 .pi-subagents/
 deploy/.env
 deploy/data/
+screenshots/
+
+# Agent / session scratch — never publish
+.omp/
+PI.md
+phase-*.md
+pi-session-*.html
+memory:/
+
+# Local visual-test harness (untracked goldens)
+mobile/test/goldens/
+mobile/test/golden_visual_test.dart

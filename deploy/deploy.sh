@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Executed ON the host (server) by the Forgejo Actions deploy job (via ssh).
+# Executed ON the host (the server) by the Forgejo Actions deploy job (via ssh).
 # Pulls the latest master and rebuilds/restarts the backend container.
 set -euo pipefail
 
