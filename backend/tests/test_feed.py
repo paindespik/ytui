@@ -100,6 +100,7 @@ def test_feed_odysee_channel(client, app):
         resp = client.get("/api/feed")
     body = resp.json()
     assert resp.status_code == 200
+    # the fixture's third item is a PDF enclosure: not playable, must be dropped
     assert len(body["videos"]) == 2
     assert all(v["platform"] == "odysee" for v in body["videos"])
     video = body["videos"][0]

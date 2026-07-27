@@ -86,11 +86,30 @@ async def playlist_videos(
     return PlaylistVideosResponse(items=items, title=title)
 
 
+async def _reject_unplayable_odysee(video_id: str, platform: Platform) -> None:
+    """Raise 415 when an Odysee failure is really a non-media claim.
+
+    Odysee channels publish images, PDFs and text posts; yt-dlp's LBRY extractor
+    reports a bogus "This stream is not live" for them. Listings filter those out,
+    but stale history/playlist entries still reach here. Error path only: one extra
+    lookup, never on the happy path.
+    """
+    if platform != "odysee":
+        return
+    kind = await odysee.stream_type(video_id)
+    if kind and kind not in odysee.PLAYABLE_STREAM_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"This Odysee post is {kind} content, not a playable video",
+        )
+
+
 @router.get("/videos/{video_id}", response_model=VideoDetails)
 async def video_details(video_id: str, platform: Platform = "youtube") -> VideoDetails:
     try:
         details = await ytdlp.video_details(_video_url(video_id, platform))
     except ytdlp.UpstreamError as exc:
+        await _reject_unplayable_odysee(video_id, platform)
         raise HTTPException(status_code=502, detail=f"Details fetch failed: {exc}") from exc
     if not details.video_id or platform == "odysee":
         # yt-dlp reports the bare claim_id for Odysee; keep the requested 'name:claim' id
@@ -145,6 +164,7 @@ async def video_streams(
             sub_langs=sub_langs,
         )
     except ytdlp.UpstreamError as exc:
+        await _reject_unplayable_odysee(video_id, platform)
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
 
 

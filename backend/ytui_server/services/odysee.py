@@ -23,6 +23,10 @@ COMMENTS_URL = "https://comments.odysee.tv/api/v2"
 TIMEOUT = httpx.Timeout(10.0)
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
 _HEADERS = {"User-Agent": USER_AGENT}
+# Odysee channels also publish images, PDFs and text posts; yt-dlp's LBRY
+# extractor only handles video/audio and fails these with "This stream is not
+# live", so they are filtered out of every listing.
+PLAYABLE_STREAM_TYPES = ("video", "audio")
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +54,15 @@ async def _proxy_call(client: httpx.AsyncClient, method: str, params: dict) -> d
     return body.get("result") or {}
 
 
+def _is_playable(value: dict[str, Any]) -> bool:
+    """True when a stream claim carries playable video/audio media."""
+    declared = value.get("stream_type") or ""
+    if declared:
+        return declared in PLAYABLE_STREAM_TYPES
+    media_type = ((value.get("source") or {}).get("media_type") or "")
+    return media_type.startswith(("video/", "audio/"))
+
+
 def _claim_to_video(claim: dict) -> Video | None:
     """Map a resolved/claim_search claim dict to a Video."""
     claim_id = claim.get("claim_id") or ""
@@ -64,6 +77,8 @@ def _claim_to_video(claim: dict) -> Video | None:
         channel_id = video_id
         channel_title = value.get("title") or name
     else:
+        if not _is_playable(value):
+            return None  # image / document / binary post, or a source-less livestream
         kind = "video"
         video_id = f"{name}:{claim_id}"
         signing = claim.get("signing_channel") or {}
@@ -152,6 +167,7 @@ async def channel_videos(channel_id: str, limit: int = 50) -> list[Video]:
                         "page": page,
                         "page_size": page_size,
                         "has_source": True,
+                        "stream_types": list(PLAYABLE_STREAM_TYPES),
                         "no_totals": True,
                     },
                 )
@@ -204,6 +220,27 @@ async def resolve_channel(
         raise OdyseeError(f"{name!r} is not an Odysee channel")
     title = (claim.get("value") or {}).get("title") or resolved_name
     return f"{resolved_name}:{claim_id}", title
+
+
+async def stream_type(video_id: str) -> str:
+    """Stream type of a claim ('video', 'audio', 'image', 'document', …).
+
+    Best effort: returns "" when the claim is unknown or the lookup fails. Used
+    to explain playback failures on non-media claims, so it never raises.
+    """
+    claim_id = claim_id_from_video_id(video_id)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            result = await _proxy_call(
+                client,
+                "claim_search",
+                {"claim_ids": [claim_id], "page": 1, "page_size": 1, "no_totals": True},
+            )
+        items = result.get("items") or []
+        return ((items[0].get("value") or {}) if items else {}).get("stream_type") or ""
+    except Exception as exc:
+        log.debug("odysee stream_type lookup failed for %s: %s", claim_id, exc)
+        return ""
 
 
 async def comments(claim_id: str, page: int = 1, page_size: int = 50) -> CommentsResponse:

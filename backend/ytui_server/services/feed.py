@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any
 
 import feedparser
 import httpx
@@ -131,6 +132,19 @@ def parse_bitchute_rss(xml: str | bytes, channel_id: str = "") -> list[Video]:
     return videos
 
 
+def _odysee_playable(entry: Any) -> bool:
+    """True unless the RSS item encloses a non-media claim (image, PDF, …).
+
+    Odysee channels publish images and documents alongside videos; yt-dlp's
+    LBRY extractor cannot play them, so they must not reach the feed.
+    """
+    for enc in entry.get("enclosures") or ():
+        media_type = enc.get("type") or ""
+        if media_type:
+            return media_type.startswith(("video/", "audio/"))
+    return True  # no enclosure type advertised: keep the item
+
+
 def parse_odysee_rss(xml: str | bytes, channel_id: str = "") -> list[Video]:
     """Parse an Odysee channel RSS feed into Video objects."""
     parsed = feedparser.parse(xml)
@@ -139,6 +153,8 @@ def parse_odysee_rss(xml: str | bytes, channel_id: str = "") -> list[Video]:
     for entry in parsed.entries:
         m = _ODYSEE_LINK_RE.search(entry.get("link", ""))
         if not m:
+            continue
+        if not _odysee_playable(entry):
             continue
         video_id = m.group(1)
         published = None

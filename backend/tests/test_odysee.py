@@ -12,6 +12,7 @@ from ytui_server.services import ytdlp
 LIGHTHOUSE_HITS = [
     {"name": "linux-video", "claimId": "aa11", "channel": "@chan"},
     {"name": "other-video", "claimId": "bb22", "channel": "@chan"},
+    {"name": "a-pdf", "claimId": "ee55", "channel": "@chan"},
 ]
 
 RESOLVE_RESULT = {
@@ -23,6 +24,8 @@ RESOLVE_RESULT = {
             "title": "Linux Video",
             "thumbnail": {"url": "https://thumbs.odycdn.com/x.webp"},
             "release_time": "1719000000",
+            "stream_type": "video",
+            "source": {"media_type": "video/mp4"},
             "video": {"duration": 120},
         },
         "signing_channel": {
@@ -35,7 +38,22 @@ RESOLVE_RESULT = {
         "claim_id": "bb22",
         "name": "other-video",
         "value_type": "stream",
-        "value": {"title": "Other Video"},
+        "value": {
+            "title": "Other Video",
+            "stream_type": "video",
+            "source": {"media_type": "video/mp4"},
+        },
+    },
+    # Odysee channels also publish documents/images: not playable, must be dropped
+    "lbry://a-pdf#ee55": {
+        "claim_id": "ee55",
+        "name": "a-pdf",
+        "value_type": "stream",
+        "value": {
+            "title": "A Document",
+            "stream_type": "document",
+            "source": {"media_type": "application/pdf"},
+        },
     },
 }
 
@@ -45,9 +63,25 @@ CLAIM_SEARCH_RESULT = {
             "claim_id": "dd44",
             "name": "chan-video",
             "value_type": "stream",
-            "value": {"title": "Chan Video", "video": {"duration": 60}},
+            "value": {
+                "title": "Chan Video",
+                "stream_type": "video",
+                "source": {"media_type": "video/mp4"},
+                "video": {"duration": 60},
+            },
             "signing_channel": {"claim_id": "cc33", "name": "@chan"},
-        }
+        },
+        {
+            "claim_id": "ff66",
+            "name": "chan-image",
+            "value_type": "stream",
+            "value": {
+                "title": "Chan Image",
+                "stream_type": "image",
+                "source": {"media_type": "image/jpeg"},
+            },
+            "signing_channel": {"claim_id": "cc33", "name": "@chan"},
+        },
     ]
 }
 
@@ -113,7 +147,7 @@ def test_search_odysee(client):
         resp = client.get("/api/search", params={"q": "linux", "source": "odysee"})
     assert resp.status_code == 200
     items = resp.json()["items"]
-    assert len(items) == 2
+    assert [i["video_id"] for i in items] == ["linux-video:aa11", "other-video:bb22"]
     first = items[0]
     assert first["platform"] == "odysee"
     assert first["video_id"] == "linux-video:aa11"
@@ -148,9 +182,64 @@ def test_odysee_channel_videos(client):
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["items"][0]["video_id"] == "chan-video:dd44"
-    assert body["items"][0]["platform"] == "odysee"
+    items = body["items"]
+    assert [i["video_id"] for i in items] == ["chan-video:dd44"]  # image claim dropped
+    assert items[0]["platform"] == "odysee"
     assert body["channel"]["platform"] == "odysee"
+
+
+def test_odysee_channel_videos_requests_media_only(client):
+    """claim_search must filter server-side, else pagination returns short pages."""
+    seen: list[dict] = []
+
+    async def fake_post(url, **kwargs):
+        seen.append(kwargs["json"]["params"])
+        return httpx.Response(
+            200, json=_rpc(CLAIM_SEARCH_RESULT), request=httpx.Request("POST", str(url))
+        )
+
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)):
+        client.get("/api/channels/@chan:cc33/videos", params={"platform": "odysee"})
+    assert seen[0]["stream_types"] == ["video", "audio"]
+
+
+# ─── /api/videos/{id}/streams?platform=odysee ───
+
+
+def _fail_resolve():
+    return patch.object(
+        ytdlp,
+        "resolve_streams",
+        AsyncMock(
+            side_effect=ytdlp.UpstreamError(
+                "ERROR: [lbry] ee55: This stream is not live"
+            )
+        ),
+    )
+
+
+def test_odysee_streams_non_media_claim(client):
+    """A stale document/image entry must say so, not 'this stream is not live'."""
+    post_patch, _ = _mock_odysee_http(
+        [_rpc({"items": [RESOLVE_RESULT["lbry://a-pdf#ee55"]]})]
+    )
+    with post_patch, _fail_resolve():
+        resp = client.get(
+            "/api/videos/a-pdf:ee55/streams", params={"platform": "odysee"}
+        )
+    assert resp.status_code == 415
+    assert "document" in resp.json()["detail"]
+
+
+def test_odysee_streams_video_claim_keeps_upstream_error(client):
+    post_patch, _ = _mock_odysee_http(
+        [_rpc({"items": [RESOLVE_RESULT["lbry://other-video#bb22"]]})]
+    )
+    with post_patch, _fail_resolve():
+        resp = client.get(
+            "/api/videos/other-video:bb22/streams", params={"platform": "odysee"}
+        )
+    assert resp.status_code == 502
 
 
 def test_odysee_playlist_rejected(client):
