@@ -77,53 +77,78 @@ class ChannelScreen extends ConsumerWidget {
             );
           }
           return ResponsiveCenter(
-            child: ListView.builder(
-              padding: const EdgeInsets.only(bottom: kGutter),
-              // header + videos (+ load-more footer while more pages remain)
-              itemCount: videos.length + (result.hasMore ? 2 : 1),
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  // Prominent "Play all" header
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        kGutter, kGutter, kGutter, 8),
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        ref.read(queueProvider.notifier).play(videos);
-                        context.push('/player');
-                      },
-                      icon: const Icon(Icons.play_arrow),
-                      label: Text('Play all ${videos.length} videos'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: colorScheme.primary,
-                        foregroundColor: colorScheme.onPrimary,
-                        minimumSize: const Size.fromHeight(48),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(kRadiusMd),
+            // Reaching the end pulls the next page in, so neither a thumb nor a
+            // D-pad has to hunt for the footer button after 50 tiles.
+            child: NotificationListener<ScrollUpdateNotification>(
+              onNotification: (notification) {
+                final m = notification.metrics;
+                if (result.hasMore &&
+                    !result.loadingMore &&
+                    m.axis == Axis.vertical &&
+                    m.pixels > m.maxScrollExtent - 800) {
+                  _loadMore(context, ref);
+                }
+                return false;
+              },
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: kGutter),
+                // header + videos (+ load-more footer while more pages remain)
+                itemCount: videos.length + (result.hasMore ? 2 : 1),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    // Prominent "Play all" header
+                    return Padding(
+                      padding:
+                          const EdgeInsets.fromLTRB(kGutter, kGutter, kGutter, 8),
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          ref.read(queueProvider.notifier).play(videos);
+                          context.push('/player');
+                        },
+                        icon: const Icon(Icons.play_arrow),
+                        label: Text('Play all ${videos.length} videos'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: colorScheme.primary,
+                          foregroundColor: colorScheme.onPrimary,
+                          minimumSize: const Size.fromHeight(48),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(kRadiusMd),
+                          ),
                         ),
                       ),
-                    ),
+                    );
+                  }
+                  final videoIndex = index - 1;
+                  if (videoIndex == videos.length) {
+                    return _loadMoreFooter(context, ref, result);
+                  }
+                  return VideoTile(
+                    video: videos[videoIndex],
+                    onTap: () {
+                      ref
+                          .read(queueProvider.notifier)
+                          .play(videos, startIndex: videoIndex);
+                      context.push('/player');
+                    },
                   );
-                }
-                final videoIndex = index - 1;
-                if (videoIndex == videos.length) {
-                  return _loadMoreFooter(context, ref, result);
-                }
-                return VideoTile(
-                  video: videos[videoIndex],
-                  onTap: () {
-                    ref
-                        .read(queueProvider.notifier)
-                        .play(videos, startIndex: videoIndex);
-                    context.push('/player');
-                  },
-                );
-              },
+                },
+              ),
             ),
           );
         },
       ),
     );
+  }
+
+  /// Fetches the next page; the notifier ignores redundant calls itself.
+  Future<void> _loadMore(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await ref
+        .read(channelVideosProvider((channelId, platform)).notifier)
+        .loadMore();
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(content: Text('$error')));
+    }
   }
 
   /// Footer below the last video: fetches the next page of older videos.
@@ -138,15 +163,7 @@ class ChannelScreen extends ConsumerWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, kGutter),
       child: OutlinedButton.icon(
-        onPressed: () async {
-          final messenger = ScaffoldMessenger.of(context);
-          final error = await ref
-              .read(channelVideosProvider((channelId, platform)).notifier)
-              .loadMore();
-          if (error != null) {
-            messenger.showSnackBar(SnackBar(content: Text('$error')));
-          }
-        },
+        onPressed: () => _loadMore(context, ref),
         icon: const Icon(Icons.expand_more),
         label: const Text('Load older videos'),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),

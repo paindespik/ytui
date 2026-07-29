@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import '../api/models.dart';
 import '../state/providers.dart';
+import '../state/settings.dart';
 import '../state/queue.dart';
 import '../theme.dart';
 
@@ -196,6 +197,14 @@ class VideoTile extends ConsumerWidget {
                 ],
               ),
             ),
+            // A remote has no long-press: on TV the actions sheet needs a
+            // focusable affordance, reachable with D-pad right from the tile.
+            if (video.kind == 'video' && ref.watch(isTvProvider))
+              IconButton(
+                icon: const Icon(Icons.more_vert),
+                tooltip: 'Actions',
+                onPressed: () => _showActions(context, ref),
+              ),
           ],
         ),
       ),
