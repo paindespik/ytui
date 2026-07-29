@@ -31,3 +31,16 @@ String pluralize(int count, String word, {String? plural}) {
   final label = count == 1 ? word : (plural ?? '${word}s');
   return '$count $label';
 }
+
+/// Formats a playback duration as a clock: `m:ss`, or `h:mm:ss` past an hour.
+/// Negative values (a seek preview clamped below zero) render as `0:00`.
+String formatClock(Duration value) {
+  final total = value.inSeconds < 0 ? 0 : value.inSeconds;
+  final seconds = (total % 60).toString().padLeft(2, '0');
+  final minutes = (total ~/ 60) % 60;
+  final hours = total ~/ 3600;
+  if (hours > 0) {
+    return '$hours:${minutes.toString().padLeft(2, '0')}:$seconds';
+  }
+  return '$minutes:$seconds';
+}

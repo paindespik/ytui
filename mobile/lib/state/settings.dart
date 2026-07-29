@@ -10,6 +10,7 @@ const kSeenLiveIdsKey = 'seen_live_ids';
 const kSeenVideoIdsKey = 'seen_video_ids';
 const kFirstFeedSeedKey = 'first_feed_seed';
 const kSponsorblockKey = 'sponsorblock_enabled';
+const kAudioDelayKey = 'audio_delay_ms';
 
 class ServerSettings {
   final String url;
@@ -60,3 +61,26 @@ class SponsorblockNotifier extends Notifier<bool> {
 
 final sponsorblockProvider =
     NotifierProvider<SponsorblockNotifier, bool>(SponsorblockNotifier.new);
+
+/// Audio/video sync offset applied to libmpv (`--audio-delay`), in
+/// milliseconds: positive delays the sound, negative delays the picture.
+/// Per-device on purpose — a projector's speakers/HDMI/Bluetooth path adds a
+/// latency no player can measure, so it has to be dialled in by ear.
+class AudioDelayNotifier extends Notifier<int> {
+  @override
+  int build() =>
+      ref.watch(sharedPreferencesProvider).getInt(kAudioDelayKey) ?? 0;
+
+  Future<void> setDelay(int milliseconds) async {
+    await ref.read(sharedPreferencesProvider).setInt(kAudioDelayKey, milliseconds);
+    state = milliseconds;
+  }
+}
+
+final audioDelayProvider =
+    NotifierProvider<AudioDelayNotifier, int>(AudioDelayNotifier.new);
+
+/// True on Android TV / projectors (leanback, no touchscreen): playback is
+/// driven by the remote instead of the touch overlay. Overridden in main()
+/// with the value reported by the platform channel.
+final isTvProvider = Provider<bool>((ref) => false);

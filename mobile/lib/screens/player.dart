@@ -19,8 +19,13 @@ import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
 import '../theme.dart';
+import '../widgets/remote_controls.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
+
+/// Granularity of the audio-delay control: fine enough to chase a projector's
+/// speaker latency, coarse enough to reach ±1 s with a remote.
+const _kAudioDelayStepMs = 25;
 
 /// Maps raw playback errors to user-friendly French messages.
 String _friendlyError(String raw) {
@@ -49,8 +54,16 @@ class PlayerScreen extends ConsumerStatefulWidget {
 }
 
 class _PlayerScreenState extends ConsumerState<PlayerScreen> {
-  late final Player player = Player();
+  /// `logLevel: info` keeps libmpv's "AO: [...]" banner reachable through
+  /// [Player.stream.log] — the only way to tell which audio backend (and thus
+  /// which latency reporting) a given TV/projector ended up with.
+  late final Player player = Player(
+    configuration: const PlayerConfiguration(logLevel: MPVLogLevel.info),
+  );
   late final mkv.VideoController controller = mkv.VideoController(player);
+
+  /// Applied once before the first [Player.open]; see [_configureMpv].
+  late final Future<void> _mpvConfigured = _configureMpv();
 
   String? _loadedVideoId;
   bool _retried = false;
@@ -66,7 +79,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   StreamSubscription<String>? _errorSub;
   StreamSubscription<bool>? _playingSub;
   StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<PlayerLog>? _logSub;
   bool _immersive = false;
+
+  /// Remote/TV state: the controls overlay is hidden until a key is pressed,
+  /// then auto-hides again while playing. [RemotePlayerSurface] keeps its own
+  /// node out of focus traversal, so once the overlay is up the arrow keys walk
+  /// its bar and action row instead of falling back to the video surface.
+  final FocusNode _surfaceFocus = FocusNode(debugLabel: 'player surface');
+  final FocusNode _controlsFocus = FocusNode(debugLabel: 'player controls');
+  bool _controlsVisible = false;
+  Timer? _hideControls;
+
+  /// Pending seek target while arrow keys are still coming in: presses
+  /// accumulate and a single seek is issued once they stop, so holding the
+  /// remote scrubs instead of queueing dozens of decoder seeks.
+  Duration? _seekTarget;
+  Timer? _seekDebounce;
 
   /// Landscape → fullscreen: hide the system bars (immersive) while the video
   /// fills the screen, mirroring the YouTube app. Idempotent so it can be
@@ -129,11 +158,52 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       );
     });
     _positionSub = player.stream.position.listen(_maybeSkipSponsor);
+    _logSub = player.stream.log.listen((log) {
+      // Only the audio-output banner: it names the backend and, for opensles,
+      // the device latency it managed to query — the two things that decide
+      // A/V sync on TV/projector audio paths.
+      if (log.text.startsWith('AO:') || log.prefix == 'ao') {
+        debugPrint('ytui mpv/${log.prefix}: ${log.text.trim()}');
+      }
+    });
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _savePosition());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final video = ref.read(queueProvider).current;
       if (video != null) _load(video);
     });
+  }
+
+  /// libmpv tuning that media_kit does not expose through [PlayerConfiguration].
+  ///
+  /// media_kit pins `ao=opensles`, which only queries the sink latency once at
+  /// init (and gets 0 when the platform refuses): on a TV/projector — HDMI,
+  /// internal DSP, Bluetooth — the unreported latency shows up as sound running
+  /// ahead of the picture. mpv's AudioTrack output tracks the live device
+  /// latency like every other Android player does, so prefer it and keep
+  /// opensles as a fallback in case it fails to initialise.
+  Future<void> _configureMpv() async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    await platform.setProperty('ao', 'audiotrack,opensles');
+    await _applyAudioDelay(ref.read(audioDelayProvider));
+  }
+
+  /// Pushes the user's audio offset to libmpv: positive delays the sound,
+  /// negative delays the picture (mpv's `--audio-delay` convention).
+  Future<void> _applyAudioDelay(int milliseconds) async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    await platform.setProperty(
+      'audio-delay',
+      (milliseconds / 1000).toStringAsFixed(3),
+    );
+    // The offset has no on-screen effect to check against, so read back what
+    // libmpv kept whenever the user is running with one.
+    if (milliseconds != 0) {
+      debugPrint(
+        'ytui mpv/audio-delay: ${await platform.getProperty('audio-delay')}',
+      );
+    }
   }
 
   /// Plays the first suggestion for the current video (autoplay at end of queue).
@@ -183,6 +253,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       final streams =
           await api.videoStreams(video.videoId, platform: video.platform);
       if (!mounted || _loadedVideoId != video.videoId) return;
+      // The audio backend must be picked before playback starts.
+      await _mpvConfigured;
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
       final media = Media(isSplit ? (streams.videoUrl ?? streams.url) : streams.url,
           start: Duration(seconds: start.toInt()));
@@ -226,9 +298,79 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   static String _fmtRate(double rate) =>
       rate == rate.roundToDouble() ? '${rate.toInt()}×' : '$rate×';
 
-  void _showSpeedSheet() {
+  static String _fmtAudioDelay(int milliseconds) =>
+      milliseconds == 0 ? '0 ms' : '${milliseconds > 0 ? '+' : ''}$milliseconds ms';
+
+  /// Remote/TV only: reveals the controls overlay and re-arms the auto-hide.
+  /// [pinned] keeps it up while a bottom sheet is open on top of it.
+  void _revealControls({bool pinned = false}) {
+    if (!ref.read(isTvProvider)) return;
+    _hideControls?.cancel();
+    _hideControls = null;
+    if (!_controlsVisible) {
+      setState(() => _controlsVisible = true);
+      // `autofocus` would be ignored: the video surface already owns the focus
+      // of this scope, so move it onto the overlay once it is laid out.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controlsVisible) _controlsFocus.requestFocus();
+      });
+    }
+    if (pinned) return;
+    _hideControls = Timer(const Duration(seconds: 5), () {
+      // Keep the controls up while paused, as every TV player does.
+      if (!player.state.playing) {
+        _revealControls();
+        return;
+      }
+      _dismissControls();
+    });
+  }
+
+  void _dismissControls() {
+    _hideControls?.cancel();
+    _hideControls = null;
+    if (!_controlsVisible) return;
+    setState(() => _controlsVisible = false);
+    // Hand the keys back to the video surface.
+    _surfaceFocus.requestFocus();
+  }
+
+  /// Accumulates arrow-key presses into a single seek: the bar previews the
+  /// pending target while keys keep coming, then one seek is issued.
+  void _seekBy(Duration offset) {
+    final video = ref.read(queueProvider).current;
+    if (video == null || _isLiveId(video)) return;
+    final duration = player.state.duration;
+    var target = (_seekTarget ?? player.state.position) + offset;
+    if (target < Duration.zero) target = Duration.zero;
+    if (duration > Duration.zero && target > duration) target = duration;
+    setState(() => _seekTarget = target);
+    _seekDebounce?.cancel();
+    _seekDebounce = Timer(const Duration(milliseconds: 400), () async {
+      final pending = _seekTarget;
+      if (pending == null) return;
+      await player.seek(pending);
+      if (mounted) setState(() => _seekTarget = null);
+    });
+  }
+
+  void _skip(bool forward) {
+    final queue = ref.read(queueProvider);
+    final notifier = ref.read(queueProvider.notifier);
+    if (forward) {
+      if (queue.hasNext) notifier.next();
+    } else if (queue.hasPrevious) {
+      notifier.previous();
+    }
+  }
+
+  /// Option sheets are shared by touch and remote: the current value gets
+  /// `autofocus` so a D-pad lands on it, and the controls overlay stays pinned
+  /// underneath until the sheet closes.
+  Future<void> _showSpeedSheet() async {
     const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
-    showModalBottomSheet<void>(
+    _revealControls(pinned: true);
+    await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
         child: ListView(
@@ -236,6 +378,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           children: [
             for (final rate in rates)
               ListTile(
+                autofocus: rate == _rate,
                 title: Text(_fmtRate(rate)),
                 trailing: rate == _rate ? const Icon(Icons.check) : null,
                 onTap: () {
@@ -248,17 +391,20 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       ),
     );
+    if (mounted) _revealControls();
   }
 
-  void _showSubtitleSheet() {
+  Future<void> _showSubtitleSheet() async {
     final tracks = _streams?.subtitles ?? const [];
-    showModalBottomSheet<void>(
+    _revealControls(pinned: true);
+    await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) => SafeArea(
         child: ListView(
           shrinkWrap: true,
           children: [
             ListTile(
+              autofocus: _subUrl == null,
               title: const Text('Désactivés'),
               trailing: _subUrl == null ? const Icon(Icons.check) : null,
               onTap: () {
@@ -269,6 +415,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             ),
             for (final track in tracks)
               ListTile(
+                autofocus: _subUrl == track.url,
                 title: Text(track.label.isNotEmpty ? track.label : track.lang),
                 trailing: _subUrl == track.url ? const Icon(Icons.check) : null,
                 onTap: () {
@@ -285,6 +432,77 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       ),
     );
+    if (mounted) _revealControls();
+  }
+
+  /// Audio/video offset: a projector's own speakers (or an HDMI/Bluetooth sink)
+  /// add a latency nothing reports, so it is dialled in by ear — the value
+  /// applies live, while the video keeps playing behind the sheet — and
+  /// remembered per device.
+  Future<void> _showAudioDelaySheet() async {
+    _revealControls(pinned: true);
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Consumer(
+          builder: (context, ref, _) {
+            final delay = ref.watch(audioDelayProvider);
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const ListTile(
+                  title: Text('Décalage audio'),
+                  subtitle: Text(
+                    'Ajustez jusqu\'à ce que le son colle à l\'image : valeur '
+                    'négative si le son arrive en retard.',
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton.filled(
+                      autofocus: true,
+                      iconSize: 32,
+                      icon: const Icon(Icons.remove),
+                      tooltip: '-25 ms',
+                      onPressed: () => _nudgeAudioDelay(-_kAudioDelayStepMs),
+                    ),
+                    SizedBox(
+                      width: 160,
+                      child: Text(
+                        _fmtAudioDelay(delay),
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    IconButton.filled(
+                      iconSize: 32,
+                      icon: const Icon(Icons.add),
+                      tooltip: '+25 ms',
+                      onPressed: () => _nudgeAudioDelay(_kAudioDelayStepMs),
+                    ),
+                  ],
+                ),
+                TextButton(
+                  onPressed: delay == 0 ? null : () => _setAudioDelay(0),
+                  child: const Text('Réinitialiser'),
+                ),
+                const SizedBox(height: 8),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    if (mounted) _revealControls();
+  }
+
+  void _nudgeAudioDelay(int deltaMs) => _setAudioDelay(
+      (ref.read(audioDelayProvider) + deltaMs).clamp(-1000, 1000));
+
+  void _setAudioDelay(int milliseconds) {
+    unawaited(ref.read(audioDelayProvider.notifier).setDelay(milliseconds));
+    unawaited(_applyAudioDelay(milliseconds));
   }
 
   Future<void> _savePosition() async {
@@ -309,6 +527,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _errorSub?.cancel();
     _playingSub?.cancel();
     _positionSub?.cancel();
+    _logSub?.cancel();
+    _hideControls?.cancel();
+    _seekDebounce?.cancel();
+    _surfaceFocus.dispose();
+    _controlsFocus.dispose();
     if (_immersive) {
       SystemChrome.setEnabledSystemUIMode(
         SystemUiMode.manual,
@@ -355,9 +578,45 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _applyImmersive(fullscreen);
 
     if (fullscreen) {
+      if (!ref.watch(isTvProvider)) {
+        return Scaffold(
+          backgroundColor: Colors.black,
+          body: SizedBox.expand(child: _videoSurface()),
+        );
+      }
+      // TV/projector: no touchscreen, so the remote drives playback and the
+      // controls overlay doubles as the progress bar. Back closes the overlay
+      // before it leaves the player.
       return Scaffold(
         backgroundColor: Colors.black,
-        body: SizedBox.expand(child: _videoSurface()),
+        body: PopScope(
+          canPop: !_controlsVisible,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop) _dismissControls();
+          },
+          child: SizedBox.expand(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                RemotePlayerSurface(
+                  focusNode: _surfaceFocus,
+                  onSeek: _seekBy,
+                  onTogglePlay: player.playOrPause,
+                  onSkip: _skip,
+                  onReveal: _revealControls,
+                  child: _videoSurface(),
+                ),
+                if (_controlsVisible)
+                  _remoteControls(
+                    video,
+                    hasNext: queue.hasNext,
+                    hasPrevious: queue.hasPrevious,
+                    audioDelayMs: ref.watch(audioDelayProvider),
+                  ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
@@ -553,6 +812,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                               ? null
                               : _showSubtitleSheet,
                         ),
+                        IconButton(
+                          icon: const Icon(Icons.av_timer_rounded),
+                          tooltip: 'Décalage audio',
+                          onPressed: _showAudioDelaySheet,
+                        ),
                       ],
                     ),
                   ),
@@ -592,9 +856,64 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Widget _videoSurface() {
     return mkv.Video(
       controller: controller,
+      // On TV the touch overlay is dead weight (and its buttons would compete
+      // for D-pad focus): [RemotePlayerControls] replaces it.
+      controls: ref.read(isTvProvider)
+          ? mkv.NoVideoControls
+          : mkv.AdaptiveVideoControls,
       // Keep playing when the screen turns off; the foreground service
       // (background_playback.dart) holds the process alive.
       pauseUponEnteringBackgroundMode: false,
+    );
+  }
+
+  /// Remote overlay, fed by the playback streams: [_seekTarget] wins over the
+  /// reported position so a pending scrub is what the bar shows.
+  Widget _remoteControls(
+    Video video, {
+    required bool hasNext,
+    required bool hasPrevious,
+    required int audioDelayMs,
+  }) {
+    return StreamBuilder<bool>(
+      stream: player.stream.playing,
+      initialData: player.state.playing,
+      builder: (context, playingSnapshot) => StreamBuilder<Duration>(
+        stream: player.stream.position,
+        initialData: player.state.position,
+        builder: (context, positionSnapshot) => RemotePlayerControls(
+          title: video.title,
+          position:
+              _seekTarget ?? positionSnapshot.data ?? player.state.position,
+          duration: player.state.duration,
+          playing: playingSnapshot.data ?? false,
+          live: _isLiveId(video),
+          rateLabel: _fmtRate(_rate),
+          audioDelayLabel: _fmtAudioDelay(audioDelayMs),
+          hasSubtitles: _streams?.subtitles.isNotEmpty ?? false,
+          hasNext: hasNext,
+          hasPrevious: hasPrevious,
+          // Every action postpones the auto-hide: the overlay must not vanish
+          // mid-scrub.
+          onSeek: (offset) {
+            _revealControls();
+            _seekBy(offset);
+          },
+          onTogglePlay: () {
+            _revealControls();
+            player.playOrPause();
+          },
+          onSkip: (forward) {
+            _revealControls();
+            _skip(forward);
+          },
+          onRate: _showSpeedSheet,
+          onSubtitles: _showSubtitleSheet,
+          onAudioDelay: _showAudioDelaySheet,
+          onInteract: _revealControls,
+          entryFocus: _controlsFocus,
+        ),
+      ),
     );
   }
 

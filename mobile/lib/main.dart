@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
@@ -28,13 +29,34 @@ Future<void> main() async {
   await requestNotificationsPermission();
   await initForegroundTask();
   await registerBackgroundLiveCheck();
+  final isTv = await _detectTv();
+  if (isTv) {
+    // Android defaults to the touch highlight mode, which hides every focus
+    // ring: on a remote-only device the selection must always be visible.
+    FocusManager.instance.highlightStrategy =
+        FocusHighlightStrategy.alwaysTraditional;
+  }
 
   runApp(
     ProviderScope(
-      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        isTvProvider.overrideWithValue(isTv),
+      ],
       child: const YtuiApp(),
     ),
   );
+}
+
+/// Android TV / projector, reported by [MainActivity]: playback is then driven
+/// by the remote instead of the (absent) touchscreen.
+Future<bool> _detectTv() async {
+  const channel = MethodChannel('dev.ytui.app/device');
+  try {
+    return await channel.invokeMethod<bool>('isTv') ?? false;
+  } catch (_) {
+    return false;
+  }
 }
 
 final _router = GoRouter(

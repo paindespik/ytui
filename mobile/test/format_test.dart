@@ -43,4 +43,25 @@ void main() {
       expect(pluralize(2, 'entry', plural: 'entries'), '2 entries');
     });
   });
+
+  group('formatClock', () {
+    test('pads seconds and drops the hour under an hour', () {
+      expect(formatClock(Duration.zero), '0:00');
+      expect(formatClock(const Duration(seconds: 7)), '0:07');
+      expect(formatClock(const Duration(minutes: 12, seconds: 34)), '12:34');
+      expect(formatClock(const Duration(minutes: 59, seconds: 59)), '59:59');
+    });
+
+    test('shows hours with zero-padded minutes past an hour', () {
+      expect(formatClock(const Duration(hours: 1)), '1:00:00');
+      expect(
+        formatClock(const Duration(hours: 2, minutes: 5, seconds: 9)),
+        '2:05:09',
+      );
+    });
+
+    test('clamps a negative seek preview to zero', () {
+      expect(formatClock(const Duration(seconds: -10)), '0:00');
+    });
+  });
 }
