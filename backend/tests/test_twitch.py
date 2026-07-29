@@ -226,6 +226,39 @@ def test_streams_twitch_live_via_proxy(client):
     assert body["url"].startswith("https://eu.luminous.dev/live/foo")
 
 
+MASTER = (
+    "#EXTM3U\n"
+    '#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,VIDEO="chunked"\n'
+    "https://cdn.ttvnw.net/1080.m3u8\n"
+    '#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,VIDEO="720p60"\n'
+    "https://cdn.ttvnw.net/720.m3u8\n"
+    '#EXT-X-STREAM-INF:BANDWIDTH=200000,RESOLUTION=284x160,VIDEO="160p"\n'
+    "https://cdn.ttvnw.net/160.m3u8\n"
+    '#EXT-X-STREAM-INF:BANDWIDTH=160000,CODECS="mp4a.40.2",VIDEO="audio_only"\n'
+    "https://cdn.ttvnw.net/audio.m3u8\n"
+)
+
+
+def test_streams_twitch_live_capped(client):
+    async def master(url, **kwargs):
+        return httpx.Response(200, text=MASTER, request=httpx.Request("GET", str(url)))
+
+    with patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=master)):
+        resp = client.get(
+            "/api/videos/foo:111/streams",
+            params={"platform": "twitch", "max_height": 720},
+        )
+    body = resp.json()
+    # Capping means handing over one variant instead of the master playlist.
+    assert (body["url"], body["height"]) == ("https://cdn.ttvnw.net/720.m3u8", 720)
+
+    with patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=master)):
+        resp = client.get("/api/videos/foo:111/streams", params={"platform": "twitch"})
+    body = resp.json()
+    assert body["url"].startswith("https://eu.luminous.dev/live/foo")
+    assert body["height"] == 1080
+
+
 def test_streams_twitch_live_falls_back_to_direct(client):
     async def dead(url, **kwargs):
         return httpx.Response(404, request=httpx.Request("GET", str(url)))

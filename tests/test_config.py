@@ -82,4 +82,4 @@ def test_partial_config_uses_defaults(tmp_path: Path):
     path.write_text('[server]\nurl = "https://x"\n')
     config = load_config(path)
     assert config.server.url == "https://x"
-    assert config.player.format.startswith("bestvideo")
+    assert config.player.max_height == 1440

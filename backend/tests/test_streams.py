@@ -188,13 +188,39 @@ def test_streams_audio_only(client):
     assert body["url"] == "https://x/audio.m4a"
 
 
-def test_streams_max_height_filters(client):
+def test_streams_max_height_falls_back_to_lowest(client):
     with _patch_ydl(_info([VONLY, AONLY])):
         resp = client.get(
             "/api/videos/vid000000001/streams", params={"max_height": 720}
         )
-    # 1080p video-only excluded -> no video track fits, no progressive: 502
-    assert resp.status_code == 502
+    # Only a 1080p video track exists: a cap degrades, it never fails playback.
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["height"] == 1080
+
+
+def test_streams_hls_variant_when_capped(client):
+    hls720 = dict(HLS, url="https://x/720.m3u8", height=720)
+    hls1080 = dict(HLS, url="https://x/1080.m3u8", height=1080)
+    info = _info([hls720, hls1080], manifest_url="https://x/master.m3u8")
+    with _patch_ydl(info):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert (body["url"], body["height"]) == ("https://x/master.m3u8", 1080)
+    with _patch_ydl(info):
+        resp = client.get(
+            "/api/videos/vid000000001/streams", params={"max_height": 720}
+        )
+    body = resp.json()
+    # The master carries every variant: capping hands over one variant playlist.
+    assert (body["url"], body["height"]) == ("https://x/720.m3u8", 720)
+
+
+def test_streams_reports_height(client):
+    with _patch_ydl(_info([PROG])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.json()["height"] == 720
 
 
 def test_streams_expiry_parsed(client):

@@ -11,6 +11,7 @@ const kSeenVideoIdsKey = 'seen_video_ids';
 const kFirstFeedSeedKey = 'first_feed_seed';
 const kSponsorblockKey = 'sponsorblock_enabled';
 const kAudioDelayKey = 'audio_delay_ms';
+const kMaxHeightKey = 'max_height';
 
 class ServerSettings {
   final String url;
@@ -79,6 +80,24 @@ class AudioDelayNotifier extends Notifier<int> {
 
 final audioDelayProvider =
     NotifierProvider<AudioDelayNotifier, int>(AudioDelayNotifier.new);
+
+/// Max video height requested from the backend (360…2160). Per-device: a phone
+/// on mobile data and a TV on Ethernet do not want the same ceiling.
+class MaxHeightNotifier extends Notifier<int> {
+  @override
+  int build() =>
+      ref.watch(sharedPreferencesProvider).getInt(kMaxHeightKey) ?? 1440;
+
+  Future<void> setHeight(int height) async {
+    await ref.read(sharedPreferencesProvider).setInt(kMaxHeightKey, height);
+    state = height;
+  }
+}
+
+final maxHeightProvider =
+    NotifierProvider<MaxHeightNotifier, int>(MaxHeightNotifier.new);
+
+const kQualityLadder = [360, 480, 720, 1080, 1440, 2160];
 
 /// True on Android TV / projectors (leanback, no touchscreen): playback is
 /// driven by the remote instead of the touch overlay. Overridden in main()

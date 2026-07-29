@@ -35,6 +35,9 @@ TIKTOK_URL_RE = re.compile(r"(?:www\.)?tiktok\.com/@([A-Za-z0-9_.]{1,24})")
 _USER_NOT_FOUND = 19881007
 _LIVE_STATUS = 2
 _FLV_PREFERENCE = ("FULL_HD1", "HD1", "SD2", "SD1")
+# Heights of TikTok's flat flv_pull_url quality keys (the flat map carries no
+# resolution metadata, unlike the SDK blob).
+_FLV_HEIGHTS = {"FULL_HD1": 1080, "HD1": 720, "SD2": 540, "SD1": 360}
 # Quality keys inside live_core_sdk_data (best first); "ao" is audio-only, last.
 _SDK_QUALITY_PREFERENCE = ("origin", "uhd", "hd", "sd", "ld")
 
@@ -149,7 +152,9 @@ def _sdk_streams(stream_url: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for quality, entry in data.items():
         main = (entry or {}).get("main") or {}
-        out[quality] = {proto: main.get(proto) or "" for proto in ("hls", "flv", "cmaf")}
+        out[quality] = {
+            k: main.get(k) or "" for k in ("hls", "flv", "cmaf", "sdk_params")
+        }
     return out
 
 
@@ -162,51 +167,85 @@ def _sdk_ordered(sdk: dict[str, dict]) -> list[dict]:
     return ordered
 
 
-def _pick_stream_url(stream_url: dict) -> str:
-    """Best playable URL for mpv / mpegts.js / hls.js.
+def _sdk_height(entry: dict) -> int | None:
+    """Quality height from sdk_params.resolution ("1280x720" → 720).
 
-    FLV is preferred: TikTok's HLS pull URLs (both the flat fields and the SDK
-    blob) frequently answer 403 while the FLV endpoints stream fine, so HLS and
-    CMAF are kept only as last-resort fallbacks.
+    TikTok lives are usually portrait ("720x1280"), so the smaller dimension is
+    the conventional quality label in both orientations.
     """
-    flv_map = stream_url.get("flv_pull_url")
+    raw = (entry or {}).get("sdk_params")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        resolution = json.loads(raw).get("resolution")
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(resolution, str) or "x" not in resolution:
+        return None
+    try:
+        width, height = (int(p) for p in resolution.split("x", 1))
+    except ValueError:
+        return None
+    return min(width, height) or None
+
+
+def _select(
+    candidates: list[tuple[int | None, str]], max_height: int
+) -> tuple[str, int | None] | None:
+    """Best candidate at or below the cap, else the lowest known height.
+
+    Candidates keep their preference order and only known heights are ranked, so
+    a quality map without resolution metadata behaves exactly as before.
+    """
+    if not candidates:
+        return None
+    known = [(h, u) for h, u in candidates if h]
+    if known:
+        fitting = [c for c in known if c[0] <= max_height]
+        height, url = (
+            max(fitting, key=lambda c: c[0]) if fitting else min(known, key=lambda c: c[0])
+        )
+        return url, height
+    return candidates[0][1], None
+
+
+def _pick_stream_url(stream_url: dict, max_height: int = 4320) -> tuple[str, int | None]:
+    """(URL, height) of the best playable stream for mpv / mpegts.js / hls.js.
+
+    Protocol preference is absolute: TikTok's HLS pull URLs (both the flat fields
+    and the SDK blob) frequently answer 403 while the FLV endpoints stream fine,
+    so the height cap only ranks qualities *within* a protocol.
+    """
     sdk = _sdk_streams(stream_url)
-
-    # 1. FLV — the reliable path (flat by quality, then the SDK blob).
-    if isinstance(flv_map, dict):
-        for quality in _FLV_PREFERENCE:
-            if flv_map.get(quality):
-                return flv_map[quality]
-        for candidate in flv_map.values():
-            if candidate:
-                return candidate
-    for entry in _sdk_ordered(sdk):
-        if entry.get("flv"):
-            return entry["flv"]
-
-    # 2. HLS fallback (flat URL, quality map, then the SDK blob).
-    if stream_url.get("hls_pull_url"):
-        return stream_url["hls_pull_url"]
-    hls_map = stream_url.get("hls_pull_url_map")
-    if isinstance(hls_map, dict):
-        for candidate in hls_map.values():
-            if candidate:
-                return candidate
-    for entry in _sdk_ordered(sdk):
-        if entry.get("hls"):
-            return entry["hls"]
-
-    # 3. CMAF — last resort.
-    for entry in _sdk_ordered(sdk):
-        if entry.get("cmaf"):
-            return entry["cmaf"]
-    return ""
+    for proto in ("flv", "hls", "cmaf"):
+        candidates: list[tuple[int | None, str]] = []
+        if proto == "flv":
+            flv_map = stream_url.get("flv_pull_url")
+            if isinstance(flv_map, dict):
+                keys = [q for q in _FLV_PREFERENCE if flv_map.get(q)]
+                keys += [
+                    q for q in flv_map if q not in _FLV_PREFERENCE and flv_map.get(q)
+                ]
+                candidates += [(_FLV_HEIGHTS.get(q), flv_map[q]) for q in keys]
+        elif proto == "hls":
+            if stream_url.get("hls_pull_url"):
+                candidates.append((None, stream_url["hls_pull_url"]))
+            hls_map = stream_url.get("hls_pull_url_map")
+            if isinstance(hls_map, dict):
+                candidates += [(None, u) for u in hls_map.values() if u]
+        candidates += [
+            (_sdk_height(e), e[proto]) for e in _sdk_ordered(sdk) if e.get(proto)
+        ]
+        picked = _select(candidates, max_height)
+        if picked is not None:
+            return picked
+    return "", None
 
 
 async def resolve_live_stream(
-    client: httpx.AsyncClient, username: str
-) -> tuple[str, str] | None:
-    """Return (stream_url, title) for a live username, or None when offline.
+    client: httpx.AsyncClient, username: str, max_height: int = 4320
+) -> tuple[str, str, int | None] | None:
+    """Return (stream_url, title, height) for a live username, or None when offline.
 
     The username is the only stable part of the live video_id, so the room id
     is re-fetched — it also guards against replaying a stale room.
@@ -230,7 +269,7 @@ async def resolve_live_stream(
         raise TikTokError("Unexpected TikTok response")
     if room.get("status") != _LIVE_STATUS:
         return None
-    url = _pick_stream_url(room.get("stream_url") or {})
+    url, height = _pick_stream_url(room.get("stream_url") or {}, max_height)
     if not url:
         return None
-    return url, room.get("title") or ""
+    return url, room.get("title") or "", height

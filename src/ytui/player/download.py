@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..config import PlayerConfig
+from .mpv import ytdl_format
 
 
 def download_video(url: str, player: PlayerConfig) -> Path:
@@ -19,8 +20,7 @@ def download_video(url: str, player: PlayerConfig) -> Path:
         "noprogress": True,
         "outtmpl": str(target / "%(title)s [%(id)s].%(ext)s"),
     }
-    if player.format:
-        opts["format"] = player.format
+    opts["format"] = ytdl_format(player.max_height)
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([url])
     return target

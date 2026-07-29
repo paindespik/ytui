@@ -6,7 +6,7 @@ import json
 import pytest
 
 from ytui.config import PlayerConfig
-from ytui.player.mpv import MpvController, PlayerError, build_command
+from ytui.player.mpv import MpvController, PlayerError, build_command, ytdl_format
 
 
 class FakeMpv:
@@ -148,12 +148,23 @@ async def test_cycle_subtitles_returns_label(fake_mpv):
     await ctrl.close()
 
 
+async def test_reload_with_quality(fake_mpv):
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    fmt = "bestvideo[height<=?720]+bestaudio/best"
+    assert await ctrl.reload_with_quality(URL, 720, 42) is True
+    assert ["loadfile", URL, "replace", -1, f"start=42,ytdl-format={fmt}"] in fake_mpv.commands
+
+    assert await ctrl.reload_with_quality(URL, 720, None) is True
+    assert ["loadfile", URL, "replace", -1, f"ytdl-format={fmt}"] in fake_mpv.commands
+    await ctrl.close()
+
+
 def test_build_command_flags(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/mpv")
     cmd = build_command(URL, PLAYER, ipc_socket="/tmp/s.sock")
     assert cmd[0] == "mpv"
     assert "--input-ipc-server=/tmp/s.sock" in cmd
-    assert f"--ytdl-format={PLAYER.format}" in cmd
+    assert f"--ytdl-format={ytdl_format(PLAYER.max_height)}" in cmd
     assert cmd[-1] == URL
 
     audio_cmd = build_command(URL, PLAYER, audio_only=True)

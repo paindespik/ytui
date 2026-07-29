@@ -227,7 +227,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       (video.platform == 'twitch' || video.platform == 'tiktok') &&
       video.videoId.contains(':');
 
-  Future<void> _load(Video video, {bool resume = true}) async {
+  Future<void> _load(Video video,
+      {bool resume = true, Duration? startAt}) async {
     _loadedVideoId = video.videoId;
     setState(() {
       _error = null;
@@ -245,13 +246,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         title: video.title,
         text: '▶ ${video.channelTitle}',
       ).catchError((_) {}));
-      double start = 0;
-      if (resume && !_isLiveId(video)) {
+      double start = startAt?.inSeconds.toDouble() ?? 0;
+      if (startAt == null && resume && !_isLiveId(video)) {
         final info = await api.resume(video.videoId).catchError((_) => null);
         if (info != null) start = resumeStart(info.position, info.duration);
       }
-      final streams =
-          await api.videoStreams(video.videoId, platform: video.platform);
+      final streams = await api.videoStreams(video.videoId,
+          platform: video.platform, maxHeight: ref.read(maxHeightProvider));
       if (!mounted || _loadedVideoId != video.videoId) return;
       // The audio backend must be picked before playback starts.
       await _mpvConfigured;
@@ -435,6 +436,63 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (mounted) _revealControls();
   }
 
+  /// Height cap applied to every platform. Changing it re-resolves the stream
+  /// and resumes where playback was (a live restarts at its live edge).
+  Future<void> _showQualitySheet() async {
+    final video = ref.read(queueProvider).current;
+    _revealControls(pinned: true);
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Consumer(
+          builder: (context, ref, _) {
+            final current = ref.watch(maxHeightProvider);
+            final served = _streams?.height;
+            return ListView(
+              shrinkWrap: true,
+              children: [
+                ListTile(
+                  title: const Text('Qualité maximale'),
+                  subtitle: Text(served == null
+                      ? 'La meilleure piste sous le plafond est choisie.'
+                      : 'Actuellement servi : ${served}p'),
+                ),
+                for (final height in kQualityLadder)
+                  ListTile(
+                    autofocus: height == current,
+                    title: Text('${height}p'),
+                    trailing: height == current ? const Icon(Icons.check) : null,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      if (height != current && video != null) {
+                        unawaited(_setMaxHeight(height, video));
+                      }
+                    },
+                  ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    if (mounted) _revealControls();
+  }
+
+  /// Live for resume purposes: a composite Twitch/TikTok id, or a video the
+  /// server currently reports as live (a YouTube live keeps a plain id). Seeking
+  /// into a sliding live window stalls the player, so it restarts at the edge.
+  bool _isLivePlayback(Video video) =>
+      _isLiveId(video) ||
+      (ref.read(livesProvider).valueOrNull ?? const <LiveItem>[])
+          .any((l) => l.video.videoId == video.videoId);
+
+  Future<void> _setMaxHeight(int height, Video video) async {
+    await ref.read(maxHeightProvider.notifier).setHeight(height);
+    if (!mounted) return;
+    final position = _isLivePlayback(video) ? null : player.state.position;
+    await _load(video, resume: false, startAt: position);
+  }
+
   /// Audio/video offset: a projector's own speakers (or an HDMI/Bluetooth sink)
   /// add a latency nothing reports, so it is dialled in by ear — the value
   /// applies live, while the video keeps playing behind the sheet — and
@@ -612,6 +670,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     hasNext: queue.hasNext,
                     hasPrevious: queue.hasPrevious,
                     audioDelayMs: ref.watch(audioDelayProvider),
+                    maxHeight: ref.watch(maxHeightProvider),
                   ),
               ],
             ),
@@ -817,6 +876,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                           tooltip: 'Décalage audio',
                           onPressed: _showAudioDelaySheet,
                         ),
+                        TextButton(
+                          onPressed: _showQualitySheet,
+                          child: Text(
+                            '${ref.watch(maxHeightProvider)}p',
+                            style: TextStyle(color: colors.onSurface),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -874,6 +940,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     required bool hasNext,
     required bool hasPrevious,
     required int audioDelayMs,
+    required int maxHeight,
   }) {
     return StreamBuilder<bool>(
       stream: player.stream.playing,
@@ -890,6 +957,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           live: _isLiveId(video),
           rateLabel: _fmtRate(_rate),
           audioDelayLabel: _fmtAudioDelay(audioDelayMs),
+          qualityLabel: '${maxHeight}p',
           hasSubtitles: _streams?.subtitles.isNotEmpty ?? false,
           hasNext: hasNext,
           hasPrevious: hasPrevious,
@@ -910,6 +978,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           onRate: _showSpeedSheet,
           onSubtitles: _showSubtitleSheet,
           onAudioDelay: _showAudioDelaySheet,
+          onQuality: _showQualitySheet,
           onInteract: _revealControls,
           entryFocus: _controlsFocus,
         ),

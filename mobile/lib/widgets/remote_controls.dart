@@ -145,6 +145,7 @@ class RemotePlayerControls extends StatelessWidget {
     required this.live,
     required this.rateLabel,
     required this.audioDelayLabel,
+    required this.qualityLabel,
     required this.hasSubtitles,
     required this.hasNext,
     required this.hasPrevious,
@@ -154,6 +155,7 @@ class RemotePlayerControls extends StatelessWidget {
     required this.onRate,
     required this.onSubtitles,
     required this.onAudioDelay,
+    required this.onQuality,
     required this.onInteract,
     required this.entryFocus,
   });
@@ -168,6 +170,7 @@ class RemotePlayerControls extends StatelessWidget {
   final bool live;
   final String rateLabel;
   final String audioDelayLabel;
+  final String qualityLabel;
   final bool hasSubtitles;
   final bool hasNext;
   final bool hasPrevious;
@@ -177,6 +180,7 @@ class RemotePlayerControls extends StatelessWidget {
   final VoidCallback onRate;
   final VoidCallback onSubtitles;
   final VoidCallback onAudioDelay;
+  final VoidCallback onQuality;
 
   /// Called for keys the controls do not consume themselves — mainly focus
   /// traversal between the bar and the action row — so the caller can postpone
@@ -284,6 +288,11 @@ class RemotePlayerControls extends StatelessWidget {
                     label: audioDelayLabel,
                     tooltip: 'Décalage audio',
                     onPressed: onAudioDelay,
+                  ),
+                  RemoteButton(
+                    label: qualityLabel,
+                    tooltip: 'Qualité',
+                    onPressed: onQuality,
                   ),
                 ],
               ),

@@ -74,11 +74,11 @@ export const api = {
   // ─── videos ───
   videoDetails: (videoId, platform = "youtube") =>
     request("GET", `/api/videos/${id(videoId)}`, { query: { platform } }),
-  videoStreams: (videoId, { platform = "youtube", maxHeight = 1080, subLangs = "" } = {}) =>
+  videoStreams: (videoId, { platform = "youtube", maxHeight = 1440, subLangs = "" } = {}) =>
     request("GET", `/api/videos/${id(videoId)}/streams`, {
       query: { platform, max_height: maxHeight, sub_langs: subLangs },
     }),
-  mpdUrl: (videoId, platform = "youtube", maxHeight = 1080) =>
+  mpdUrl: (videoId, platform = "youtube", maxHeight = 1440) =>
     `/api/videos/${id(videoId)}/mpd?platform=${id(platform)}&max_height=${maxHeight}`,
   related: (videoId, platform = "youtube", limit = 20) =>
     request("GET", `/api/videos/${id(videoId)}/related`, { query: { platform, limit } }),

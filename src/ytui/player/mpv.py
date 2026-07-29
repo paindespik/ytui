@@ -21,6 +21,11 @@ def default_socket_path() -> str:
     return os.path.join(base, "ytui-mpv.sock")
 
 
+def ytdl_format(max_height: int) -> str:
+    """yt-dlp format selector for a height cap ('?' = tolerate no exact match)."""
+    return f"bestvideo[height<=?{max_height}]+bestaudio/best"
+
+
 def build_command(
     url: str,
     player: PlayerConfig,
@@ -39,8 +44,7 @@ def build_command(
     if audio:
         cmd.append("--no-video")
     else:
-        if player.format:
-            cmd.append(f"--ytdl-format={player.format}")
+        cmd.append(f"--ytdl-format={ytdl_format(player.max_height)}")
         if player.subtitle_langs:
             # Expose YouTube subtitle tracks (manual + auto captions) through
             # mpv's ytdl hook; they are not selected by default. Options without
@@ -196,6 +200,24 @@ class MpvController:
             return resp
         # Playing without resume beats not playing at all.
         return await self.command("loadfile", url, "replace")
+
+    async def reload_with_quality(
+        self, url: str, max_height: int, start: float | None
+    ) -> bool:
+        """Reload `url` with a new height cap, resuming at `start`.
+
+        --ytdl-format only applies when mpv is spawned, so a live quality change
+        goes through per-file loadfile options (verified on mpv 0.41).
+        """
+        opts = f"ytdl-format={ytdl_format(max_height)}"
+        if start and start > 0:
+            opts = f"start={start:.0f}," + opts
+        resp = await self.command("loadfile", url, "replace", -1, opts, connect_retries=25)
+        if resp is not None and resp.get("error") == "success":
+            return True
+        # mpv < 0.38: no index argument.
+        resp = await self.command("loadfile", url, "replace", opts)
+        return resp is not None and resp.get("error") == "success"
 
     async def enqueue(self, url: str, player: PlayerConfig) -> bool:
         """Append to the live queue (True) or start a new player (False)."""

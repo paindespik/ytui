@@ -176,16 +176,19 @@ void main() {
     );
   });
 
-  test('videoStreams parses StreamInfo', () async {
-    final api = _api({
+  test('videoStreams parses StreamInfo and sends the height cap', () async {
+    final adapter = _FakeAdapter({
       'GET /api/videos/abc/streams': (
         200,
-        {'kind': 'hls', 'url': 'https://x/m.m3u8', 'title': 't'}
+        {'kind': 'hls', 'url': 'https://x/m.m3u8', 'title': 't', 'height': 720}
       ),
     });
-    final info = await api.videoStreams('abc');
+    final api = _api({}, adapter: adapter);
+    final info = await api.videoStreams('abc', maxHeight: 720);
     expect(info.kind, 'hls');
     expect(info.url, 'https://x/m.m3u8');
+    expect(info.height, 720);
+    expect(adapter.requests.single.queryParameters['max_height'], 720);
   });
 
   test('HTTP errors raise ApiException with detail', () async {

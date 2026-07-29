@@ -28,6 +28,7 @@ class BrowseScreen(Screen):
         Binding("bracketright", "speed_up", "Speed +", show=False),
         Binding("bracketleft", "speed_down", "Speed -", show=False),
         Binding("v", "cycle_subs", "Subtitles", show=False),
+        Binding("Q", "quality", "Quality"),
         Binding("question_mark", "help", "Help", show=False),
     ]
 
@@ -127,3 +128,6 @@ class BrowseScreen(Screen):
 
     async def action_cycle_subs(self) -> None:
         await self.app.cycle_subtitles()
+
+    def action_quality(self) -> None:
+        self.app.pick_quality()

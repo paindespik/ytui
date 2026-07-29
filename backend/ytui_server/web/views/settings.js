@@ -2,7 +2,7 @@
 
 import { api, ApiError } from "../js/api.js";
 import { navigate } from "../js/router.js";
-import { prefs } from "../js/state.js";
+import { prefs, QUALITIES } from "../js/state.js";
 import {
   el,
   channelPath,
@@ -12,8 +12,6 @@ import {
   toast,
   confirmModal,
 } from "../js/ui.js";
-
-const QUALITIES = [360, 480, 720, 1080, 1440, 2160];
 
 function fmtUptime(seconds) {
   const s = Math.max(0, Math.floor(seconds || 0));

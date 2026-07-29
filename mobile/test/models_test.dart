@@ -97,10 +97,12 @@ void main() {
         'title': 't',
         'duration': 100,
         'expires_at': '2026-07-11T16:00:00Z',
+        'height': 1080,
       });
       expect(info.kind, 'split');
       expect(info.audioUrl, isNotNull);
       expect(info.expiresAt, DateTime.utc(2026, 7, 11, 16));
+      expect(info.height, 1080);
     });
 
     test('hls with nulls', () {
@@ -108,6 +110,7 @@ void main() {
           StreamInfo.fromJson({'kind': 'hls', 'url': 'https://x/m.m3u8'});
       expect(info.videoUrl, isNull);
       expect(info.expiresAt, isNull);
+      expect(info.height, isNull);
       expect(info.subtitles, isEmpty);
     });
 

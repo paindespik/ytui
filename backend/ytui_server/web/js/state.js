@@ -21,10 +21,13 @@ function set(key, value) {
   localStorage.setItem(P + key, String(value));
 }
 
+// Échelle de qualité partagée (Réglages + sélecteur du lecteur).
+export const QUALITIES = [360, 480, 720, 1080, 1440, 2160];
+
 export const prefs = {
   get sponsorblock() { return getBool("sponsorblock", true); },
   set sponsorblock(v) { set("sponsorblock", v); },
-  get maxHeight() { return getNum("max_height", 1080); },
+  get maxHeight() { return getNum("max_height", 1440); },
   set maxHeight(v) { set("max_height", v); },
   get subLangs() { return getStr("sub_langs", "fr,en"); },
   set subLangs(v) { set("sub_langs", v); },

@@ -129,7 +129,7 @@ async def video_streams(
     video_id: str,
     request: Request,
     platform: Platform = "youtube",
-    max_height: int = Query(default=1080, ge=144, le=4320),
+    max_height: int = Query(default=1440, ge=144, le=4320),
     audio_only: bool = False,
     sub_langs: str = "",
 ) -> StreamInfo:
@@ -144,11 +144,17 @@ async def video_streams(
         ]
         if proxies:
             async with httpx.AsyncClient(timeout=twitch.TIMEOUT) as client:
-                playlist = await twitch.resolve_live_playlist(client, login, proxies)
-            if playlist is not None:
+                resolved = await twitch.resolve_live_playlist(
+                    client, login, proxies, max_height
+                )
+            if resolved is not None:
+                playlist, height = resolved
                 entry = request.app.state.live_monitor.lives.get(login)
                 return StreamInfo(
-                    kind="hls", url=playlist, title=entry[0].title if entry else ""
+                    kind="hls",
+                    url=playlist,
+                    title=entry[0].title if entry else "",
+                    height=height,
                 )
     if platform == "tiktok" and ":" in video_id:
         # Live id "username:room_id": direct webcast resolution (yt-dlp's
@@ -156,13 +162,13 @@ async def video_streams(
         username = video_id.split(":", 1)[0]
         try:
             async with httpx.AsyncClient(timeout=tiktok.TIMEOUT) as client:
-                resolved = await tiktok.resolve_live_stream(client, username)
+                resolved = await tiktok.resolve_live_stream(client, username, max_height)
         except (httpx.HTTPError, tiktok.TikTokError) as exc:
             log.debug("tiktok live resolve failed for %s: %s", username, exc)
             resolved = None
         if resolved is not None:
-            url, title = resolved
-            return StreamInfo(kind="hls", url=url, title=title)
+            url, title, height = resolved
+            return StreamInfo(kind="hls", url=url, title=title, height=height)
     try:
         return await ytdlp.resolve_streams(
             _video_url(video_id, platform),
@@ -180,7 +186,7 @@ async def video_mpd(
     video_id: str,
     request: Request,
     platform: Platform = "youtube",
-    max_height: int = Query(default=1080, ge=144, le=4320),
+    max_height: int = Query(default=1440, ge=144, le=4320),
 ) -> Response:
     try:
         split = await ytdlp.resolve_split_mp4(_video_url(video_id, platform), max_height)

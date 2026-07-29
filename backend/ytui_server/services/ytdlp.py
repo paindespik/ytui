@@ -235,6 +235,21 @@ def _stream_expiry(url: str) -> datetime | None:
     return None
 
 
+def _capped(fmts: list[dict], max_height: int) -> list[dict]:
+    """Formats at or below `max_height`; when none fit, the lowest available.
+
+    A cap must never make a video unplayable: a 1080p-only source served to a
+    720p cap is degraded gracefully (clients report the served height).
+    """
+    fitting = [f for f in fmts if (f.get("height") or 0) <= max_height]
+    if fitting:
+        return fitting
+    if not fmts:
+        return []
+    lowest = min((f.get("height") or 0) for f in fmts)
+    return [f for f in fmts if (f.get("height") or 0) == lowest]
+
+
 def _extract_streams(
     url: str, max_height: int, audio_only: bool, sub_langs: str
 ) -> StreamInfo:
@@ -278,7 +293,7 @@ def _extract_streams(
                     )
                 )
 
-    def make(kind, url_, video_url=None, audio_url=None):
+    def make(kind, url_, video_url=None, audio_url=None, height=None):
         return StreamInfo(
             kind=kind,
             url=url_,
@@ -287,6 +302,7 @@ def _extract_streams(
             title=title,
             duration=duration,
             expires_at=_stream_expiry(url_),
+            height=height,
             subtitles=subtitles,
         )
 
@@ -301,37 +317,43 @@ def _extract_streams(
             return make("progressive", best["url"])
         # fall through: use whatever combined format exists
 
-    height_ok = lambda f: (f.get("height") or 0) <= max_height  # noqa: E731
-
     # 1. HLS manifest (adaptive; best for mobile players)
-    hls = [
+    hls_all = [
         f
         for f in formats
         if f.get("protocol", "").startswith("m3u8")
         and f.get("vcodec") not in (None, "none")
-        and height_ok(f)
     ]
-    if hls:
-        manifest = info.get("manifest_url") or ""
+    if hls_all:
+        hls = _capped(hls_all, max_height)
         best = max(hls, key=lambda f: f.get("height") or 0)
-        return make("hls", manifest or best["url"])
+        height = best.get("height") or None
+        top = max((f.get("height") or 0) for f in hls_all)
+        # The master manifest lets the player adapt, but it carries every
+        # variant: only serve it when the cap took nothing away.
+        if top > (best.get("height") or 0):
+            return make("hls", best["url"], height=height)
+        manifest = info.get("manifest_url") or ""
+        return make("hls", manifest or best["url"], height=height)
 
     # 2. Progressive (audio+video in one file)
-    progressive = [
-        f
-        for f in formats
-        if f.get("acodec") not in (None, "none")
-        and f.get("vcodec") not in (None, "none")
-        and height_ok(f)
-    ]
+    progressive = _capped(
+        [
+            f
+            for f in formats
+            if f.get("acodec") not in (None, "none")
+            and f.get("vcodec") not in (None, "none")
+        ],
+        max_height,
+    )
     if progressive:
         best = max(progressive, key=lambda f: f.get("height") or 0)
-        return make("progressive", best["url"])
+        return make("progressive", best["url"], height=best.get("height") or None)
 
     # 3. Split DASH: best video + best audio
-    videos = [
-        f for f in formats if f.get("vcodec") not in (None, "none") and height_ok(f)
-    ]
+    videos = _capped(
+        [f for f in formats if f.get("vcodec") not in (None, "none")], max_height
+    )
     audios = [
         f
         for f in formats
@@ -340,7 +362,13 @@ def _extract_streams(
     if videos and audios:
         bv = max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
         ba = max(audios, key=lambda f: f.get("abr") or f.get("tbr") or 0)
-        return make("split", bv["url"], video_url=bv["url"], audio_url=ba["url"])
+        return make(
+            "split",
+            bv["url"],
+            video_url=bv["url"],
+            audio_url=ba["url"],
+            height=bv.get("height") or None,
+        )
 
     # 4. Last resort: top-level url
     if info.get("url"):
@@ -349,7 +377,7 @@ def _extract_streams(
 
 
 async def resolve_streams(
-    url: str, max_height: int = 1080, audio_only: bool = False, sub_langs: str = ""
+    url: str, max_height: int = 1440, audio_only: bool = False, sub_langs: str = ""
 ) -> StreamInfo:
     return await _run(
         _INTERACTIVE_SEM, _extract_streams, url, max_height, audio_only, sub_langs
@@ -382,8 +410,8 @@ def _extract_split_mp4(url: str, max_height: int) -> SplitMp4 | None:
         and f.get("acodec") in (None, "none")
         and f.get("ext") == "mp4"
         and not (f.get("protocol") or "").startswith("m3u8")
-        and (f.get("height") or 0) <= max_height
     ]
+    videos = _capped(videos, max_height)
     audios = [
         f
         for f in formats

@@ -8,7 +8,7 @@ from textual.app import App
 from textual.reactive import reactive
 
 from .api_client import YtuiApiError, YtuiClient, resume_start
-from .config import Config
+from .config import Config, set_option
 from .livenotify import send_live_notification
 from .models import SponsorSegment, Video, video_id_from_url
 from .player.mpv import MpvController, PlayerError, play
@@ -24,7 +24,7 @@ from .ui.screens.playlist import PlaylistScreen
 from .ui.screens.search import SearchScreen
 from .ui.screens.settings import SettingsScreen
 from .ui.screens.suggestions import SuggestionsScreen
-from .ui.widgets.modals import PlaylistPickerModal, TextInputModal
+from .ui.widgets.modals import PlaylistPickerModal, QualityPickerModal, TextInputModal
 from .ui.widgets.video_list import VideoList
 
 LIVE_POLL_SECONDS = 5 * 60  # feed refresh cadence
@@ -100,6 +100,7 @@ class YtuiApp(App):
         self.active_lives: dict[str, Video] = {}
         self._sponsor_segments: dict[str, list[SponsorSegment]] = {}
         self._sponsor_pending: set[str] = set()
+        self._playing: Video | None = None
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -296,13 +297,18 @@ class YtuiApp(App):
         if video.platform not in ("twitch", "tiktok") or ":" not in video.video_id:
             return video.url
         try:
-            streams = await self.client.video_streams(video.video_id, platform=video.platform)
+            streams = await self.client.video_streams(
+                video.video_id,
+                platform=video.platform,
+                max_height=self.config.player.max_height,
+            )
         except YtuiApiError:
             return video.url
         return streams.get("url") or video.url
 
     async def _play_video_async(self, video: Video, audio_only: bool | None) -> None:
         start = await self._resume_start_for(video)
+        self._playing = video
         url = await self._playback_url(video)
         if audio_only:
             # One-shot audio playback, separate from the controlled queue.
@@ -326,6 +332,7 @@ class YtuiApp(App):
         self.run_worker(self._play_from_history_async(video), group="player")
 
     async def _play_from_history_async(self, video: Video) -> None:
+        self._playing = video
         row = None
         if video.kind == "video":
             try:
@@ -384,6 +391,7 @@ class YtuiApp(App):
         self.run_worker(self._play_all_async(playable), group="player")
 
     async def _play_all_async(self, videos: list[Video]) -> None:
+        self._playing = videos[0]
         urls = [await self._playback_url(v) for v in videos]
         try:
             await self.player.play(urls[0], self.config.player)
@@ -427,6 +435,38 @@ class YtuiApp(App):
         new = min(3.0, max(0.25, round(current + delta, 2)))
         if await self.player.set_speed(new):
             self.notify(f"Speed: {new:g}x", timeout=2)
+
+    async def change_quality(self, max_height: int) -> None:
+        """Persist the height cap and re-open the current file at its position."""
+        self.config.player.max_height = max_height
+        set_option("player", "max_height", max_height)
+        video = self._playing
+        snapshot = await self.player.playback_snapshot()
+        if video is None or snapshot is None:
+            self.notify(f"Max height: {max_height}p", timeout=3)
+            return
+        _path, _title, position, _duration = snapshot
+        # Never resume a live at a position: mpv stalls on a DVR window (see
+        # _poll_player). A Twitch/TikTok live id also needs a re-resolved URL,
+        # which _playback_url does (it returns video.url for everything else).
+        live = (
+            video.video_id in self._live_vids
+            or video.video_id in self.active_lives
+            or (video.platform in ("twitch", "tiktok") and ":" in video.video_id)
+        )
+        url = await self._playback_url(video)
+        start = None if live else position
+        if await self.player.reload_with_quality(url, max_height, start):
+            self.notify(f"Max height: {max_height}p", timeout=3)
+        else:
+            self.notify("Could not switch quality.", severity="warning", timeout=5)
+
+    def pick_quality(self) -> None:
+        def on_pick(height: int | None) -> None:
+            if height is not None:
+                self.run_worker(self.change_quality(height), group="player")
+
+        self.push_screen(QualityPickerModal(self.config.player.max_height), on_pick)
 
     async def cycle_subtitles(self) -> None:
         label = await self.player.cycle_subtitles()

@@ -52,6 +52,7 @@ void main() {
       required ValueChanged<Duration> onSeek,
       VoidCallback? onInteract,
       VoidCallback? onAudioDelay,
+      VoidCallback? onQuality,
       bool live = false,
     }) {
       return MaterialApp(
@@ -61,6 +62,7 @@ void main() {
             onSeek: onSeek,
             onInteract: onInteract,
             onAudioDelay: onAudioDelay,
+            onQuality: onQuality,
             live: live,
           ),
         ),
@@ -123,6 +125,7 @@ void main() {
     testWidgets('activates the focused action with the centre button',
         (tester) async {
       var delayTaps = 0;
+      var qualityTaps = 0;
       final entry = FocusNode();
       addTearDown(entry.dispose);
 
@@ -130,14 +133,20 @@ void main() {
         entryFocus: entry,
         onSeek: (_) {},
         onAudioDelay: () => delayTaps++,
+        onQuality: () => qualityTaps++,
       ));
       entry.requestFocus();
       await tester.pump();
 
-      // The audio-delay button is the last of the row.
+      // The height-cap button is the last of the row, audio delay its neighbour.
       await focusLastAction(tester);
-      expect(find.widgetWithText(RemoteButton, '0 ms'), findsOneWidget);
+      expect(find.widgetWithText(RemoteButton, '1440p'), findsOneWidget);
 
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      expect(qualityTaps, 1);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.select);
       expect(delayTaps, 1);
     });
@@ -215,7 +224,7 @@ void main() {
       entry.requestFocus();
       await tester.pump();
 
-      final button = find.widgetWithText(RemoteButton, '0 ms');
+      final button = find.widgetWithText(RemoteButton, '1440p');
       await focusLastAction(tester);
 
       final box = tester.widget<Container>(
@@ -235,6 +244,7 @@ Widget buildControls({
   required ValueChanged<Duration> onSeek,
   VoidCallback? onInteract,
   VoidCallback? onAudioDelay,
+  VoidCallback? onQuality,
   bool live = false,
 }) {
   return RemotePlayerControls(
@@ -245,6 +255,7 @@ Widget buildControls({
     live: live,
     rateLabel: '1×',
     audioDelayLabel: '0 ms',
+    qualityLabel: '1440p',
     hasSubtitles: false,
     hasNext: true,
     hasPrevious: false,
@@ -254,6 +265,7 @@ Widget buildControls({
     onRate: () {},
     onSubtitles: () {},
     onAudioDelay: onAudioDelay ?? () {},
+    onQuality: onQuality ?? () {},
     onInteract: onInteract ?? () {},
     entryFocus: entryFocus,
   );

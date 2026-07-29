@@ -176,19 +176,21 @@ def test_fetch_user_room_malformed_payload():
 
 
 def test_pick_stream_url_preference():
-    assert tiktok._pick_stream_url({"hls_pull_url": "https://hls"}) == "https://hls"
-    assert (
-        tiktok._pick_stream_url({"hls_pull_url": "", "hls_pull_url_map": {"q": "https://map"}})
-        == "https://map"
-    )
+    assert tiktok._pick_stream_url({"hls_pull_url": "https://hls"}) == ("https://hls", None)
+    assert tiktok._pick_stream_url(
+        {"hls_pull_url": "", "hls_pull_url_map": {"q": "https://map"}}
+    ) == ("https://map", None)
     flv = {"SD1": "https://sd1", "FULL_HD1": "https://fhd", "HD1": "https://hd1"}
-    assert tiktok._pick_stream_url({"flv_pull_url": flv}) == "https://fhd"
-    assert (
-        tiktok._pick_stream_url({"flv_pull_url": {"SD1": "https://sd1", "SD2": "https://sd2"}})
-        == "https://sd2"
+    assert tiktok._pick_stream_url({"flv_pull_url": flv}) == ("https://fhd", 1080)
+    assert tiktok._pick_stream_url(
+        {"flv_pull_url": {"SD1": "https://sd1", "SD2": "https://sd2"}}
+    ) == ("https://sd2", 540)
+    # Unknown flat key: no height metadata, preference order decides.
+    assert tiktok._pick_stream_url({"flv_pull_url": {"XY": "https://xy"}}) == (
+        "https://xy",
+        None,
     )
-    assert tiktok._pick_stream_url({"flv_pull_url": {"XY": "https://xy"}}) == "https://xy"
-    assert tiktok._pick_stream_url({}) == ""
+    assert tiktok._pick_stream_url({}) == ("", None)
 
 
 def test_pick_stream_url_sdk_fallback():
@@ -201,15 +203,15 @@ def test_pick_stream_url_sdk_fallback():
     )
     stream = {"hls_pull_url": "", "flv_pull_url": {}, "live_core_sdk_data": sdk}
     # No HLS anywhere → best FLV from the preferred (non-"ao") quality.
-    assert tiktok._pick_stream_url(stream) == "https://cdn/or.flv"
+    assert tiktok._pick_stream_url(stream) == ("https://cdn/or.flv", None)
 
 
 def test_pick_stream_url_sdk_prefers_flv():
     # TikTok's HLS URLs 403 in practice, so FLV wins within the SDK blob too.
     sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv", "hls": "https://cdn/or.m3u8"}})
-    assert (
-        tiktok._pick_stream_url({"flv_pull_url": {}, "live_core_sdk_data": sdk})
-        == "https://cdn/or.flv"
+    assert tiktok._pick_stream_url({"flv_pull_url": {}, "live_core_sdk_data": sdk}) == (
+        "https://cdn/or.flv",
+        None,
     )
 
 
@@ -221,21 +223,36 @@ def test_pick_stream_url_prefers_flv_over_flat_hls():
         "flv_pull_url": {},
         "live_core_sdk_data": sdk,
     }
-    assert tiktok._pick_stream_url(stream) == "https://cdn/or.flv"
+    assert tiktok._pick_stream_url(stream) == ("https://cdn/or.flv", None)
 
 
 def test_pick_stream_url_hls_only_fallback():
     # No FLV anywhere → HLS is still returned as a last resort.
-    assert tiktok._pick_stream_url({"hls_pull_url": "https://only.m3u8"}) == "https://only.m3u8"
+    assert tiktok._pick_stream_url({"hls_pull_url": "https://only.m3u8"}) == (
+        "https://only.m3u8",
+        None,
+    )
 
 
 def test_pick_stream_url_flat_flv_beats_sdk():
     # A populated flat FLV still wins over the SDK blob (no regression).
     sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv"}})
-    assert (
-        tiktok._pick_stream_url({"flv_pull_url": {"HD1": "https://flat.flv"}, "live_core_sdk_data": sdk})
-        == "https://flat.flv"
+    assert tiktok._pick_stream_url(
+        {"flv_pull_url": {"HD1": "https://flat.flv"}, "live_core_sdk_data": sdk}
+    ) == ("https://flat.flv", 720)
+
+
+def test_pick_stream_url_respects_cap():
+    # SDK entries carry their resolution in sdk_params; the cap ranks within FLV.
+    sdk = _sdk_blob(
+        {
+            "hd": {"flv": "https://hd.flv", "sdk_params": '{"resolution":"720x1280"}'},
+            "sd": {"flv": "https://sd.flv", "sdk_params": '{"resolution":"360x640"}'},
+        }
     )
+    stream = {"flv_pull_url": {}, "live_core_sdk_data": sdk}
+    assert tiktok._pick_stream_url(stream, 480) == ("https://sd.flv", 360)
+    assert tiktok._pick_stream_url(stream, 1080) == ("https://hd.flv", 720)
 
 
 def _run_resolve(room_info_payload):
@@ -256,7 +273,7 @@ def test_resolve_live_stream_flv_only():
     resolved = _run_resolve(
         _room_info(flv={"HD1": "https://pull-flv/hd1.flv", "SD1": "https://pull-flv/sd1.flv"})
     )
-    assert resolved == ("https://pull-flv/hd1.flv", "Morning forecast")
+    assert resolved == ("https://pull-flv/hd1.flv", "Morning forecast", 720)
 
 
 def test_resolve_live_stream_prefers_flv():
@@ -264,14 +281,14 @@ def test_resolve_live_stream_prefers_flv():
     resolved = _run_resolve(
         _room_info(hls="https://pull-hls/index.m3u8", flv={"HD1": "https://pull-flv/hd1.flv"})
     )
-    assert resolved == ("https://pull-flv/hd1.flv", "Morning forecast")
+    assert resolved == ("https://pull-flv/hd1.flv", "Morning forecast", 720)
 
 
 def test_resolve_live_stream_sdk_blob():
     # Flat flv empty, URL only in live_core_sdk_data (alimage_p1000-style room).
     sdk = _sdk_blob({"origin": {"flv": "https://cdn/or.flv", "hls": "", "cmaf": ""}})
     resolved = _run_resolve(_room_info(flv={}, sdk=sdk))
-    assert resolved == ("https://cdn/or.flv", "Morning forecast")
+    assert resolved == ("https://cdn/or.flv", "Morning forecast", None)
 
 
 def test_resolve_live_stream_dead_room():

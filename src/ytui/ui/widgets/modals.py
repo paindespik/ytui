@@ -1,4 +1,4 @@
-"""Small modal dialogs: text input, confirm, local-playlist picker."""
+"""Small modal dialogs: text input, confirm, local-playlist picker, quality picker."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from textual.widgets import Input, Label, OptionList
 from textual.widgets.option_list import Option
 
 _MODAL_CSS = """
-TextInputModal, ConfirmModal, PlaylistPickerModal {
+TextInputModal, ConfirmModal, PlaylistPickerModal, QualityPickerModal {
     align: center middle;
 }
-TextInputModal > Vertical, ConfirmModal > Vertical, PlaylistPickerModal > Vertical {
+TextInputModal > Vertical, ConfirmModal > Vertical, PlaylistPickerModal > Vertical, QualityPickerModal > Vertical {
     width: 60;
     height: auto;
     max-height: 20;
@@ -145,6 +145,41 @@ class PlaylistPickerModal(ModalScreen[int | None]):
             self.app.notify(f"Could not create: {exc.detail}", severity="error", timeout=8)
             playlist_id = None
         self.dismiss(playlist_id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+QUALITY_LADDER = (360, 480, 720, 1080, 1440, 2160)
+
+
+class QualityPickerModal(ModalScreen[int | None]):
+    """Pick the max video height; dismisses with the height or None."""
+
+    CSS = _MODAL_CSS
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, current: int) -> None:
+        super().__init__()
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Max video height (Escape = cancel)")
+            yield OptionList(id="quality-options")
+
+    def on_mount(self) -> None:
+        options = self.query_one("#quality-options", OptionList)
+        for height in QUALITY_LADDER:
+            mark = " ✓" if height == self._current else ""
+            options.add_option(Option(f"{height}p{mark}", id=str(height)))
+        options.highlighted = next(
+            (i for i, h in enumerate(QUALITY_LADDER) if h == self._current), 0
+        )
+        options.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(int(event.option.id))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

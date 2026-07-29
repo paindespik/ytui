@@ -148,6 +148,7 @@ class StreamInfo {
   final String title;
   final int? duration;
   final DateTime? expiresAt;
+  final int? height;
   final List<SubtitleTrackInfo> subtitles;
 
   const StreamInfo({
@@ -158,6 +159,7 @@ class StreamInfo {
     this.title = '',
     this.duration,
     this.expiresAt,
+    this.height,
     this.subtitles = const [],
   });
 
@@ -168,6 +170,7 @@ class StreamInfo {
         audioUrl: json['audio_url'] as String?,
         title: json['title'] as String? ?? '',
         duration: json['duration'] as int?,
+        height: json['height'] as int?,
         expiresAt: json['expires_at'] != null
             ? DateTime.tryParse(json['expires_at'] as String)
             : null,

@@ -238,6 +238,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             .read(sponsorblockProvider.notifier)
                             .setEnabled(v),
                       ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Qualité maximale'),
+                        subtitle: const Text(
+                            'Hauteur vidéo demandée sur toutes les plateformes'),
+                        trailing: DropdownButton<int>(
+                          value: ref.watch(maxHeightProvider),
+                          items: [
+                            for (final h in kQualityLadder)
+                              DropdownMenuItem(value: h, child: Text('${h}p')),
+                          ],
+                          onChanged: (h) => h == null
+                              ? null
+                              : ref.read(maxHeightProvider.notifier).setHeight(h),
+                        ),
+                      ),
                     ],
                   ),
                 ),

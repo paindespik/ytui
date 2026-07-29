@@ -21,7 +21,8 @@ token = ""
 
 [player]
 command = "mpv"
-format = "bestvideo[height<=?1080]+bestaudio/best"
+# Max video height requested from every platform (360, 480, 720, 1080, 1440, 2160)
+max_height = 1440
 audio_only = false
 # Directory for 'd' (download video)
 download_dir = "~/Videos"
@@ -47,7 +48,7 @@ class ServerConfig(BaseModel):
 
 class PlayerConfig(BaseModel):
     command: str = "mpv"
-    format: str = "bestvideo[height<=?1080]+bestaudio/best"
+    max_height: int = 1440
     audio_only: bool = False
     download_dir: str = "~/Videos"
     sponsorblock: bool = True

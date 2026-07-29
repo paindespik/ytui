@@ -139,6 +139,8 @@ class StreamInfo(BaseModel):
     title: str = ""
     duration: int | None = None
     expires_at: datetime | None = None
+    # Height of the video track actually served (None: audio-only or unknown).
+    height: int | None = None
     subtitles: list[SubtitleTrackOut] = []
 
 

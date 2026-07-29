@@ -6,6 +6,7 @@ A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch and TikTok) v
 
 - **Unified feed** — merges YouTube, BitChute, and Odysee RSS feeds by publish date, with TTL-based caching (15 min) and stale-fallback on upstream failure.
 - **Playback** — resolves the best available stream (HLS/progressive/DASH up to 4320p) via `yt-dlp`; the TUI drives `mpv` over JSON IPC, the mobile app uses `media_kit`.
+- **Resolution cap** — one max height per client (360p…2160p, default 1440p), stored locally (TUI `config.toml`, mobile `SharedPreferences`, web `localStorage`) and changeable mid-playback from the player as well as from the settings screen. Honoured on all five platforms, VOD and live (a Twitch/YouTube master playlist is narrowed to a single variant, TikTok picks the best FLV quality under the cap); a source that only exists above the cap degrades to its lowest track instead of failing.
 - **Cross-device continuity** — watch history, resume position (10s heartbeat), local playlists, and followed channels all live on the server, not per-client config.
 - **Live notifications** — the server polls followed channels' `/live` pages every 5 min; clients poll `/api/lives` and surface desktop/mobile notifications, pinning live videos in the feed.
 - **YouTube interactions** — an OAuth2 "token push" model: the desktop client completes OAuth consent and uploads the token to the server, which then handles like/comment actions via the YouTube Data API v3 on behalf of every client.
@@ -75,6 +76,7 @@ Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
 
    [player]
    command = "mpv"
+   max_height = 1440   # 360, 480, 720, 1080, 1440, 2160 — also settable with Q in the TUI
    ```
 3. Launch the TUI:
    ```bash

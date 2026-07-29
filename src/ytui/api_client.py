@@ -183,7 +183,7 @@ class YtuiClient:
         self,
         video_id: str,
         platform: str = "youtube",
-        max_height: int = 1080,
+        max_height: int = 1440,
         audio_only: bool = False,
     ) -> dict:
         return (

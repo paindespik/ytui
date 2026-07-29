@@ -431,6 +431,23 @@ export class Player {
     toast(`Vitesse ×${this.rate.toLocaleString("fr-FR")}`);
   }
 
+  // Le plafond est lu par _attach (prefs.maxHeight) : l'écrire puis réattacher
+  // suffit, et la préférence persiste pour les lectures suivantes.
+  async setMaxHeight(height) {
+    prefs.maxHeight = height;
+    const pos = this.live ? 0 : Math.floor(this.el.currentTime || 0);
+    this._teardownEngines();
+    this._retried = false;
+    this._proxied = false;
+    try {
+      await this._attach(pos);
+    } catch (err) {
+      this.cb.onFatal?.(err.detail || "Lecture impossible");
+      return;
+    }
+    toast(`Qualité : ≤${height}p`);
+  }
+
   _applyRate() {
     this.el.playbackRate = this.rate;
   }

@@ -130,7 +130,7 @@ class YtuiApi {
   Future<StreamInfo> videoStreams(
     String videoId, {
     String platform = 'youtube',
-    int maxHeight = 1080,
+    int maxHeight = 1440,
     bool audioOnly = false,
   }) async {
     final r = await _request('GET', '/api/videos/${_enc(videoId)}/streams', query: {

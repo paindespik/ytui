@@ -149,14 +149,40 @@ async def check_live_batch(
     return live
 
 
+_STREAM_INF_RE = re.compile(r"RESOLUTION=(\d+)x(\d+)")
+
+
+def parse_variants(master: str) -> list[tuple[int, str]]:
+    """[(height, variant playlist URL)] from an HLS master playlist.
+
+    Variants without a RESOLUTION attribute (audio_only) are skipped.
+    """
+    variants: list[tuple[int, str]] = []
+    lines = master.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("#EXT-X-STREAM-INF:"):
+            continue
+        m = _STREAM_INF_RE.search(line)
+        if not m:
+            continue
+        uri = next(
+            (u.strip() for u in lines[i + 1 :] if u.strip() and not u.startswith("#")), ""
+        )
+        if uri:
+            variants.append((int(m.group(2)), uri))
+    return variants
+
+
 async def resolve_live_playlist(
-    client: httpx.AsyncClient, login: str, proxies: list[str]
-) -> str | None:
-    """Ad-free master-playlist URL for a live channel via the first healthy
+    client: httpx.AsyncClient, login: str, proxies: list[str], max_height: int = 4320
+) -> tuple[str, int | None] | None:
+    """(URL, height) of an ad-free live playlist via the first healthy
     TTV.LOL-compatible proxy, or None when every proxy fails.
 
     The proxy URL itself is returned (not its content) so the player fetches a
     fresh master playlist — and fresh segment tokens — when it opens the stream.
+    The exception is a cap that excludes variants: then one variant playlist URL
+    is handed over instead, since a master carries every quality.
     """
     for base in proxies:
         base = base.strip().rstrip("/")
@@ -169,6 +195,14 @@ async def resolve_live_playlist(
             log.info("twitch playlist proxy %s unreachable: %s", base, exc)
             continue
         if resp.status_code == 200 and resp.text.startswith("#EXTM3U"):
-            return url
+            variants = parse_variants(resp.text)
+            top = max((h for h, _ in variants), default=0)
+            if variants and top > max_height:
+                height, variant = max(
+                    (v for v in variants if v[0] <= max_height),
+                    default=min(variants),
+                )
+                return variant, height
+            return url, top or None
         log.info("twitch playlist proxy %s returned HTTP %s", base, resp.status_code)
     return None

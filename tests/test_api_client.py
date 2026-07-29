@@ -65,6 +65,16 @@ async def test_search(client):
 
 
 @respx.mock
+async def test_video_streams_sends_max_height(client):
+    respx.get(f"{BASE}/api/videos/abc/streams").mock(
+        return_value=httpx.Response(200, json={"kind": "progressive", "url": "u", "height": 720})
+    )
+    streams = await client.video_streams("abc", max_height=720)
+    assert streams["height"] == 720
+    assert respx.calls.last.request.url.params["max_height"] == "720"
+
+
+@respx.mock
 async def test_search_odysee_source(client):
     odysee_video = dict(
         VIDEO_JSON,

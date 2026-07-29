@@ -23,6 +23,7 @@ class SettingsScreen(Screen):
         Binding("x", "remove_channel", "Remove channel"),
         Binding("m", "toggle_audio_only", "Toggle audio-only"),
         Binding("t", "toggle_thumbnails", "Toggle thumbnails"),
+        Binding("Q", "quality", "Max height"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("question_mark", "help", "Help", show=False),
@@ -67,6 +68,7 @@ class SettingsScreen(Screen):
         server = config.server.url or "(not configured)"
         self.query_one("#settings-options", Label).update(
             f"server: [i]{server}[/i]    "
+            f"[b]Q[/b] max height: [i]{config.player.max_height}p[/i]    "
             f"[b]m[/b] audio only: [i]{config.player.audio_only}[/i]    "
             f"[b]t[/b] thumbnails: [i]{config.ui.thumbnails}[/i]"
         )
@@ -190,6 +192,9 @@ class SettingsScreen(Screen):
         set_option("ui", "thumbnails", config.ui.thumbnails)
         self.app.notify("Thumbnail change applies to newly opened screens.", timeout=5)
         self._reload()
+
+    def action_quality(self) -> None:
+        self.app.pick_quality()
 
     def action_cursor_down(self) -> None:
         self.query_one("#settings-channels", OptionList).action_cursor_down()

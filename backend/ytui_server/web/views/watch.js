@@ -15,6 +15,7 @@ import { queue } from "../js/queue.js";
 import { replace, navigate } from "../js/router.js";
 import { Player, isLiveId } from "../js/player.js";
 import { playerActions } from "../js/shortcuts.js";
+import { prefs, QUALITIES } from "../js/state.js";
 
 export async function render(view, { params }) {
   const { platform, id } = params;
@@ -65,6 +66,13 @@ export async function render(view, { params }) {
     "select",
     { class: "input", title: "Sous-titres" },
     el("option", { value: "-1" }, "Sous-titres : aucun"),
+  );
+  const qualitySel = el(
+    "select",
+    { class: "input", title: "Qualité maximale" },
+    QUALITIES.map((q) =>
+      el("option", { value: String(q), selected: q === prefs.maxHeight }, `${q}p`),
+    ),
   );
 
   const pipBtn = document.pictureInPictureEnabled
@@ -125,7 +133,7 @@ export async function render(view, { params }) {
           { class: "watch-info" },
           titleEl,
           el("div", { class: "channel-line" }, channelLink, metaLine),
-          el("div", { class: "watch-actions" }, speedSel, subSel, pipBtn, detailsBtn, plBtn),
+          el("div", { class: "watch-actions" }, speedSel, qualitySel, subSel, pipBtn, detailsBtn, plBtn),
         ),
       ),
       el(
@@ -152,6 +160,23 @@ export async function render(view, { params }) {
 
   // ─── Lecteur ───
 
+  // La hauteur annoncée par /streams est celle de la piste choisie côté serveur,
+  // mais le lecteur peut jouer le MPD (avc1 capé indépendamment) ou adapter la
+  // variante HLS en cours de route : videoHeight est la seule vérité, et
+  // 'resize' la suit à chaque changement de rendition.
+  let streamsInfo = {};
+  function renderMeta() {
+    const parts = [];
+    const height = videoEl.videoHeight || streamsInfo.height;
+    if (height) parts.push(`${height}p`);
+    if (live) parts.push("EN DIRECT");
+    else if (streamsInfo.duration) parts.push(fmtDuration(streamsInfo.duration));
+    metaLine.textContent = parts.join(" · ");
+  }
+
+  videoEl.addEventListener("loadedmetadata", renderMeta);
+  videoEl.addEventListener("resize", renderMeta);
+
   const player = new Player(videoEl, {
     onMeta: (streams) => {
       if (streams.title) {
@@ -159,9 +184,8 @@ export async function render(view, { params }) {
         if (!video.title) video.title = streams.title;
         document.title = `${streams.title} — ytui`;
       }
-      if (!live && streams.duration) {
-        metaLine.textContent = fmtDuration(streams.duration);
-      }
+      streamsInfo = streams;
+      renderMeta();
       subSel.replaceChildren(
         el("option", { value: "-1" }, "Sous-titres : aucun"),
         ...(streams.subtitles || []).map((s, i) =>
@@ -214,6 +238,7 @@ export async function render(view, { params }) {
   });
 
   speedSel.addEventListener("change", () => player.setRate(Number(speedSel.value)));
+  qualitySel.onchange = (e) => player.setMaxHeight(Number(e.target.value));
   subSel.addEventListener("change", () => player.setSubtitle(Number(subSel.value)));
   videoEl.addEventListener("play", clearOverlay);
 

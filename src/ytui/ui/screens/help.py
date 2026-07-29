@@ -33,6 +33,7 @@ HELP_TEXT = """\
   n               Next in mpv queue
   [ / ]           Playback speed −/+ 0.25×
   v               Cycle subtitles
+  Q               Max video height
 
 [b]Channel view[/b]
   m               Load more (older) videos on a channel
