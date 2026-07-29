@@ -80,6 +80,33 @@ def test_channel_videos(client):
     assert body["items"][0]["video_id"] == "vid000000001"
 
 
+def test_channel_videos_offset_window(client):
+    """offset/limit map onto a yt-dlp item range, with one extra item probed."""
+    entries = [{"id": f"vid00000000{i}", "title": f"V{i}"} for i in range(4)]
+    ydl = FakeYDL({"entries": entries, "title": "Chan"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl):
+        resp = client.get(
+            "/api/channels/UCtest000000000000000000/videos",
+            params={"limit": 3, "offset": 10},
+        )
+    assert ydl._opts["playlist_items"] == "11:14"
+    body = resp.json()
+    assert [i["video_id"] for i in body["items"]] == ["vid000000000", "vid000000001", "vid000000002"]
+    assert body["has_more"] is True
+
+
+def test_channel_videos_exhausted(client):
+    """A short page means no further videos: clients must stop asking."""
+    entries = [{"id": "vid000000001", "title": "V1"}]
+    with _patch_ydl({"entries": entries, "title": "Chan"}):
+        resp = client.get(
+            "/api/channels/UCtest000000000000000000/videos", params={"limit": 3}
+        )
+    assert resp.json()["has_more"] is False
+
+
 def test_playlist_videos(client):
     entries = [{"id": "vid000000001", "title": "V1"}]
     with _patch_ydl({"entries": entries, "title": "My List"}):

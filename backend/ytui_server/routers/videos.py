@@ -51,21 +51,28 @@ async def channel_videos(
     channel_id: str,
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     platform: Platform = "youtube",
 ) -> ChannelVideosResponse:
+    # One extra item is fetched to tell "more available" from "exhausted".
+    probe = limit + 1
     try:
         if platform == "odysee":
-            items = await odysee.channel_videos(channel_id, limit=limit)
+            items = await odysee.channel_videos(channel_id, limit=probe, offset=offset)
         else:
             url = Video(video_id=channel_id, title="", kind="channel", platform=platform).url
-            items = await ytdlp.channel_videos(url, limit=limit)
+            items = await ytdlp.channel_videos(url, limit=probe, offset=offset)
     except (ytdlp.UpstreamError, odysee.OdyseeError) as exc:
         raise HTTPException(status_code=502, detail=f"Channel listing failed: {exc}") from exc
+    has_more = len(items) > limit
+    items = items[:limit]
     title = request.app.state.db.get_channel_name(channel_id) or ""
     if not title and items:
         title = items[0].channel_title
     return ChannelVideosResponse(
-        items=items, channel=Channel(channel_id=channel_id, title=title, platform=platform)
+        items=items,
+        channel=Channel(channel_id=channel_id, title=title, platform=platform),
+        has_more=has_more,
     )
 
 

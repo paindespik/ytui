@@ -91,19 +91,20 @@ class YtuiApi {
         .toList();
   }
 
-  Future<(List<Video>, String)> channelVideos(
+  Future<(List<Video>, String, bool)> channelVideos(
     String channelId, {
     String platform = 'youtube',
     int limit = 50,
+    int offset = 0,
   }) async {
     final r = await _request('GET', '/api/channels/${_enc(channelId)}/videos',
-        query: {'platform': platform, 'limit': limit});
+        query: {'platform': platform, 'limit': limit, 'offset': offset});
     final data = r.data as Map<String, dynamic>;
     final items = (data['items'] as List<dynamic>? ?? const [])
         .map((e) => Video.fromJson(e as Map<String, dynamic>))
         .toList();
     final title = (data['channel'] as Map<String, dynamic>?)?['title'] as String? ?? '';
-    return (items, title);
+    return (items, title, data['has_more'] as bool? ?? false);
   }
 
   Future<(List<Video>, String)> playlistVideos(

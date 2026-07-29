@@ -104,6 +104,7 @@ class SearchResponse(BaseModel):
 class ChannelVideosResponse(BaseModel):
     items: list[Video]
     channel: Channel
+    has_more: bool = False
 
 
 class PlaylistVideosResponse(BaseModel):

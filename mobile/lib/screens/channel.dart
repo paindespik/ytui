@@ -33,8 +33,8 @@ class ChannelScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          data.valueOrNull?.$2.isNotEmpty == true
-              ? data.valueOrNull!.$2
+          data.valueOrNull?.title.isNotEmpty == true
+              ? data.valueOrNull!.title
               : title,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
@@ -69,17 +69,18 @@ class ChannelScreen extends ConsumerWidget {
             onRetry: () =>
                 ref.invalidate(channelVideosProvider((channelId, platform)))),
         data: (result) {
-          if (result.$1.isEmpty) {
+          final videos = result.videos;
+          if (videos.isEmpty) {
             return const AppEmpty(
               message: 'This channel has no videos',
               icon: Icons.videocam_off_outlined,
             );
           }
-          final videos = result.$1;
           return ResponsiveCenter(
             child: ListView.builder(
               padding: const EdgeInsets.only(bottom: kGutter),
-              itemCount: videos.length + 1,
+              // header + videos (+ load-more footer while more pages remain)
+              itemCount: videos.length + (result.hasMore ? 2 : 1),
               itemBuilder: (context, index) {
                 if (index == 0) {
                   // Prominent "Play all" header
@@ -105,6 +106,9 @@ class ChannelScreen extends ConsumerWidget {
                   );
                 }
                 final videoIndex = index - 1;
+                if (videoIndex == videos.length) {
+                  return _loadMoreFooter(context, ref, result);
+                }
                 return VideoTile(
                   video: videos[videoIndex],
                   onTap: () {
@@ -118,6 +122,34 @@ class ChannelScreen extends ConsumerWidget {
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// Footer below the last video: fetches the next page of older videos.
+  Widget _loadMoreFooter(
+      BuildContext context, WidgetRef ref, ChannelVideos result) {
+    if (result.loadingMore) {
+      return const Padding(
+        padding: EdgeInsets.all(kGutter),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, kGutter),
+      child: OutlinedButton.icon(
+        onPressed: () async {
+          final messenger = ScaffoldMessenger.of(context);
+          final error = await ref
+              .read(channelVideosProvider((channelId, platform)).notifier)
+              .loadMore();
+          if (error != null) {
+            messenger.showSnackBar(SnackBar(content: Text('$error')));
+          }
+        },
+        icon: const Icon(Icons.expand_more),
+        label: const Text('Load older videos'),
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
       ),
     );
   }

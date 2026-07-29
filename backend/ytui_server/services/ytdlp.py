@@ -132,12 +132,14 @@ def entry_to_item(entry: dict) -> Video | None:
     )
 
 
-def _extract_flat(url: str, limit: int | None = None) -> list[Video]:
+def _extract_flat(url: str, limit: int | None = None, offset: int = 0) -> list[Video]:
     import yt_dlp
 
     opts = dict(_YDL_FLAT_OPTS)
     if limit:
-        opts["playlist_items"] = f"1:{limit}"
+        opts["playlist_items"] = f"{offset + 1}:{offset + limit}"
+    elif offset:
+        opts["playlist_items"] = f"{offset + 1}:"
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     items: list[Video] = []
@@ -179,7 +181,7 @@ async def search_videos(query: str, limit: int = 20) -> list[Video]:
     return await _run(_BULK_SEM, _extract_flat, url, limit)
 
 
-async def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
+async def channel_videos(channel_url: str, limit: int = 50, offset: int = 0) -> list[Video]:
     url = channel_url.rstrip("/")
     if (
         "bitchute.com" not in url
@@ -187,7 +189,7 @@ async def channel_videos(channel_url: str, limit: int = 50) -> list[Video]:
         and not url.endswith("/videos")
     ):
         url += "/videos"
-    return await _run(_BULK_SEM, _extract_flat, url, limit)
+    return await _run(_BULK_SEM, _extract_flat, url, limit, offset)
 
 
 async def playlist_videos(playlist_url: str, limit: int = 200) -> tuple[list[Video], str]:

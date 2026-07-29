@@ -41,9 +41,76 @@ final searchProvider = FutureProvider.autoDispose
     .family<List<Video>, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).search(arg.$1, source: arg.$2));
 
-final channelVideosProvider = FutureProvider.autoDispose
-    .family<(List<Video>, String), (String, String)>((ref, arg) =>
-        ref.watch(apiProvider).channelVideos(arg.$1, platform: arg.$2));
+/// Paginated channel listing: page 1 on build, older pages via [loadMore].
+class ChannelVideos {
+  final List<Video> videos;
+  final String title;
+  final bool hasMore;
+  final bool loadingMore;
+
+  const ChannelVideos({
+    required this.videos,
+    required this.title,
+    required this.hasMore,
+    this.loadingMore = false,
+  });
+
+  ChannelVideos copyWith({
+    List<Video>? videos,
+    String? title,
+    bool? hasMore,
+    bool? loadingMore,
+  }) =>
+      ChannelVideos(
+        videos: videos ?? this.videos,
+        title: title ?? this.title,
+        hasMore: hasMore ?? this.hasMore,
+        loadingMore: loadingMore ?? this.loadingMore,
+      );
+}
+
+const kChannelPageSize = 50;
+
+final channelVideosProvider = AsyncNotifierProvider.autoDispose
+    .family<ChannelVideosNotifier, ChannelVideos, (String, String)>(
+        ChannelVideosNotifier.new);
+
+class ChannelVideosNotifier
+    extends AutoDisposeFamilyAsyncNotifier<ChannelVideos, (String, String)> {
+  @override
+  Future<ChannelVideos> build((String, String) arg) async {
+    final (videos, title, hasMore) = await ref.watch(apiProvider).channelVideos(
+        arg.$1,
+        platform: arg.$2,
+        limit: kChannelPageSize);
+    return ChannelVideos(videos: videos, title: title, hasMore: hasMore);
+  }
+
+  /// Appends the next page, keeping the loaded videos on failure.
+  /// Returns the error when the page could not be fetched, else null.
+  Future<Object?> loadMore() async {
+    final current = state.valueOrNull;
+    if (current == null || !current.hasMore || current.loadingMore) return null;
+    state = AsyncData(current.copyWith(loadingMore: true));
+    try {
+      final (videos, _, hasMore) = await ref.read(apiProvider).channelVideos(
+            arg.$1,
+            platform: arg.$2,
+            limit: kChannelPageSize,
+            offset: current.videos.length,
+          );
+      state = AsyncData(current.copyWith(
+        videos: [...current.videos, ...videos],
+        hasMore: hasMore,
+        loadingMore: false,
+      ));
+      return null;
+    } catch (e) {
+      state = AsyncData(current.copyWith(loadingMore: false));
+      return e;
+    }
+  }
+}
 
 final ytPlaylistProvider = FutureProvider.autoDispose
     .family<(List<Video>, String), (String, String)>((ref, arg) =>

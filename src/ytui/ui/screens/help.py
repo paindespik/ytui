@@ -34,6 +34,9 @@ HELP_TEXT = """\
   [ / ]           Playback speed −/+ 0.25×
   v               Cycle subtitles
 
+[b]Channel view[/b]
+  m               Load more (older) videos on a channel
+
 [b]Home feed[/b]
   r               Refresh feed
   /               Open search

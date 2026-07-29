@@ -59,23 +59,33 @@ class VideoList(DataTable):
         self.add_column("Age", key="age")
         self.add_column("Source", key="source")
 
+    def _add_video_row(self, video: Video, watched: set[str]) -> None:
+        seen = video.video_id in watched
+        style = "dim" if seen else ""
+        self.add_row(
+            Text("✓" if seen else "", style=style),
+            Text(video.title, style=style),
+            Text(video.channel_title, style=style),
+            Text(video.age, style=style),
+            Text(
+                _source_label(video),
+                style=f"{style} {_PLATFORM_STYLES.get(video.platform, '')}".strip(),
+            ),
+        )
+
     def set_videos(self, videos: list[Video], watched: set[str] | None = None) -> None:
         self._videos = videos
         watched = watched or set()
         self.clear()
         for video in videos:
-            seen = video.video_id in watched
-            style = "dim" if seen else ""
-            self.add_row(
-                Text("✓" if seen else "", style=style),
-                Text(video.title, style=style),
-                Text(video.channel_title, style=style),
-                Text(video.age, style=style),
-                Text(
-                    _source_label(video),
-                    style=f"{style} {_PLATFORM_STYLES.get(video.platform, '')}".strip(),
-                ),
-            )
+            self._add_video_row(video, watched)
+
+    def append_videos(self, videos: list[Video], watched: set[str] | None = None) -> None:
+        """Add a page of videos below the current ones, keeping the table intact."""
+        watched = watched or set()
+        self._videos.extend(videos)
+        for video in videos:
+            self._add_video_row(video, watched)
 
     def refresh_watched(self, watched: set[str]) -> None:
         """Re-render watched markers, keeping the cursor position."""

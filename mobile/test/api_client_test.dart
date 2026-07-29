@@ -303,9 +303,33 @@ void main() {
     final api = _api({
       'GET /api/channels/UC1/videos': (200, {'items': null, 'channel': null}),
     });
-    final (videos, title) = await api.channelVideos('UC1');
+    final (videos, title, hasMore) = await api.channelVideos('UC1');
     expect(videos, isEmpty);
     expect(title, '');
+    expect(hasMore, isFalse);
+  });
+
+  test('channelVideos sends offset and parses has_more', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/channels/UC1/videos': (
+        200,
+        {
+          'items': [
+            {'video_id': 'b', 'title': 'older'},
+          ],
+          'channel': {'title': 'Chan'},
+          'has_more': true,
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final (videos, title, hasMore) =
+        await api.channelVideos('UC1', limit: 50, offset: 50);
+    expect(adapter.requests.single.queryParameters['offset'], 50);
+    expect(adapter.requests.single.queryParameters['limit'], 50);
+    expect(videos.single.videoId, 'b');
+    expect(title, 'Chan');
+    expect(hasMore, isTrue);
   });
 
   test('playlistVideos tolerates null items', () async {

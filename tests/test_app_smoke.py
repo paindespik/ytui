@@ -40,6 +40,8 @@ class FakeClient:
         self._playlists: dict[int, tuple[str, list[Video]]] = {}
         self._next_playlist_id = 1
         self.unfollowed: str | None = None
+        self.channel_offsets: list[int] = []
+        self.channel_pages: list[list[Video]] = [[VIDEO]]
 
     async def close(self) -> None:
         pass
@@ -51,8 +53,15 @@ class FakeClient:
         self.last_search_source = source
         return [ODYSEE_VIDEO] if source == "odysee" else [VIDEO]
 
-    async def channel_videos(self, channel_id, platform="youtube", limit=50):
-        return [VIDEO]
+    async def channel_videos(self, channel_id, platform="youtube", limit=50, offset=0):
+        """offset counts items already received, as the real endpoint does."""
+        self.channel_offsets.append(offset)
+        start = 0
+        for index, page in enumerate(self.channel_pages):
+            if start == offset:
+                return page, index + 1 < len(self.channel_pages)
+            start += len(page)
+        return [], False
 
     async def playlist_videos(self, playlist_id, platform="youtube", limit=200):
         return [VIDEO]
@@ -250,6 +259,35 @@ async def test_channel_screen_opens(app):
         from ytui.ui.widgets.video_list import VideoList
 
         assert app.screen.query_one("#channel-list", VideoList).video_at_cursor() == VIDEO
+
+
+async def test_channel_load_more_appends_page_then_stops(app):
+    """'m' appends the next page, keeps the cursor, and stops once exhausted."""
+    older = Video(video_id="older00000", title="An older video", channel_id="UC123")
+    app.client.channel_pages = [[VIDEO], [older]]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(CHANNEL)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = app.screen.query_one("#channel-list", VideoList)
+        assert video_list.row_count == 1
+
+        await pilot.press("m")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert video_list.row_count == 2
+        assert video_list.video_at_cursor() == VIDEO  # cursor kept on the first row
+        assert app.client.channel_offsets == [0, 1]
+
+        await pilot.press("m")  # exhausted: no further request
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.channel_offsets == [0, 1]
+        assert video_list.row_count == 2
 
 
 async def test_playlist_screen_opens(app):

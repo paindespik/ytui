@@ -212,6 +212,19 @@ export function cardMenu(evt, video) {
       },
       "Détails",
     ),
+    // Les cartes « chaîne » ouvrent déjà la chaîne au clic.
+    video.kind !== "channel" && video.channel_id
+      ? el(
+          "button",
+          {
+            onclick: () => {
+              closeMenus();
+              navigate(channelPath(video.channel_id, video.platform, video.channel_title));
+            },
+          },
+          "Ouvrir la chaîne",
+        )
+      : null,
     el(
       "button",
       {

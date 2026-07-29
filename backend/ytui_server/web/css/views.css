@@ -11,6 +11,10 @@
 }
 .search-form .input { flex: 1; min-width: 220px; }
 
+/* ─── Page chaîne ─── */
+
+.load-more { display: block; margin: 20px auto 0; }
+
 /* ─── Playlists locales ─── */
 
 .playlist-thumb {

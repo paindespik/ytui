@@ -62,25 +62,55 @@ export async function render(view, { params, query }) {
     syncFollowBtn();
   });
 
+  // Pagination : `videos` grandit sur place, donc « Tout lire » et les index
+  // des cartes déjà rendues restent valides après chaque page.
+  const PAGE_SIZE = 50;
+  const videos = [];
+  const grid = el("div", { class: "grid" });
+
+  function appendPage(items) {
+    const base = videos.length;
+    videos.push(...items);
+    grid.append(
+      ...items.map((v, i) => videoCard(v, { onOpen: () => playVideos(videos, base + i) })),
+    );
+  }
+
+  const moreBtn = el("button", {
+    class: "btn load-more",
+    text: "Charger plus",
+    onclick: async () => {
+      moreBtn.disabled = true;
+      moreBtn.textContent = "Chargement…";
+      try {
+        const page = await api.channelVideos(id, platform, PAGE_SIZE, videos.length);
+        appendPage(page.items || []);
+        if (!page.has_more) {
+          moreBtn.remove();
+          return;
+        }
+      } catch (err) {
+        errorToast(err);
+      }
+      moreBtn.textContent = "Charger plus";
+      moreBtn.disabled = false;
+    },
+  });
+
   try {
-    const out = await api.channelVideos(id, platform, 50);
+    const out = await api.channelVideos(id, platform, PAGE_SIZE, 0);
     await followedCheck;
     syncFollowBtn();
     if (out.channel && out.channel.title) title.textContent = out.channel.title;
-    const videos = out.items || [];
-    if (!videos.length) {
+    if (!(out.items || []).length) {
       body.replaceChildren(emptyState("Cette chaîne n'a aucune vidéo"));
       return;
     }
     playAllBtn.disabled = false;
     playAllBtn.addEventListener("click", () => playVideos(videos));
-    body.replaceChildren(
-      el(
-        "div",
-        { class: "grid" },
-        videos.map((v, i) => videoCard(v, { onOpen: () => playVideos(videos, i) })),
-      ),
-    );
+    appendPage(out.items);
+    body.replaceChildren(grid);
+    if (out.has_more) body.append(moreBtn);
   } catch (err) {
     errorToast(err);
     body.replaceChildren(emptyState("Impossible de charger la chaîne"));

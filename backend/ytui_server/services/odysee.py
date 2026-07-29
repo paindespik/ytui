@@ -145,18 +145,22 @@ async def search(query: str, limit: int = 20) -> list[Video]:
     return videos
 
 
-async def channel_videos(channel_id: str, limit: int = 50) -> list[Video]:
-    """Latest videos of a channel via claim_search (channel_id = '@name:claim').
+async def channel_videos(channel_id: str, limit: int = 50, offset: int = 0) -> list[Video]:
+    """Videos of a channel via claim_search, newest first (channel_id = '@name:claim').
 
-    claim_search caps page_size at 50; pages are fetched until `limit` is reached.
+    claim_search is page-based (page_size caps at 50) with no cursor, and a few
+    claims are still dropped locally (non-playable ones the filters let through),
+    so raw claim indices drift from video indices. `offset` counts *videos*: pages
+    are walked from the first and only kept videos are counted, which keeps the
+    window exact across 'load more' calls at the cost of re-walking earlier pages.
     """
     claim_id = claim_id_from_video_id(channel_id)
+    page_size = 50
     videos: list[Video] = []
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             page = 1
-            while len(videos) < limit:
-                page_size = min(limit - len(videos), 50)
+            while len(videos) < offset + limit:
                 result = await _proxy_call(
                     client,
                     "claim_search",
@@ -184,7 +188,7 @@ async def channel_videos(channel_id: str, limit: int = 50) -> list[Video]:
     except Exception as exc:
         log.warning("odysee channel listing failed for %s: %s", channel_id, exc)
         raise OdyseeError(f"channel listing failed: {exc}") from exc
-    return videos[:limit]
+    return videos[offset : offset + limit]
 
 
 async def resolve_channel(

@@ -304,6 +304,19 @@ class VideoTile extends ConsumerWidget {
                   _pickPlaylist(context, ref);
                 },
               ),
+              if (video.kind != 'channel' && video.channelId.isNotEmpty)
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.account_circle,
+                  label: 'Open channel',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    context.push(
+                        '/channel/${Uri.encodeComponent(video.channelId)}'
+                        '?platform=${video.platform}'
+                        '&title=${Uri.encodeComponent(video.channelTitle)}');
+                  },
+                ),
               if (video.channelId.isNotEmpty)
                 _sheetTile(
                   sheetContext,
