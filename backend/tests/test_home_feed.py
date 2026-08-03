@@ -108,6 +108,31 @@ async def test_rotated_cookies_are_persisted_privately(cookie_file):
     assert (cookie_file.stat().st_mode & 0o777) == 0o600
 
 
+async def test_a_rewrite_that_would_drop_credentials_is_skipped(cookie_file):
+    """Production hazard: repeated rewrites once ate LOGIN_INFO and SAPISID,
+    leaving a file that loaded fine but only fetched the anonymous home."""
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    before = cookie_file.read_text()
+    jar = YoutubeDLCookieJar(str(cookie_file))
+    jar.load(ignore_discard=True, ignore_expires=True)
+    jar.clear(".youtube.com", "/", "LOGIN_INFO")
+    ytdlp._save_cookies(jar, cookie_file, {"LOGIN_INFO", "SAPISID"})
+    assert cookie_file.read_text() == before
+
+
+async def test_a_complete_jar_is_written(cookie_file):
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    jar = YoutubeDLCookieJar(str(cookie_file))
+    jar.load(ignore_discard=True, ignore_expires=True)
+    cookie_file.write_text("clobbered", encoding="utf-8")
+    ytdlp._save_cookies(jar, cookie_file, {"LOGIN_INFO", "SAPISID"})
+    text = cookie_file.read_text()
+    assert "LOGIN_INFO" in text and "SAPISID" in text
+    assert (cookie_file.stat().st_mode & 0o777) == 0o600
+
+
 async def test_missing_initial_data_is_an_upstream_error(cookie_file):
     with _serve('<html>{"LOGGED_IN":true}</html>'):
         with pytest.raises(ytdlp.UpstreamError, match="ytInitialData"):

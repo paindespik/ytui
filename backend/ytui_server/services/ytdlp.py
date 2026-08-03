@@ -25,6 +25,8 @@ from ..models import StreamInfo, SubtitleTrackOut, Video, VideoDetails
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
 # Only for the signed-in home feed: YouTube tailors that grid to the client.
 _BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0"
+# Cookies without which youtube.com serves the anonymous home (see _save_cookies).
+_SESSION_COOKIES = ("LOGIN_INFO", "SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")
 
 log = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
@@ -591,6 +593,7 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
         jar.load(ignore_discard=True, ignore_expires=True)
     except Exception as exc:
         raise UpstreamError(f"unreadable cookie file: {exc}") from exc
+    credentials = {c.name for c in jar} & set(_SESSION_COOKIES)
 
     try:
         async with httpx.AsyncClient(
@@ -621,7 +624,7 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
 
     # Google rotates session cookies on every request; persisting them is what
     # keeps the pushed session from lapsing.
-    _save_cookies(jar, cookie_file)
+    _save_cookies(jar, cookie_file, credentials)
 
     videos: list[Video] = []
     seen: set[str] = set()
@@ -641,8 +644,17 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
     return videos
 
 
-def _save_cookies(jar, cookie_file: Path) -> None:
-    """Write the (possibly rotated) jar back, keeping it private."""
+def _save_cookies(jar, cookie_file: Path, credentials: set[str]) -> None:
+    """Write the rotated jar back, unless doing so would break the session.
+
+    Seen in production: rewriting on every call eventually dropped LOGIN_INFO
+    and SAPISID, leaving a file that still loaded fine but only ever fetched the
+    anonymous home. Skipping the write keeps the pushed session usable.
+    """
+    missing = credentials - {c.name for c in jar}
+    if missing:
+        log.warning("keeping cookies as pushed: a rewrite would drop %s", ", ".join(sorted(missing)))
+        return
     try:
         jar.save(str(cookie_file), ignore_discard=True, ignore_expires=True)
         cookie_file.chmod(0o600)
