@@ -71,6 +71,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   late final Future<void> _mpvConfigured = _configureMpv();
 
   String? _loadedVideoId;
+
+  /// Snapshot of what [_savePosition] needs, kept usable from [dispose] (where
+  /// `ref.read` is no longer allowed).
+  Video? _playing;
+  YtuiApi? _api;
   bool _retried = false;
   bool _errorCheckPending = false;
   String? _error;
@@ -242,6 +247,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Future<void> _load(Video video,
       {bool resume = true, Duration? startAt}) async {
     _loadedVideoId = video.videoId;
+    // Nothing to flush until the new media is actually open: a heartbeat firing
+    // mid-load would otherwise store the outgoing media's position under this id.
+    _playing = null;
     setState(() {
       _error = null;
       _segments = const [];
@@ -250,6 +258,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _rating = 'none';
     });
     final api = ref.read(apiProvider);
+    _api = api;
     try {
       // Record the watch and fetch resume position + fresh stream URLs.
       unawaited(api.recordWatch(video).catchError((_) {}));
@@ -270,14 +279,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       // The audio backend must be picked before playback starts.
       await _mpvConfigured;
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
-      final media = Media(isSplit ? (streams.videoUrl ?? streams.url) : streams.url,
-          start: Duration(seconds: start.toInt()));
+      final media =
+          Media(isSplit ? (streams.videoUrl ?? streams.url) : streams.url);
       await player.open(media);
+
       if (isSplit) {
         // DASH: separate video/audio URLs — attach the audio as an external track.
         await player.setAudioTrack(AudioTrack.uri(streams.audioUrl!));
       }
       if (mounted) setState(() => _streams = streams);
+      // media_kit's Media(start:) only sets mpv's `start` property, which was
+      // measured to either be ignored (playback restarts at 0) or leave the
+      // player stuck buffering. Seek explicitly once the media is seekable.
+      if (start > 0) {
+        // Stay unflushable until the seek lands, or a heartbeat would store the
+        // pre-seek position (~0) and wipe the resume point.
+        unawaited(_seekToResume(video.videoId, Duration(seconds: start.toInt()))
+            .whenComplete(() {
+          if (_loadedVideoId == video.videoId) _playing = video;
+        }));
+      } else {
+        _playing = video;
+      }
       // Rate persists across open() in media_kit; re-apply defensively.
       if (_rate != 1.0) unawaited(player.setRate(_rate));
       unawaited(_fetchSegments(video));
@@ -285,6 +308,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
+  }
+
+  /// Applies the resume position once the freshly opened media is seekable.
+  /// Gives up (plays from the start) if no duration shows up within 20 s.
+  Future<void> _seekToResume(String videoId, Duration target) async {
+    // player.open() returns before the demuxer reports a duration, and the
+    // duration stream may have emitted already — poll the state instead.
+    for (var i = 0; i < 100; i++) {
+      if (!mounted || _loadedVideoId != videoId) return;
+      if (player.state.duration > Duration.zero) break;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    if (!mounted ||
+        _loadedVideoId != videoId ||
+        player.state.duration <= target) {
+      return;
+    }
+    await player.seek(target);
   }
 
   Future<void> _fetchSegments(Video video) async {
@@ -621,18 +662,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   /// Pushes the playing position for [video] (defaults to the queue's current
   /// one — pass it explicitly when the queue has already moved on).
+  ///
+  /// Reads no provider through [ref]: it also runs from [dispose], where the
+  /// element is already unmounted and `ref.read` throws.
   Future<void> _savePosition([Video? video]) async {
-    final target = video ?? ref.read(queueProvider).current;
-    if (target == null || _isLiveId(target)) return;
+    final target = video ?? _playing;
+    final api = _api;
+    if (target == null || api == null || _isLiveId(target)) return;
     final pos = player.state.position;
     final dur = player.state.duration;
     if (dur.inSeconds == 0) return;
     try {
-      await ref.read(apiProvider).savePosition(
-            target.videoId,
-            pos.inSeconds.toDouble(),
-            duration: dur.inSeconds.toDouble(),
-          );
+      await api.savePosition(
+        target.videoId,
+        pos.inSeconds.toDouble(),
+        duration: dur.inSeconds.toDouble(),
+      );
     } catch (_) {}
   }
 
