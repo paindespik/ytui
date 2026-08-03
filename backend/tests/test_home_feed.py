@@ -57,6 +57,46 @@ def _serve(html: str, status: int = 200):
     return patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get))
 
 
+def _page_with_context(*items: dict) -> str:
+    """A home page carrying the InnerTube context, so pagination kicks in."""
+    data = {"contents": {"richGrid": {"contents": list(items)}}}
+    context = {"client": {"clientName": "WEB", "clientVersion": "2.2026"}}
+    return (
+        '<html><script>var ytcfg = {"LOGGED_IN":true,'
+        f'"INNERTUBE_CONTEXT":{json.dumps(context)}}};</script>'
+        f"<script>var ytInitialData = {json.dumps(data)};</script></html>"
+    )
+
+
+def _continuation(token: str) -> dict:
+    return {
+        "continuationItemRenderer": {
+            "continuationEndpoint": {
+                "clickTrackingParams": "ctp",
+                "continuationCommand": {"token": token},
+            }
+        }
+    }
+
+
+def _serve_pages(pages: list[list[dict]]):
+    """Answer each browse POST with the next page of continuation items."""
+    calls: list[dict] = []
+
+    async def fake_post(url, **kwargs):
+        calls.append(kwargs.get("json") or {})
+        items = pages[len(calls) - 1] if len(calls) <= len(pages) else []
+        body = {
+            "onResponseReceivedActions": [
+                {"appendContinuationItemsAction": {"continuationItems": items}}
+            ]
+        }
+        return httpx.Response(200, json=body, request=httpx.Request("POST", str(url)))
+
+    return patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)), calls
+
+
+
 @pytest.fixture
 def cookie_file(tmp_path):
     path = tmp_path / "youtube_cookies.txt"
@@ -150,3 +190,43 @@ async def test_unreadable_cookie_file_is_an_upstream_error(tmp_path):
     junk.write_text("not a cookie jar", encoding="utf-8")
     with pytest.raises(ytdlp.UpstreamError):
         await ytdlp.home_recommendations(junk)
+
+
+async def test_pagination_follows_the_home_continuations(cookie_file):
+    """Scrolling the real home loads more; so must we."""
+    html = _page_with_context(_lockup("vid000000001", "First"), _continuation("t1"))
+    pages = [
+        [_lockup("vid000000002", "Second"), _continuation("t2")],
+        [_lockup("vid000000003", "Third"), _continuation("t3")],
+    ]
+    post, calls = _serve_pages(pages)
+    with _serve(html), post:
+        videos = await ytdlp.home_recommendations(cookie_file, limit=10)
+    assert [v.video_id for v in videos] == [
+        "vid000000001",
+        "vid000000002",
+        "vid000000003",
+    ]
+    # First call re-requests the grid; the next ones carry the page tokens.
+    assert calls[0]["browseId"] == "FEwhat_to_watch"
+    assert [c.get("continuation") for c in calls[1:]] == ["t2", "t3"]
+
+
+async def test_pagination_stops_at_the_limit(cookie_file):
+    html = _page_with_context(_lockup("vid000000001", "First"), _continuation("t1"))
+    post, calls = _serve_pages([[_lockup("vid000000002", "Second"), _continuation("t2")]])
+    with _serve(html), post:
+        videos = await ytdlp.home_recommendations(cookie_file, limit=2)
+    assert len(videos) == 2
+    assert len(calls) == 1
+
+
+async def test_pagination_failure_keeps_the_first_page(cookie_file):
+    """A rejected continuation must not lose the videos already scraped."""
+    html = _page_with_context(_lockup("vid000000001", "First"), _continuation("t1"))
+    failing = patch.object(
+        httpx.AsyncClient, "post", AsyncMock(side_effect=httpx.ConnectError("nope"))
+    )
+    with _serve(html), failing:
+        videos = await ytdlp.home_recommendations(cookie_file, limit=10)
+    assert [v.video_id for v in videos] == ["vid000000001"]

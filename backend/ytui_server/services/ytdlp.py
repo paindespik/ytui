@@ -7,6 +7,7 @@ global semaphore to bound server load.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -27,6 +28,8 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
 _BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0"
 # Cookies without which youtube.com serves the anonymous home (see _save_cookies).
 _SESSION_COOKIES = ("LOGIN_INFO", "SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")
+# Home-feed pagination: each InnerTube page carries ~24 videos.
+_HOME_MAX_PAGES = 12
 
 log = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
@@ -583,6 +586,10 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
     radio playlists ("My Mix") in a different order, which made the tab look
     nothing like the real home.
 
+    The HTML grid only carries ~26 videos; past that the browser scrolls by
+    calling InnerTube. We do the same (see _home_continuations), which is what
+    lets `limit` go well beyond the first screenful.
+
     Returns [] when the cookies no longer authenticate, so callers can warn and
     fall back instead of serving an anonymous feed as if it were personal.
     """
@@ -595,6 +602,8 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
         raise UpstreamError(f"unreadable cookie file: {exc}") from exc
     credentials = {c.name for c in jar} & set(_SESSION_COOKIES)
 
+    videos: list[Video] = []
+    seen: set[str] = set()
     try:
         async with httpx.AsyncClient(
             timeout=15.0,
@@ -609,13 +618,19 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
                 raise UpstreamError("YouTube rate-limited the home feed (429)")
             resp.raise_for_status()
             html = resp.text
-        if '"LOGGED_IN":true' not in html:
-            log.warning("home feed served anonymously: the cookies no longer authenticate")
-            return []
-        match = _YT_INITIAL_DATA_RE.search(html)
-        if not match:
-            raise UpstreamError("ytInitialData not found")
-        data = json.loads(match.group(1))
+            if '"LOGGED_IN":true' not in html:
+                log.warning("home feed served anonymously: the cookies no longer authenticate")
+                return []
+            match = _YT_INITIAL_DATA_RE.search(html)
+            if not match:
+                raise UpstreamError("ytInitialData not found")
+            data = json.loads(match.group(1))
+
+            # _walk_lockups keeps only LOCKUP_CONTENT_TYPE_VIDEO, which drops
+            # the ad slots, the Shorts shelf and the radio playlists.
+            _collect_lockups(data, videos, seen, limit)
+            if len(videos) < limit:
+                await _home_continuations(http_client, jar, html, videos, seen, limit)
     except UpstreamError:
         raise
     except Exception as exc:
@@ -625,12 +640,16 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
     # Google rotates session cookies on every request; persisting them is what
     # keeps the pushed session from lapsing.
     _save_cookies(jar, cookie_file, credentials)
+    return videos
 
-    videos: list[Video] = []
-    seen: set[str] = set()
-    # _walk_lockups keeps only LOCKUP_CONTENT_TYPE_VIDEO, which drops the ad
-    # slots, the Shorts shelf and the radio playlists of the real grid.
-    for lockup in _walk_lockups(data):
+
+def _collect_lockups(
+    node: object, videos: list[Video], seen: set[str], limit: int
+) -> None:
+    """Append every new video lockup found in `node`, up to `limit` in total."""
+    for lockup in _walk_lockups(node):
+        if len(videos) >= limit:
+            return
         try:
             video = _lockup_to_video(lockup)
         except Exception:
@@ -639,9 +658,115 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
             continue
         seen.add(video.video_id)
         videos.append(video)
-        if len(videos) >= limit:
-            break
-    return videos
+
+
+def _sapisid_hash(jar, origin: str = "https://www.youtube.com") -> str | None:
+    """The Authorization header the web client signs InnerTube calls with."""
+    values = {c.name: c.value for c in jar}
+    sapisid = values.get("SAPISID") or values.get("__Secure-3PAPISID")
+    if not sapisid:
+        return None
+    now = int(time.time())
+    digest = hashlib.sha1(f"{now} {sapisid} {origin}".encode()).hexdigest()
+    return f"SAPISIDHASH {now}_{digest}"
+
+
+def _json_object_after(text: str, marker: str) -> dict:
+    """The brace-balanced JSON object that follows `marker` in `text`."""
+    start = text.index(marker) + len(marker)
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start : i + 1])
+    raise ValueError(f"unbalanced JSON after {marker}")
+
+
+async def _home_continuations(
+    http_client: httpx.AsyncClient,
+    jar,
+    html: str,
+    videos: list[Video],
+    seen: set[str],
+    limit: int,
+) -> None:
+    """Page the home grid through InnerTube, the way scrolling does.
+
+    The continuation token embedded in the HTML is rejected ("Votre flux
+    d'accueil a expiré"), so the grid is re-requested through browse
+    FEwhat_to_watch — its tokens do work — and followed page by page. Failures
+    are swallowed: the HTML page already gave us a usable feed.
+    """
+    authorization = _sapisid_hash(jar)
+    if authorization is None:
+        return
+    try:
+        context = _json_object_after(html, '"INNERTUBE_CONTEXT":')
+    except (ValueError, KeyError):
+        log.warning("home feed: INNERTUBE_CONTEXT not found, no pagination")
+        return
+    version = context.get("client", {}).get("clientVersion", "")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Youtube-Client-Name": "1",
+        "X-Youtube-Client-Version": version,
+        "Authorization": authorization,
+        "X-Origin": "https://www.youtube.com",
+        "X-Goog-AuthUser": "0",
+        "Origin": "https://www.youtube.com",
+        "Referer": "https://www.youtube.com/",
+    }
+    url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
+    body: dict = {"context": context, "browseId": "FEwhat_to_watch"}
+    for _ in range(_HOME_MAX_PAGES):
+        try:
+            resp = await http_client.post(url, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            log.warning("home feed pagination stopped: %s", exc)
+            return
+        items: list = []
+        for action in data.get("onResponseReceivedActions", []):
+            items += action.get("appendContinuationItemsAction", {}).get(
+                "continuationItems", []
+            )
+        scope = items if items else data
+        before = len(videos)
+        _collect_lockups(scope, videos, seen, limit)
+        endpoints = [
+            renderer["continuationEndpoint"]
+            for renderer in _walk_key(scope, "continuationItemRenderer")
+            if "continuationEndpoint" in renderer
+        ]
+        if len(videos) >= limit or not endpoints or (items and len(videos) == before):
+            return
+        endpoint = endpoints[0]
+        body = {
+            "context": dict(
+                context,
+                clickTracking={"clickTrackingParams": endpoint.get("clickTrackingParams")},
+            ),
+            "continuation": endpoint["continuationCommand"]["token"],
+        }
+
+
+def _walk_key(node: object, key: str) -> list[dict]:
+    """Every value stored under `key` anywhere in `node`."""
+    found: list[dict] = []
+    if isinstance(node, dict):
+        value = node.get(key)
+        if isinstance(value, dict):
+            found.append(value)
+        for child in node.values():
+            found.extend(_walk_key(child, key))
+    elif isinstance(node, list):
+        for child in node:
+            found.extend(_walk_key(child, key))
+    return found
 
 
 def _save_cookies(jar, cookie_file: Path, credentials: set[str]) -> None:

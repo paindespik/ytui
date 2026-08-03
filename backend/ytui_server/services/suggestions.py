@@ -19,7 +19,9 @@ from .feed import FeedResult
 
 SEED_COUNT = 8
 RELATED_PER_SEED = 20
-MAX_SUGGESTIONS = 50
+# The home grid pages through InnerTube, so this is a real target, not the ~26
+# videos of the first screenful.
+MAX_SUGGESTIONS = 120
 CACHE_KEY = "suggestions:home"
 
 EMPTY_HISTORY_WARNING = "No watch history yet: watch a few videos to get suggestions"
