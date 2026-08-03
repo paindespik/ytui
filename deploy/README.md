@@ -89,8 +89,12 @@ autres copies.
 D'où un navigateur dédié **sur le serveur**, qui ne sert qu'à détenir la session
 et à la renouveler, plus un timer qui recopie le résultat dans le backend :
 
-- `ytui-browser.service` — Firefox headless permanent sur le profil
-  `~/ytui-cookies/profile`, ouvert sur youtube.com.
+- `ytui-browser.service` — Firefox permanent sur le profil
+  `~/ytui-cookies/profile`, ouvert sur youtube.com, sous **Xvfb** et non
+  `--headless` : mesuré, un chargement headless revient déconnecté et YouTube
+  efface alors les cookies `.youtube.com`, ce qui détruit la session. Le service
+  ne redémarre que sur échec, jamais sur minuterie — chaque nouveau chargement
+  est une occasion pour YouTube de répondre « déconnecté ».
 - `ytui-cookies.timer` — toutes les 10 min, `deploy/refresh_cookies.py` lit les
   cookies youtube.com du profil et les POSTe sur `/api/auth/youtube/cookies`.
   Le backend valide et sonde le candidat avant de remplacer la session en place :
@@ -102,8 +106,10 @@ avec serveur X, `X11Forwarding yes` étant activé côté sshd :
 ```sh
 ssh serv 'firefox --headless --no-remote --CreateProfile "ytui $HOME/ytui-cookies/profile"'
 ssh -X serv 'firefox --no-remote --profile ~/ytui-cookies/profile \
-  "https://accounts.google.com/ServiceLogin?service=youtube"'
-# se connecter dans la fenêtre, puis la fermer
+  "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F"'
+# se connecter, LAISSER la page atterrir sur youtube.com (c'est ce chargement qui
+# émet LOGIN_INFO), vérifier que le profil a bien la session, puis fermer.
+# Un `kill -9` ferait perdre les cookies du WAL : fermer la fenêtre normalement.
 cp deploy/ytui-browser.service deploy/ytui-cookies.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now ytui-browser.service ytui-cookies.timer
