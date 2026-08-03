@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument(
         "--from-browser",
         metavar="BROWSER[:PROFILE]",
-        help="Read cookies from a local browser (firefox, chromium, chrome, brave, edge, vivaldi…)",
+        help="Read cookies from a local browser (firefox, zen, chromium, chrome, brave, edge…)",
     )
     source.add_argument(
         "--file", metavar="PATH", help="Netscape cookies.txt exported from the browser"

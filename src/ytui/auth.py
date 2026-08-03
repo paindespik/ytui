@@ -68,6 +68,52 @@ def _save_token(path: Path, token_json: str) -> None:
     path.chmod(0o600)
 
 
+# Firefox forks yt-dlp does not know by name: same profile format, different
+# root. Their profile lives in a directory yt-dlp accepts as a `profile` path.
+_FIREFOX_FORKS = {"zen": Path("~/.zen")}
+
+
+def _fork_profile(root: Path, wanted: str | None) -> str:
+    """Resolve a Firefox-fork profile directory from its profiles.ini.
+
+    Without `wanted`, prefer the profile the browser itself last installed to
+    ([InstallXXX] Default=), because a fork's [Profile] Default=1 often points
+    at an unused starter profile.
+    """
+    import configparser
+
+    root = root.expanduser()
+    ini = root / "profiles.ini"
+    if not ini.exists():
+        raise AuthError(f"No profiles.ini in {root}: is the browser installed?")
+    parser = configparser.ConfigParser(strict=False)
+    parser.read(ini, encoding="utf-8")
+
+    profiles: dict[str, str] = {}  # name -> relative path
+    fallback: str | None = None
+    for section in parser.sections():
+        if section.startswith("Profile"):
+            path = parser[section].get("Path")
+            if not path:
+                continue
+            profiles[parser[section].get("Name", path)] = path
+            if parser[section].get("Default") == "1":
+                fallback = path
+        elif section.startswith("Install"):
+            fallback = parser[section].get("Default") or fallback
+
+    if wanted:
+        path = profiles.get(wanted, wanted if wanted in profiles.values() else None)
+        if path is None:
+            known = ", ".join(sorted(profiles)) or "none"
+            raise AuthError(f"Unknown profile {wanted!r} in {ini} (available: {known})")
+    elif fallback:
+        path = fallback
+    else:
+        raise AuthError(f"No default profile in {ini}; pass one explicitly")
+    return str(root / path)
+
+
 def export_browser_cookies(browser: str, profile: str | None = None) -> str:
     """Netscape cookie text holding only the youtube.com cookies of `browser`.
 
@@ -76,10 +122,16 @@ def export_browser_cookies(browser: str, profile: str | None = None) -> str:
     """
     from yt_dlp.cookies import YoutubeDLCookieJar, extract_cookies_from_browser
 
+    label = browser
+    fork_root = _FIREFOX_FORKS.get(browser.lower())
+    if fork_root is not None:
+        profile = _fork_profile(fork_root, profile)
+        browser = "firefox"
+
     try:
         source = extract_cookies_from_browser(browser, profile)
     except Exception as exc:
-        raise AuthError(f"Could not read {browser} cookies: {exc}") from exc
+        raise AuthError(f"Could not read {label} cookies: {exc}") from exc
 
     jar = YoutubeDLCookieJar()
     for cookie in source:
@@ -87,7 +139,7 @@ def export_browser_cookies(browser: str, profile: str | None = None) -> str:
             jar.set_cookie(cookie)
     if not any(True for _ in jar):
         raise AuthError(
-            f"No youtube.com cookies in the {browser} profile (sign in to youtube.com first)"
+            f"No youtube.com cookies in the {label} profile (sign in to youtube.com first)"
         )
 
     fd, name = tempfile.mkstemp(suffix=".txt")
@@ -97,6 +149,6 @@ def export_browser_cookies(browser: str, profile: str | None = None) -> str:
         jar.save(str(tmp), ignore_discard=True, ignore_expires=True)
         return tmp.read_text(encoding="utf-8")
     except Exception as exc:
-        raise AuthError(f"Could not read {browser} cookies: {exc}") from exc
+        raise AuthError(f"Could not read {label} cookies: {exc}") from exc
     finally:
         tmp.unlink(missing_ok=True)
