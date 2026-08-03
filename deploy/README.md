@@ -75,3 +75,44 @@ loginctl enable-linger $USER   # obligatoire : timers user sans session ouverte
 
 Backup manuel : `bash deploy/backup.sh` (crée `deploy/data/backups/meta-<date>.sqlite`).
 Vérifier : `systemctl --user list-timers`.
+
+## Session YouTube (suggestions personnalisées)
+
+`GET /api/suggestions` sert la page d'accueil YouTube du compte quand des
+cookies de session sont présents. Ces cookies ne peuvent pas être entretenus par
+le backend : YouTube lie la session à un cookie `__Secure-1PSIDTS` que seul son
+détenteur peut renouveler — youtube.com ne le renvoie jamais (il ne rafraîchit
+que `SIDCC`/`__Secure-*PSIDCC`) et l'endpoint de rotation de Google refuse les
+appels tiers. Pire, un second détenteur qui rotate le jeton périme toutes les
+autres copies.
+
+D'où un navigateur dédié **sur le serveur**, qui ne sert qu'à détenir la session
+et à la renouveler, plus un timer qui recopie le résultat dans le backend :
+
+- `ytui-browser.service` — Firefox headless permanent sur le profil
+  `~/ytui-cookies/profile`, ouvert sur youtube.com.
+- `ytui-cookies.timer` — toutes les 10 min, `deploy/refresh_cookies.py` lit les
+  cookies youtube.com du profil et les POSTe sur `/api/auth/youtube/cookies`.
+  Le backend valide et sonde le candidat avant de remplacer la session en place :
+  un refus laisse intacte celle qui fonctionne.
+
+Connexion initiale (une seule fois, le serveur n'a pas d'écran) — depuis un poste
+avec serveur X, `X11Forwarding yes` étant activé côté sshd :
+
+```sh
+ssh serv 'firefox --headless --no-remote --CreateProfile "ytui $HOME/ytui-cookies/profile"'
+ssh -X serv 'firefox --no-remote --profile ~/ytui-cookies/profile \
+  "https://accounts.google.com/ServiceLogin?service=youtube"'
+# se connecter dans la fenêtre, puis la fermer
+cp deploy/ytui-browser.service deploy/ytui-cookies.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ytui-browser.service ytui-cookies.timer
+```
+
+**Ne jamais naviguer ailleurs avec ce compte dans ce profil** : le jeton serait
+volé par l'autre navigateur. Un compte Google accepte plusieurs sessions
+simultanées, donc le navigateur habituel n'est pas affecté.
+
+Diagnostic : `journalctl --user -u ytui-cookies -n 20`. Si l'onglet Suggestions
+revient aux vidéos liées à l'historique, le champ `warnings` de `/api/suggestions`
+le dit explicitement.

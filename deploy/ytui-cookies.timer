@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the ytui backend's YouTube session before it goes stale
+
+[Timer]
+# YouTube stops honouring a __Secure-1PSIDTS it has not reissued for roughly an
+# hour, and the browser reissues it on its own schedule; copying every 10 min
+# keeps the backend's copy far inside that window.
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

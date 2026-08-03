@@ -1,0 +1,8 @@
+[Unit]
+Description=Hand the dedicated browser's YouTube session to the ytui backend
+After=ytui-browser.service
+Wants=ytui-browser.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 %h/ytui-deploy/deploy/refresh_cookies.py

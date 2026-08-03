@@ -1,0 +1,21 @@
+[Unit]
+Description=ytui dedicated headless browser holding the YouTube session
+# Its only job is to be a signed-in browser: YouTube renews the session's
+# __Secure-1PSIDTS cookie for whoever holds it, and nothing else can. Never
+# browse in this profile from elsewhere — a second holder steals the token and
+# this copy goes stale.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=MOZ_HEADLESS=1
+# --no-remote keeps this instance from being hijacked by another firefox call.
+ExecStart=/usr/bin/firefox --headless --no-remote --profile %h/ytui-cookies/profile https://www.youtube.com/
+Restart=always
+RestartSec=30
+# Firefox leaks over days; a nightly restart also forces a fresh sign-in check.
+RuntimeMaxSec=24h
+
+[Install]
+WantedBy=default.target
