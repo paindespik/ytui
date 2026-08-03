@@ -19,6 +19,7 @@ import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
 import '../theme.dart';
+import '../widgets/comment_card.dart';
 import '../widgets/remote_controls.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
@@ -26,6 +27,10 @@ import '../widgets/video_tile.dart';
 /// Granularity of the audio-delay control: fine enough to chase a projector's
 /// speaker latency, coarse enough to reach ±1 s with a remote.
 const _kAudioDelayStepMs = 25;
+
+/// Shown whenever an account action comes back as 409: the server holds no
+/// YouTube OAuth token (pushed from the desktop with `ytui auth push`).
+const _kNotConnected = 'Compte YouTube non connecté (ytui auth push)';
 
 /// Maps raw playback errors to user-friendly French messages.
 String _friendlyError(String raw) {
@@ -81,6 +86,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<PlayerLog>? _logSub;
   bool _immersive = false;
+
+  /// The account's rating for the playing video ("like"/"dislike"/"none") and
+  /// whether the comments panel replaced the queue/suggestions list. Both
+  /// survive nothing but the current screen; playback is never touched by them.
+  String _rating = 'none';
+  bool _ratingBusy = false;
+  bool _showComments = false;
 
   /// Remote/TV state: the controls overlay is hidden until a key is pressed,
   /// then auto-hides again while playing. [RemotePlayerSurface] keeps its own
@@ -235,6 +247,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _segments = const [];
       _streams = null;
       _subUrl = null;
+      _rating = 'none';
     });
     final api = ref.read(apiProvider);
     try {
@@ -268,6 +281,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       // Rate persists across open() in media_kit; re-apply defensively.
       if (_rate != 1.0) unawaited(player.setRate(_rate));
       unawaited(_fetchSegments(video));
+      unawaited(_fetchRating(video));
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
@@ -281,6 +295,48 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         setState(() => _segments = segs);
       }
     } catch (_) {}
+  }
+
+  /// Reads the account's rating so the like button starts in the right state.
+  /// A missing token (409) just leaves the button on "not liked".
+  Future<void> _fetchRating(Video video) async {
+    if (video.platform != 'youtube') return;
+    try {
+      final rating = await ref.read(apiProvider).videoRating(video.videoId);
+      if (mounted && _loadedVideoId == video.videoId) {
+        setState(() => _rating = rating);
+      }
+    } on ApiException {
+      // No account or no network: leave the button neutral.
+    }
+  }
+
+  /// Likes the playing video, or drops the like when it is already there.
+  Future<void> _toggleLike(Video video) async {
+    final next = _rating == 'like' ? 'none' : 'like';
+    setState(() => _ratingBusy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(apiProvider).likeVideo(
+            video.videoId,
+            platform: video.platform,
+            rating: next,
+          );
+      if (!mounted) return;
+      setState(() {
+        _rating = next;
+        _ratingBusy = false;
+      });
+      messenger.showSnackBar(SnackBar(
+        content: Text(next == 'like' ? 'Vidéo aimée 👍' : 'Like retiré'),
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _ratingBusy = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 409 ? _kNotConnected : e.toString()),
+      ));
+    }
   }
 
   void _maybeSkipSponsor(Duration position) {
@@ -684,6 +740,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final chatEnabled =
         (video.platform == 'youtube' || video.platform == 'twitch') &&
             (_isLiveId(video) || inLives);
+    // Comments only exist where the backend can list them, and a live shows its
+    // chat in that slot instead.
+    final commentsAvailable = !chatEnabled &&
+        (video.platform == 'youtube' || video.platform == 'odysee');
 
     return Scaffold(
       appBar: AppBar(
@@ -786,6 +846,32 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                             ],
                           ),
                         ),
+                        if (video.platform == 'youtube')
+                          IconButton(
+                            icon: Icon(
+                              _rating == 'like'
+                                  ? Icons.thumb_up_rounded
+                                  : Icons.thumb_up_outlined,
+                              color: _rating == 'like' ? colors.primary : null,
+                            ),
+                            tooltip: _rating == 'like' ? 'Retirer le like' : 'J\'aime',
+                            onPressed:
+                                _ratingBusy ? null : () => _toggleLike(video),
+                          ),
+                        if (commentsAvailable)
+                          IconButton(
+                            icon: Icon(
+                              _showComments
+                                  ? Icons.comment_rounded
+                                  : Icons.comment_outlined,
+                              color: _showComments ? colors.primary : null,
+                            ),
+                            tooltip: _showComments
+                                ? 'Revenir à la file d\'attente'
+                                : 'Commentaires',
+                            onPressed: () =>
+                                setState(() => _showComments = !_showComments),
+                          ),
                       ],
                     ),
                   ),
@@ -887,26 +973,35 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     ),
                   ),
 
-                  // Queue + suggestions, or the live chat panel for lives
+                  // Queue + suggestions, replaced by the comments panel on
+                  // demand (playback is untouched) or by the chat on a live.
                   Expanded(
                     child: chatEnabled
                         ? _LiveChatSection(
                             video: video,
                             key: ValueKey(video.videoId),
                           )
-                        : ListView(
-                            padding: const EdgeInsets.only(top: 8, bottom: 16),
-                            children: [
-                              if (queue.index + 1 < queue.items.length) ...[
-                                _sectionHeader(theme, colors, 'File d\'attente'),
-                                for (var i = queue.index + 1;
-                                    i < queue.items.length;
-                                    i++)
-                                  _queueTile(theme, colors, queue.items[i], i),
-                              ],
-                              _SuggestionsSection(video: video),
-                            ],
-                          ),
+                        : _showComments && commentsAvailable
+                            ? _CommentsSection(
+                                video: video,
+                                key: ValueKey('comments:${video.videoId}'),
+                              )
+                            : ListView(
+                                padding:
+                                    const EdgeInsets.only(top: 8, bottom: 16),
+                                children: [
+                                  if (queue.index + 1 < queue.items.length) ...[
+                                    _sectionHeader(
+                                        theme, colors, 'File d\'attente'),
+                                    for (var i = queue.index + 1;
+                                        i < queue.items.length;
+                                        i++)
+                                      _queueTile(
+                                          theme, colors, queue.items[i], i),
+                                  ],
+                                  _SuggestionsSection(video: video),
+                                ],
+                              ),
                   ),
                 ],
               ),
@@ -1245,6 +1340,211 @@ class _LiveChatSectionState extends ConsumerState<_LiveChatSection> {
                   },
                 ),
         ),
+      ],
+    );
+  }
+}
+
+/// Comments panel shown in place of the queue/suggestions list while the video
+/// keeps playing. Pages through the backend cursor and, on YouTube, posts a
+/// comment from the composer at the bottom.
+class _CommentsSection extends ConsumerStatefulWidget {
+  final Video video;
+
+  const _CommentsSection({required this.video, super.key});
+
+  @override
+  ConsumerState<_CommentsSection> createState() => _CommentsSectionState();
+}
+
+class _CommentsSectionState extends ConsumerState<_CommentsSection> {
+  final List<Comment> _items = [];
+  final TextEditingController _composer = TextEditingController();
+  String? _cursor;
+  int _total = 0;
+  bool _loading = true;
+  bool _exhausted = false;
+  bool _disabled = false;
+  bool _posting = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMore();
+  }
+
+  @override
+  void dispose() {
+    _composer.dispose();
+    super.dispose();
+  }
+
+  bool get _canPost => widget.video.platform == 'youtube' && !_disabled;
+
+  Future<void> _loadMore() async {
+    if (_exhausted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final page = await ref.read(apiProvider).videoComments(
+            widget.video.videoId,
+            platform: widget.video.platform,
+            cursor: _cursor,
+            pageSize: 20,
+          );
+      if (!mounted) return;
+      setState(() {
+        _items.addAll(page.items);
+        // Only the first page carries the grand total; later pages report 0.
+        if (page.total > 0) _total = page.total;
+        _disabled = page.disabled;
+        _cursor = page.nextCursor;
+        _exhausted = page.nextCursor == null;
+        _loading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _exhausted = true;
+        _error = e.statusCode == 409 ? _kNotConnected : e.detail;
+      });
+    }
+  }
+
+  Future<void> _post() async {
+    final text = _composer.text.trim();
+    if (text.isEmpty || _posting) return;
+    setState(() => _posting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final posted = await ref.read(apiProvider).commentVideo(
+            widget.video.videoId,
+            text,
+            platform: widget.video.platform,
+          );
+      if (!mounted) return;
+      _composer.clear();
+      setState(() {
+        // Relevance ordering would bury a brand-new comment: show it on top.
+        _items.insert(0, posted);
+        if (_total > 0) _total += 1;
+        _posting = false;
+      });
+      messenger.showSnackBar(const SnackBar(content: Text('Commentaire publié')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _posting = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 409 ? _kNotConnected : e.toString()),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final title = _disabled
+        ? 'Commentaires désactivés'
+        : _total > 0
+            ? 'Commentaires ($_total)'
+            : 'Commentaires';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(kGutter, 12, kGutter, 6),
+          child: Text(
+            title,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: colors.primary,
+            ),
+          ),
+        ),
+        Expanded(
+          child: NotificationListener<ScrollUpdateNotification>(
+            // Reaching the end pulls the next page in, so the footer button is
+            // only a fallback.
+            onNotification: (notification) {
+              final m = notification.metrics;
+              if (!_loading &&
+                  !_exhausted &&
+                  m.axis == Axis.vertical &&
+                  m.pixels > m.maxScrollExtent - 400) {
+                _loadMore();
+              }
+              return false;
+            },
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, 12),
+              children: [
+                if (_error != null)
+                  Text(
+                    _error!,
+                    style: theme.textTheme.bodySmall?.copyWith(color: colors.error),
+                  ),
+                for (final comment in _items) CommentCard(comment: comment),
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  )
+                else if (_items.isEmpty && _error == null)
+                  Text(
+                    _disabled
+                        ? 'L\'auteur a désactivé les commentaires.'
+                        : 'Aucun commentaire.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  )
+                else if (!_exhausted)
+                  TextButton(
+                    onPressed: _loadMore,
+                    child: const Text('Charger plus de commentaires'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        if (_canPost)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(kGutter, 0, kGutter, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _composer,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _post(),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      hintText: 'Ajouter un commentaire…',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  icon: _posting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_rounded),
+                  tooltip: 'Publier',
+                  onPressed: _posting ? null : _post,
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }

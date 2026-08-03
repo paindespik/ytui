@@ -328,13 +328,26 @@ class CommentsPage {
   final List<Comment> items;
   final int total;
 
-  const CommentsPage({required this.items, this.total = 0});
+  /// Opaque continuation to pass back as `cursor`; null on the last page.
+  final String? nextCursor;
+
+  /// Comments turned off by the uploader: an empty list is the normal answer.
+  final bool disabled;
+
+  const CommentsPage({
+    required this.items,
+    this.total = 0,
+    this.nextCursor,
+    this.disabled = false,
+  });
 
   factory CommentsPage.fromJson(Map<String, dynamic> json) => CommentsPage(
         items: (json['items'] as List<dynamic>)
             .map((e) => Comment.fromJson(e as Map<String, dynamic>))
             .toList(),
         total: json['total'] as int? ?? 0,
+        nextCursor: json['next_cursor'] as String?,
+        disabled: json['disabled'] as bool? ?? false,
       );
 }
 

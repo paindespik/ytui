@@ -161,24 +161,40 @@ class YtuiApi {
         .toList();
   }
 
-  Future<void> likeVideo(String videoId, {String platform = 'youtube'}) =>
+  /// Likes the video, or drops an existing like with `rating: 'none'`.
+  Future<void> likeVideo(String videoId,
+          {String platform = 'youtube', String rating = 'like'}) =>
       _request('POST', '/api/videos/${_enc(videoId)}/like',
-          query: {'platform': platform});
+          query: {'platform': platform, 'rating': rating});
 
-  Future<void> commentVideo(String videoId, String text,
-          {String platform = 'youtube'}) =>
-      _request('POST', '/api/videos/${_enc(videoId)}/comment',
-          query: {'platform': platform}, data: {'text': text});
+  /// The signed-in account's rating: 'like', 'dislike' or 'none'.
+  Future<String> videoRating(String videoId, {String platform = 'youtube'}) async {
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}/rating',
+        query: {'platform': platform});
+    return (r.data as Map<String, dynamic>)['rating'] as String? ?? 'none';
+  }
 
-  /// Read-only comment listing (Odysee only server-side).
+  /// Posts a top-level comment and returns it as stored server-side.
+  Future<Comment> commentVideo(String videoId, String text,
+      {String platform = 'youtube'}) async {
+    final r = await _request('POST', '/api/videos/${_enc(videoId)}/comment',
+        query: {'platform': platform}, data: {'text': text});
+    return Comment.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// One page of top-level comments (YouTube and Odysee). Pass the previous
+  /// page's [CommentsPage.nextCursor] back as [cursor] for the next one.
   Future<CommentsPage> videoComments(
     String videoId, {
-    String platform = 'odysee',
-    int page = 1,
+    String platform = 'youtube',
+    String? cursor,
     int pageSize = 50,
   }) async {
-    final r = await _request('GET', '/api/videos/${_enc(videoId)}/comments',
-        query: {'platform': platform, 'page': page, 'page_size': pageSize});
+    final r = await _request('GET', '/api/videos/${_enc(videoId)}/comments', query: {
+      'platform': platform,
+      'page_size': pageSize,
+      if (cursor != null) 'cursor': cursor,
+    });
     return CommentsPage.fromJson(r.data as Map<String, dynamic>);
   }
 

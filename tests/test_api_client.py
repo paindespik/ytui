@@ -110,15 +110,17 @@ async def test_video_comments_encodes_video_id(client):
                     }
                 ],
                 "total": 1,
+                "disabled": False,
             },
         )
     )
-    comments, total = await client.video_comments("ma-video:abc123", platform="odysee")
+    page = await client.video_comments("ma-video:abc123", platform="odysee")
     assert respx.calls.last.request.url.params["platform"] == "odysee"
-    assert total == 1
-    assert comments[0].comment_id == "c1"
-    assert comments[0].channel_name == "@bob"
-    assert comments[0].likes == 5
+    assert page.total == 1
+    assert page.disabled is False
+    assert page.items[0].comment_id == "c1"
+    assert page.items[0].channel_name == "@bob"
+    assert page.items[0].likes == 5
 
 
 @respx.mock

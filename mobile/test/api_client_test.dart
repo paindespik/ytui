@@ -129,15 +129,56 @@ void main() {
             {'comment_id': 'c1', 'text': 'hello', 'channel_name': '@bob', 'likes': 3},
           ],
           'total': 1,
+          'next_cursor': '2',
         }
       ),
     });
     final api = _api({}, adapter: adapter);
-    final page = await api.videoComments('ma-video:abc123');
+    final page = await api.videoComments('ma-video:abc123', platform: 'odysee');
     expect(adapter.requests.single.queryParameters['platform'], 'odysee');
     expect(page.total, 1);
+    expect(page.nextCursor, '2');
+    expect(page.disabled, isFalse);
     expect(page.items.single.text, 'hello');
     expect(page.items.single.likes, 3);
+  });
+
+  test('videoComments forwards the cursor and reports disabled comments', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/videos/abc/comments': (
+        200,
+        {'items': [], 'total': 0, 'next_cursor': null, 'disabled': true}
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final page = await api.videoComments('abc', cursor: 'TOKEN2', pageSize: 20);
+    final query = adapter.requests.single.queryParameters;
+    expect(query['platform'], 'youtube');
+    expect(query['cursor'], 'TOKEN2');
+    expect(query['page_size'], 20);
+    expect(page.disabled, isTrue);
+    expect(page.nextCursor, isNull);
+  });
+
+  test('videoRating reads the account rating', () async {
+    final api = _api({
+      'GET /api/videos/abc/rating': (200, {'rating': 'like'}),
+    });
+    expect(await api.videoRating('abc'), 'like');
+  });
+
+  test('commentVideo returns the created comment', () async {
+    final adapter = _FakeAdapter({
+      'POST /api/videos/abc/comment': (
+        200,
+        {'comment_id': 'c9', 'text': 'nice', 'channel_name': '@me', 'timestamp': 1700000000}
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final posted = await api.commentVideo('abc', 'nice');
+    expect(posted.commentId, 'c9');
+    expect(posted.text, 'nice');
+    expect(adapter.requests.single.data, {'text': 'nice'});
   });
 
   test('videoStreams encodes odysee ids in the path', () async {

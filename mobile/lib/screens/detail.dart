@@ -6,12 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/client.dart';
-import '../api/models.dart';
 import '../format.dart';
 import '../state/providers.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/comment_card.dart';
 import '../widgets/responsive.dart';
+
+/// Shown when an account action returns 409: no OAuth token on the server.
+const kNotAuthenticated =
+    'Not authenticated — run `ytui auth push` from the desktop';
 
 class DetailScreen extends ConsumerWidget {
   final String videoId;
@@ -83,11 +87,7 @@ class DetailScreen extends ConsumerWidget {
             if (platform == 'youtube')
               Row(
                 children: [
-                  FilledButton.icon(
-                    icon: const Icon(Icons.thumb_up, size: 18),
-                    label: const Text('Like'),
-                    onPressed: () => _like(context, ref),
-                  ),
+                  _LikeButton(videoId: videoId),
                   const SizedBox(width: 12),
                   FilledButton.tonalIcon(
                     icon: const Icon(Icons.comment_outlined, size: 18),
@@ -160,19 +160,6 @@ class DetailScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _like(BuildContext context, WidgetRef ref) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await ref.read(apiProvider).likeVideo(videoId, platform: platform);
-      messenger.showSnackBar(const SnackBar(content: Text('Liked 👍')));
-    } on ApiException catch (e) {
-      messenger.showSnackBar(SnackBar(
-          content: Text(e.statusCode == 409
-              ? 'Not authenticated — run `ytui auth push` from the desktop'
-              : e.toString())));
-    }
-  }
-
   Future<void> _comment(BuildContext context, WidgetRef ref) async {
     final controller = TextEditingController();
     final text = await showDialog<String>(
@@ -203,10 +190,71 @@ class DetailScreen extends ConsumerWidget {
       messenger.showSnackBar(const SnackBar(content: Text('Comment posted')));
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(
-          content: Text(e.statusCode == 409
-              ? 'Not authenticated — run `ytui auth push` from the desktop'
-              : e.toString())));
+          content: Text(e.statusCode == 409 ? kNotAuthenticated : e.toString())));
     }
+  }
+}
+
+/// Like button reflecting — and able to undo — the account's current rating.
+class _LikeButton extends ConsumerStatefulWidget {
+  final String videoId;
+
+  const _LikeButton({required this.videoId});
+
+  @override
+  ConsumerState<_LikeButton> createState() => _LikeButtonState();
+}
+
+class _LikeButtonState extends ConsumerState<_LikeButton> {
+  String _rating = 'none';
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRating();
+  }
+
+  Future<void> _fetchRating() async {
+    try {
+      final rating = await ref.read(apiProvider).videoRating(widget.videoId);
+      if (mounted) setState(() => _rating = rating);
+    } on ApiException {
+      // No account or no network: leave the button neutral.
+    }
+  }
+
+  Future<void> _toggle() async {
+    final next = _rating == 'like' ? 'none' : 'like';
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(apiProvider).likeVideo(widget.videoId, rating: next);
+      if (!mounted) return;
+      setState(() {
+        _rating = next;
+        _busy = false;
+      });
+      messenger.showSnackBar(SnackBar(
+        content: Text(next == 'like' ? 'Liked 👍' : 'Like removed'),
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 409 ? kNotAuthenticated : e.toString()),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final liked = _rating == 'like';
+    return FilledButton.icon(
+      icon: Icon(liked ? Icons.thumb_up : Icons.thumb_up_outlined, size: 18),
+      label: Text(liked ? 'Liked' : 'Like'),
+      onPressed: _busy ? null : _toggle,
+    );
   }
 }
 
@@ -287,160 +335,10 @@ class _OdyseeComments extends ConsumerWidget {
                 color: colors.onSurfaceVariant,
               ),
             ),
-          for (final c in page.items) _CommentCard(comment: c),
+          for (final c in page.items) CommentCard(comment: c),
         ],
       ),
     );
   }
 }
 
-class _CommentCard extends StatelessWidget {
-  final Comment comment;
-
-  const _CommentCard({required this.comment});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-
-    // Extract initial for avatar
-    final initial = comment.channelName.isNotEmpty
-        ? comment.channelName[0].toUpperCase()
-        : '?';
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      color: colors.surfaceContainer,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(kRadiusMd),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Avatar circle with initial
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: colors.primaryContainer,
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                initial,
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: colors.onPrimaryContainer,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-
-            // Comment content
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header row: author + date + pinned badge
-                  Row(
-                    children: [
-                      if (comment.isPinned) ...[
-                        Icon(
-                          Icons.push_pin,
-                          size: 12,
-                          color: colors.primary,
-                        ),
-                        const SizedBox(width: 4),
-                      ],
-                      Flexible(
-                        child: Text(
-                          comment.channelName,
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (comment.timestamp != null) ...[
-                        const SizedBox(width: 8),
-                        Text(
-                          _relativeDate(comment.timestamp!),
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-
-                  // Comment body
-                  Text(
-                    comment.text,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      height: 1.4,
-                    ),
-                  ),
-
-                  // Engagement row (likes/replies)
-                  if (comment.likes > 0 || comment.replies > 0) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        if (comment.likes > 0) ...[
-                          Icon(
-                            Icons.thumb_up_outlined,
-                            size: 12,
-                            color: colors.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${comment.likes}',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                        if (comment.likes > 0 && comment.replies > 0)
-                          const SizedBox(width: 12),
-                        if (comment.replies > 0) ...[
-                          Icon(
-                            Icons.reply_outlined,
-                            size: 12,
-                            color: colors.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: colors.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  static String _relativeDate(int epochSeconds) {
-    final date = DateTime.fromMillisecondsSinceEpoch(epochSeconds * 1000);
-    final diff = DateTime.now().difference(date);
-    if (diff.inDays >= 365) return '${diff.inDays ~/ 365}y ago';
-    if (diff.inDays >= 30) return '${diff.inDays ~/ 30}mo ago';
-    if (diff.inDays >= 1) return '${diff.inDays}d ago';
-    if (diff.inHours >= 1) return '${diff.inHours}h ago';
-    if (diff.inMinutes >= 1) return '${diff.inMinutes}m ago';
-    return 'just now';
-  }
-}

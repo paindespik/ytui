@@ -1,6 +1,6 @@
 // Page lecture : lecteur + infos + file d'attente + « À suivre ».
 
-import { api } from "../js/api.js";
+import { api, ApiError } from "../js/api.js";
 import {
   el,
   toast,
@@ -16,6 +16,7 @@ import { replace, navigate } from "../js/router.js";
 import { Player, isLiveId } from "../js/player.js";
 import { playerActions } from "../js/shortcuts.js";
 import { prefs, QUALITIES } from "../js/state.js";
+import { createComments } from "../js/comments.js";
 
 export async function render(view, { params }) {
   const { platform, id } = params;
@@ -120,6 +121,96 @@ export async function render(view, { params }) {
     queuePanel,
   );
 
+  // ─── Bascule du panneau latéral : commentaires ⇄ file / chat / à suivre ───
+  //
+  // Le libellé reste « Commentaires » (l'état actif est porté par la classe
+  // `primary` + aria-pressed) : sur un direct le panneau masqué est le chat, pas
+  // la file, donc un libellé « File d'attente » mentirait la moitié du temps.
+  const commentsSection = el("div", { hidden: true });
+  const sidePanels = [queueSection, chatSection, relatedSection];
+  let hiddenBefore = null; // Map(section → hidden) mémorisée pendant les commentaires
+
+  // Tant que les commentaires occupent le panneau, les mises à jour de
+  // visibilité (chat qui démarre, « À suivre » qui arrive) vont dans l'état
+  // mémorisé au lieu du DOM : la restauration reste exacte.
+  function setSideHidden(section, hidden) {
+    if (hiddenBefore) hiddenBefore.set(section, hidden);
+    else section.hidden = hidden;
+  }
+
+  const commentsBtn =
+    platform === "youtube" || platform === "odysee"
+      ? el("button", {
+          class: "btn",
+          text: "Commentaires",
+          "aria-pressed": "false",
+          onclick: () => toggleComments(),
+        })
+      : null;
+
+  function toggleComments() {
+    if (hiddenBefore) {
+      for (const [section, hidden] of hiddenBefore) section.hidden = hidden;
+      hiddenBefore = null;
+      commentsSection.hidden = true;
+    } else {
+      hiddenBefore = new Map(sidePanels.map((s) => [s, s.hidden]));
+      for (const s of sidePanels) s.hidden = true;
+      if (!commentsSection.childElementCount) {
+        commentsSection.append(createComments({ videoId: id, platform }));
+      }
+      commentsSection.hidden = false;
+    }
+    const on = hiddenBefore !== null;
+    commentsBtn.classList.toggle("primary", on);
+    commentsBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  // ─── J'aime (bascule, ne touche jamais au lecteur) ───
+
+  let liked = false;
+  const likeBtn =
+    platform === "youtube"
+      ? el("button", {
+          class: "btn",
+          "aria-pressed": "false",
+          onclick: async () => {
+            likeBtn.disabled = true;
+            try {
+              await api.likeVideo(id, liked ? "none" : "like");
+              liked = !liked;
+              syncLike();
+              toast(liked ? "Vidéo aimée 👍" : "J'aime retiré");
+            } catch (err) {
+              if (err instanceof ApiError && err.status === 409) {
+                toast("Compte YouTube non connecté", { error: true });
+              } else {
+                errorToast(err);
+              }
+            } finally {
+              likeBtn.disabled = false;
+            }
+          },
+        })
+      : null;
+
+  function syncLike() {
+    likeBtn.textContent = liked ? "👍 Aimé" : "👍 J'aime";
+    likeBtn.setAttribute("aria-pressed", liked ? "true" : "false");
+    likeBtn.classList.toggle("primary", liked);
+  }
+  if (likeBtn) {
+    syncLike();
+    // État initial : échec silencieux, le bouton reste utilisable.
+    api
+      .videoRating(id)
+      .then((out) => {
+        liked = !!(out && out.rating === "like");
+        syncLike();
+      })
+      .catch(() => {});
+  }
+
   view.append(
     el(
       "div",
@@ -133,7 +224,18 @@ export async function render(view, { params }) {
           { class: "watch-info" },
           titleEl,
           el("div", { class: "channel-line" }, channelLink, metaLine),
-          el("div", { class: "watch-actions" }, speedSel, qualitySel, subSel, pipBtn, detailsBtn, plBtn),
+          el(
+            "div",
+            { class: "watch-actions" },
+            speedSel,
+            qualitySel,
+            subSel,
+            pipBtn,
+            likeBtn,
+            commentsBtn,
+            detailsBtn,
+            plBtn,
+          ),
         ),
       ),
       el(
@@ -142,6 +244,7 @@ export async function render(view, { params }) {
         queueSection,
         chatSection,
         relatedSection,
+        commentsSection,
       ),
     ),
   );
@@ -314,9 +417,9 @@ export async function render(view, { params }) {
           }),
         ),
       );
-      relatedSection.hidden = related.length === 0;
+      setSideHidden(relatedSection, related.length === 0);
     } catch {
-      relatedSection.hidden = true;
+      setSideHidden(relatedSection, true);
     }
   }
 
@@ -366,8 +469,8 @@ export async function render(view, { params }) {
 
   function startChat() {
     if (chatTimer) return;
-    chatSection.hidden = false;
-    queueSection.hidden = true;
+    setSideHidden(chatSection, false);
+    setSideHidden(queueSection, true);
     chatPanel.append(chatWaiting);
     chatTimer = setInterval(pollChat, 3000);
     pollChat();

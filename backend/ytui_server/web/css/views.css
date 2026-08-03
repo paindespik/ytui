@@ -51,7 +51,7 @@
 .desc a { color: var(--accent); }
 .desc a:hover { text-decoration: underline; }
 
-/* ─── Commentaires Odysee ─── */
+/* ─── Commentaires (module partagé) ─── */
 
 .comments { max-width: 820px; margin-top: 8px; }
 .comments .btn.more { margin-top: 10px; }

@@ -110,7 +110,7 @@ class Video(BaseModel):
 
 
 class Comment(BaseModel):
-    """A single video comment, as served by the backend API (Odysee, read-only)."""
+    """A single video comment, as served by the backend API (YouTube, Odysee)."""
 
     comment_id: str
     text: str
@@ -120,6 +120,18 @@ class Comment(BaseModel):
     likes: int = 0
     dislikes: int = 0
     is_pinned: bool = False
+
+
+class CommentPage(BaseModel):
+    """One page of comments: the items plus the paging/availability metadata."""
+
+    items: list[Comment] = []
+    # Only filled in on the first page for YouTube; 0 afterwards.
+    total: int = 0
+    # Opaque token to pass back as `cursor`; None once the last page was reached.
+    next_cursor: str | None = None
+    # Comments turned off by the uploader: an empty list is the normal answer.
+    disabled: bool = False
 
 
 class ChatMessage(BaseModel):

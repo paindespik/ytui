@@ -13,7 +13,10 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, LoadingIndicator, Static
 
 from ...api_client import YtuiApiError
-from ...models import Comment, Video, VideoDetails
+from ...models import CommentPage, Video, VideoDetails
+
+# Platforms whose comments the backend can list.
+COMMENT_PLATFORMS = ("youtube", "odysee")
 
 
 def _fmt_count(count: int | None) -> str:
@@ -109,7 +112,7 @@ class VideoDetailScreen(Screen):
             self._show_error(exc.detail)
             return
         self._show_details(details)
-        if self.video.platform == "odysee":
+        if self.video.platform in COMMENT_PLATFORMS:
             self.load_comments()
 
     @work(exclusive=True, group="comments")
@@ -118,23 +121,27 @@ class VideoDetailScreen(Screen):
         title.add_class("visible")
         title.update("Comments — loading…")
         try:
-            comments, total = await self.app.client.video_comments(
+            page = await self.app.client.video_comments(
                 self.video.video_id, platform=self.video.platform
             )
         except YtuiApiError as exc:
             title.update(f"Comments unavailable: {exc.detail}")
             return
-        self._show_comments(comments, total)
+        self._show_comments(page)
 
-    def _show_comments(self, comments: list[Comment], total: int) -> None:
+    def _show_comments(self, page: CommentPage) -> None:
         body = self.query_one("#detail-body", VerticalScroll)
         for old in self.query(".detail-comment"):
             old.remove()
         title = self.query_one("#detail-comments-title", Static)
+        if page.disabled:
+            title.update("Comments disabled")
+            return
+        comments = page.items
         if not comments:
             title.update("Comments (0)")
             return
-        title.update(f"Comments ({total})")
+        title.update(f"Comments ({page.total or len(comments)})")
         for comment in comments:
             pin = "📌 " if comment.is_pinned else ""
             date = _fmt_comment_date(comment.timestamp)
@@ -207,8 +214,10 @@ class VideoDetailScreen(Screen):
         self.app.comment_video_action(self.video)
 
     def action_reload_comments(self) -> None:
-        if self.video.platform != "odysee":
-            self.app.notify("Comment listing is only available for Odysee.", timeout=5)
+        if self.video.platform not in COMMENT_PLATFORMS:
+            self.app.notify(
+                "Comment listing is available for YouTube and Odysee only.", timeout=5
+            )
             return
         self.load_comments()
 

@@ -34,6 +34,9 @@ of the backend), then "Test connection" and Save.
   backend right before playback (HLS > progressive > split DASH), local play
   queue, cross-device resume (positions synced through the backend)
 - Video details with Like / Comment (needs `ytui auth push` from the desktop)
+- In the player (portrait): a like toggle and a comments panel that replaces the
+  queue/suggestions list without interrupting playback — comments can be posted
+  from there (YouTube; Odysee is read-only)
 - Watch history and local playlists (server-side, shared with the TUI)
 - Live notifications: 5-min foreground poll + 15-min workmanager background task
 - Long-press a video for quick actions (queue, details, save, follow)

@@ -68,7 +68,7 @@ HELP_TEXT = """\
   Enter play · A audio only · e enqueue · y copy URL
   o open channel · d download · s save to playlist
   L like · C comment (YouTube account)
-  c               Reload comments (Odysee, read-only)
+  c               Reload comments (YouTube / Odysee, read-only)
 
 [b]Settings[/b]
   Enter open channel · a add channel · x remove channel · m audio-only · t thumbnails

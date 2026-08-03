@@ -274,7 +274,7 @@ async def comments(claim_id: str, page: int = 1, page_size: int = 50) -> Comment
                 message = error.get("message", "") if isinstance(error, dict) else str(error)
                 if "disabled" in message.lower():
                     # comments disabled by the creator: a normal state, not a failure
-                    return CommentsResponse(items=[], total=0)
+                    return CommentsResponse(items=[], total=0, disabled=True)
                 raise OdyseeError(f"comment.List: {body['error']}")
             result = body.get("result") or {}
             items = result.get("items") or []

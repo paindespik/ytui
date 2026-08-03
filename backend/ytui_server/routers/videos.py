@@ -4,6 +4,7 @@ and like/comment actions."""
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import urllib.parse
 from typing import Literal
@@ -16,8 +17,10 @@ from ..models import (
     Channel,
     ChannelVideosResponse,
     CommentIn,
+    CommentOut,
     CommentsResponse,
     PlaylistVideosResponse,
+    RatingOut,
     SearchResponse,
     SponsorSegmentsOut,
     StreamInfo,
@@ -239,44 +242,85 @@ async def sponsor_segments(
 @router.get("/videos/{video_id}/comments", response_model=CommentsResponse)
 async def video_comments(
     video_id: str,
+    request: Request,
     platform: Platform = "youtube",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = None,
 ) -> CommentsResponse:
+    """Top-level comments. Pass back `next_cursor` as `cursor` for the next page."""
+    if platform == "youtube":
+        yt = request.app.state.youtube_service
+        try:
+            return await anyio.to_thread.run_sync(
+                functools.partial(yt.list_comments, video_id, cursor=cursor, limit=page_size)
+            )
+        except AuthError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     if platform != "odysee":
         raise HTTPException(
-            status_code=501, detail="Comment listing is only available for Odysee"
+            status_code=501, detail=f"Comment listing is not available for {platform}"
         )
+    # Commentron paginates by number; `cursor` carries the next page for clients
+    # that only speak cursors.
+    if cursor and cursor.isdigit():
+        page = int(cursor)
     try:
-        return await odysee.comments(
+        response = await odysee.comments(
             odysee.claim_id_from_video_id(video_id), page=page, page_size=page_size
         )
     except odysee.OdyseeError as exc:
         raise HTTPException(status_code=502, detail=f"Comments fetch failed: {exc}") from exc
+    if len(response.items) == page_size:
+        response.next_cursor = str(page + 1)
+    return response
 
 
-@router.post("/videos/{video_id}/like", status_code=204)
-async def like_video(video_id: str, request: Request, platform: Platform = "youtube") -> None:
+@router.get("/videos/{video_id}/rating", response_model=RatingOut)
+async def video_rating(video_id: str, request: Request, platform: Platform = "youtube") -> RatingOut:
+    """The signed-in account's rating, so a client can show the like button state."""
     if platform != "youtube":
         raise HTTPException(status_code=409, detail=_write_unsupported_detail(platform))
     yt = request.app.state.youtube_service
     try:
-        await anyio.to_thread.run_sync(yt.like_video, video_id)
+        return RatingOut(rating=await anyio.to_thread.run_sync(yt.get_rating, video_id))
     except AuthError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ApiError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@router.post("/videos/{video_id}/comment", status_code=204)
-async def comment_video(
-    video_id: str, body: CommentIn, request: Request, platform: Platform = "youtube"
+@router.post("/videos/{video_id}/like", status_code=204)
+async def like_video(
+    video_id: str,
+    request: Request,
+    platform: Platform = "youtube",
+    rating: Literal["like", "none"] = "like",
 ) -> None:
+    """Like a video, or drop an existing like with `rating=none`."""
     if platform != "youtube":
         raise HTTPException(status_code=409, detail=_write_unsupported_detail(platform))
     yt = request.app.state.youtube_service
     try:
-        await anyio.to_thread.run_sync(yt.post_comment, video_id, body.text)
+        await anyio.to_thread.run_sync(yt.rate_video, video_id, rating)
+    except AuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/videos/{video_id}/comment", response_model=CommentOut)
+async def comment_video(
+    video_id: str, body: CommentIn, request: Request, platform: Platform = "youtube"
+) -> CommentOut:
+    """Post a top-level comment and return it, so clients can show it right away."""
+    if platform != "youtube":
+        raise HTTPException(status_code=409, detail=_write_unsupported_detail(platform))
+    yt = request.app.state.youtube_service
+    try:
+        return await anyio.to_thread.run_sync(yt.post_comment, video_id, body.text)
     except AuthError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ApiError as exc:

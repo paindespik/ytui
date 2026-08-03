@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .models import ChatMessage, Comment, SponsorSegment, Video, VideoDetails
+from .models import ChatMessage, CommentPage, SponsorSegment, Video, VideoDetails
 
 
 def _encode(video_id: str) -> str:
@@ -166,9 +166,9 @@ class YtuiClient:
         return VideoDetails.model_validate(data)
 
     async def video_comments(
-        self, video_id: str, platform: str = "odysee", page: int = 1, page_size: int = 50
-    ) -> tuple[list[Comment], int]:
-        """(comments for one page, total comment count on the server)."""
+        self, video_id: str, platform: str = "youtube", page: int = 1, page_size: int = 50
+    ) -> CommentPage:
+        """One page of top-level comments (YouTube and Odysee only)."""
         data = (
             await self._request(
                 "GET",
@@ -176,8 +176,7 @@ class YtuiClient:
                 params={"platform": platform, "page": page, "page_size": page_size},
             )
         ).json()
-        comments = [Comment.model_validate(c) for c in data["items"]]
-        return comments, data.get("total", len(comments))
+        return CommentPage.model_validate(data)
 
     async def video_streams(
         self,

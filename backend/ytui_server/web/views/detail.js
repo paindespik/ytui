@@ -1,5 +1,5 @@
 // Détails d'une vidéo : métadonnées, description, actions YouTube,
-// commentaires Odysee (lecture seule, paginés).
+// commentaires (module partagé js/comments.js).
 
 import { api, ApiError } from "../js/api.js";
 import {
@@ -10,12 +10,10 @@ import {
   toast,
   fmtCount,
   fmtDate,
-  fmtRelative,
   channelPath,
   playVideos,
 } from "../js/ui.js";
-
-const PAGE_SIZE = 50;
+import { createComments } from "../js/comments.js";
 
 // Autolink sans innerHTML : le texte distant reste du texte.
 function linkify(text) {
@@ -93,60 +91,9 @@ export async function render(view, { params }) {
     }),
   );
   if (platform === "youtube") {
-    actions.append(
-      el("button", {
-        class: "btn",
-        text: "👍 J'aime",
-        onclick: async () => {
-          try {
-            await api.likeVideo(d.video_id);
-            toast("Vidéo aimée 👍");
-          } catch (err) {
-            if (err instanceof ApiError && err.status === 409) {
-              toast("Compte YouTube non connecté", { error: true });
-            } else {
-              errorToast(err);
-            }
-          }
-        },
-      }),
-    );
+    actions.append(likeToggle(d.video_id));
   }
   detail.append(actions);
-
-  if (platform === "youtube") {
-    const input = el("input", {
-      class: "input",
-      type: "text",
-      placeholder: "Ajouter un commentaire…",
-    });
-    detail.append(
-      el(
-        "form",
-        {
-          class: "comment-form",
-          onsubmit: async (e) => {
-            e.preventDefault();
-            const text = input.value.trim();
-            if (!text) return;
-            try {
-              await api.commentVideo(d.video_id, text);
-              input.value = "";
-              toast("Commentaire publié");
-            } catch (err) {
-              if (err instanceof ApiError && err.status === 409) {
-                toast("Compte YouTube non connecté", { error: true });
-              } else {
-                errorToast(err);
-              }
-            }
-          },
-        },
-        input,
-        el("button", { class: "btn", type: "submit", text: "Commenter" }),
-      ),
-    );
-  }
 
   if (d.description) {
     detail.append(el("div", { class: "desc" }, linkify(d.description)));
@@ -154,76 +101,52 @@ export async function render(view, { params }) {
 
   view.append(detail);
 
-  if (platform === "odysee") {
-    view.append(await odyseeComments(d.video_id));
+  if (platform === "youtube" || platform === "odysee") {
+    view.append(createComments({ videoId: d.video_id, platform }));
   }
 }
 
-// ─── Commentaires Odysee ───
+// ─── Bouton J'aime (bascule) ───
 
-function commentCard(c) {
-  const when = c.timestamp ? fmtRelative(new Date(c.timestamp * 1000).toISOString()) : "";
-  const stats = [
-    c.likes ? `👍 ${c.likes}` : "",
-    c.dislikes ? `👎 ${c.dislikes}` : "",
-    c.replies ? `${c.replies} réponse${c.replies > 1 ? "s" : ""}` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return el(
-    "div",
-    { class: "comment" },
-    el(
-      "div",
-      { class: "comment-head" },
-      el("span", { class: "comment-author", text: c.channel_name || "Anonyme" }),
-      c.is_pinned ? el("span", { class: "comment-pin", text: "Épinglé" }) : null,
-      when ? el("span", { class: "comment-when", text: when }) : null,
-    ),
-    el("div", { class: "comment-text", text: c.text }),
-    stats ? el("div", { class: "comment-stats", text: stats }) : null,
-  );
-}
-
-async function odyseeComments(videoId) {
-  const wrap = el("div", { class: "comments" });
-  const title = el("div", { class: "section-title", text: "Commentaires" });
-  const list = el("div");
-  wrap.append(title, list, spinner());
-  let page = 1;
-
-  async function loadPage() {
-    try {
-      const out = await api.videoComments(videoId, page, PAGE_SIZE);
-      wrap.querySelector(".spinner")?.remove();
-      wrap.querySelector(".btn.more")?.remove();
-      title.textContent = `Commentaires (${out.total})`;
-      const items = out.items || [];
-      if (page === 1 && !items.length) {
-        list.append(el("div", { class: "sub", text: "Aucun commentaire" }));
-        return;
+function likeToggle(videoId) {
+  let liked = false;
+  const btn = el("button", {
+    class: "btn",
+    text: "👍 J'aime",
+    onclick: async () => {
+      btn.disabled = true;
+      try {
+        await api.likeVideo(videoId, liked ? "none" : "like");
+        liked = !liked;
+        sync();
+        toast(liked ? "Vidéo aimée 👍" : "J'aime retiré");
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          toast("Compte YouTube non connecté", { error: true });
+        } else {
+          errorToast(err);
+        }
+      } finally {
+        btn.disabled = false;
       }
-      items.forEach((c) => list.append(commentCard(c)));
-      if (items.length === PAGE_SIZE) {
-        wrap.append(
-          el("button", {
-            class: "btn more",
-            text: "Plus",
-            onclick: (e) => {
-              page += 1;
-              e.target.disabled = true;
-              loadPage();
-            },
-          }),
-        );
-      }
-    } catch (err) {
-      wrap.querySelector(".spinner")?.remove();
-      errorToast(err, "Commentaires indisponibles");
-      if (page === 1) list.append(el("div", { class: "sub", text: "Commentaires indisponibles" }));
-    }
+    },
+  });
+
+  function sync() {
+    btn.textContent = liked ? "👍 Aimé" : "👍 J'aime";
+    btn.setAttribute("aria-pressed", liked ? "true" : "false");
+    btn.classList.toggle("primary", liked);
   }
+  sync();
 
-  loadPage(); // async : la page s'affiche sans attendre les commentaires
-  return wrap;
+  // État initial : échec silencieux (bouton utilisable quand même).
+  api
+    .videoRating(videoId)
+    .then((out) => {
+      liked = !!(out && out.rating === "like");
+      sync();
+    })
+    .catch(() => {});
+
+  return btn;
 }

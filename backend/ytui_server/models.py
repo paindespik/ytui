@@ -218,6 +218,18 @@ class CommentOut(BaseModel):
 class CommentsResponse(BaseModel):
     items: list[CommentOut]
     total: int = 0
+    # Opaque continuation to pass back as `cursor` (YouTube page token, Odysee
+    # page number); None once the last page was reached.
+    next_cursor: str | None = None
+    # Comments turned off by the uploader: an empty list is the normal answer,
+    # and posting would fail.
+    disabled: bool = False
+
+
+class RatingOut(BaseModel):
+    """The signed-in account's rating for one video: like, dislike or none."""
+
+    rating: str = "none"
 
 
 class ChatMessage(BaseModel):

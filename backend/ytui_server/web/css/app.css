@@ -461,6 +461,14 @@ kbd {
 
 .side-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .side-panel .rows .row .row-thumb { flex-basis: 110px; }
+.side-panel .comments {
+  max-width: none;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.side-panel .comment-form { flex-wrap: wrap; }
+.side-panel .comment-form .input { min-width: 0; }
 
 /* ─── Chat en direct ─── */
 

@@ -271,15 +271,39 @@ def test_odysee_comments(client):
     assert body["items"][1]["likes"] == 2
 
 
-def test_comments_youtube_not_implemented(client):
+def test_odysee_comments_cursor_pagination(client):
+    # A full page means more may follow: next_cursor carries the next page
+    # number, and passing it back as `cursor` requests that page.
+    post_patch, _ = _mock_odysee_http(
+        [_rpc(COMMENT_LIST_RESULT), _rpc(REACTION_LIST_RESULT)]
+    )
+    with post_patch as post_mock:
+        resp = client.get(
+            "/api/videos/linux-video:aa11/comments",
+            params={"platform": "odysee", "page_size": 2, "cursor": "3"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["next_cursor"] == "4"
+    assert post_mock.call_args_list[0].kwargs["json"]["params"]["page"] == 3
+
+
+def test_comments_youtube_requires_account(client):
+    # YouTube comments come from the signed-in account: no token pushed here.
     resp = client.get(
         "/api/videos/vid000000001/comments", params={"platform": "youtube"}
     )
-    assert resp.status_code == 501
+    assert resp.status_code == 409
 
 
 def test_comments_default_platform_is_youtube(client):
     resp = client.get("/api/videos/vid000000001/comments")
+    assert resp.status_code == 409
+
+
+def test_comments_unsupported_platform(client):
+    resp = client.get(
+        "/api/videos/vid000000001/comments", params={"platform": "bitchute"}
+    )
     assert resp.status_code == 501
 
 
@@ -295,7 +319,12 @@ def test_comments_disabled_returns_empty(client):
             "/api/videos/linux-video:aa11/comments", params={"platform": "odysee"}
         )
     assert resp.status_code == 200
-    assert resp.json() == {"items": [], "total": 0}
+    assert resp.json() == {
+        "items": [],
+        "total": 0,
+        "next_cursor": None,
+        "disabled": True,
+    }
 
 
 # ─── like/comment write guards ───

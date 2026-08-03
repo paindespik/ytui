@@ -84,12 +84,14 @@ export const api = {
     request("GET", `/api/videos/${id(videoId)}/related`, { query: { platform, limit } }),
   sponsorSegments: (videoId, platform = "youtube") =>
     request("GET", `/api/videos/${id(videoId)}/sponsor`, { query: { platform } }),
-  likeVideo: (videoId) => request("POST", `/api/videos/${id(videoId)}/like`),
+  likeVideo: (videoId, rating = "like") =>
+    request("POST", `/api/videos/${id(videoId)}/like`, { query: { rating } }),
+  videoRating: (videoId) => request("GET", `/api/videos/${id(videoId)}/rating`),
   commentVideo: (videoId, text) =>
     request("POST", `/api/videos/${id(videoId)}/comment`, { body: { text } }),
-  videoComments: (videoId, page = 1, pageSize = 50) =>
+  videoComments: (videoId, platform = "youtube", { cursor = "", pageSize = 50 } = {}) =>
     request("GET", `/api/videos/${id(videoId)}/comments`, {
-      query: { platform: "odysee", page, page_size: pageSize },
+      query: { platform, cursor, page_size: pageSize },
     }),
 
   // ─── followed channels ───

@@ -10,7 +10,7 @@ import pytest
 
 from ytui.api_client import FeedResult, FollowedChannel, LocalPlaylist, PlaylistItem
 from ytui.config import Config
-from ytui.models import Comment, Video, VideoDetails
+from ytui.models import Comment, CommentPage, Video, VideoDetails
 
 VIDEO = Video(
     video_id="dQw4w9WgXcQ",
@@ -69,10 +69,10 @@ class FakeClient:
     async def video_details(self, video_id, platform="youtube") -> VideoDetails:
         return VideoDetails(description="A description", view_count=1234, duration=60)
 
-    async def video_comments(self, video_id, platform="odysee", page=1, page_size=50):
-        return (
-            [Comment(comment_id="c1", text="Nice one", channel_name="@bob", likes=3)],
-            1,
+    async def video_comments(self, video_id, platform="youtube", page=1, page_size=50):
+        return CommentPage(
+            items=[Comment(comment_id="c1", text="Nice one", channel_name="@bob", likes=3)],
+            total=1,
         )
 
     async def channels(self) -> list[FollowedChannel]:
@@ -438,6 +438,26 @@ async def test_detail_screen_odysee_comments(app):
         comments = app.screen.query(".detail-comment")
         assert len(comments) == 1
         assert "Nice one" in str(comments.first().render())
+
+
+async def test_detail_screen_youtube_comments_disabled(app):
+    async def disabled(video_id, platform="youtube", page=1, page_size=50):
+        return CommentPage(disabled=True)
+
+    app.client.video_comments = disabled
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_detail(VIDEO)  # YouTube: comments are loaded too, not just for Odysee
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from textual.widgets import Static
+
+        title = app.screen.query_one("#detail-comments-title", Static)
+        assert "Comments disabled" in str(title.render())
+        assert not app.screen.query(".detail-comment")
 
 
 async def test_playlist_picker_modal_opens(app):

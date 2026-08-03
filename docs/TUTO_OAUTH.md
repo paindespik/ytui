@@ -1,6 +1,6 @@
 # Tutoriel : Connexion YouTube (OAuth2) avec ytui
 
-Ce tutoriel explique comment configurer la connexion OAuth2 à YouTube pour utiliser les actions **L** (liker) et **C** (commenter) dans ytui.
+Ce tutoriel explique comment configurer la connexion OAuth2 à YouTube pour liker, lire et poster des commentaires depuis ytui (touches **L** / **C** dans la TUI, boutons 👍 et « Commentaires » dans l'app mobile et le navigateur).
 
 ---
 
@@ -85,7 +85,7 @@ Lancez ytui et sélectionnez une vidéo YouTube, puis appuyez sur **L** (like) o
 
 ---
 
-## 4. Comment liker et commenter dans ytui
+## 4. Comment liker et commenter dans ytui (TUI)
 
 ### 4.1 Liker (touche **L**)
 
@@ -117,6 +117,18 @@ Lancez ytui et sélectionnez une vidéo YouTube, puis appuyez sur **L** (like) o
 
 ---
 
+## 4bis. Dans l'app mobile et le navigateur
+
+Ces deux clients passent par le même jeton côté serveur, et exposent les actions **pendant la lecture** (hors plein écran) :
+
+- **👍 J'aime / 👍 Aimé** : bascule. L'état initial est lu via `GET /api/videos/{id}/rating` ; un second appui envoie `rating=none` et retire le like.
+- **Commentaires** : remplace la file d'attente et les suggestions par la liste des commentaires **sans interrompre la lecture** (le mobile garde la même surface vidéo, le web ne touche pas à l'élément `<video>`). Pagination par curseur opaque (bouton « Plus » / chargement automatique en bas de liste sur mobile).
+- **Publier** : le champ de saisie en bas du panneau envoie `POST /api/videos/{id}/comment` ; le commentaire créé est renvoyé par le serveur et inséré en tête de liste (l'ordre « pertinence » de YouTube l'enterrerait sinon).
+- Sur un direct, la place du panneau est occupée par le chat en direct : le bouton « Commentaires » n'apparaît pas.
+- Odysee : lecture seule (les likes/commentaires exigent une signature de portefeuille LBRY) — le champ de saisie est masqué.
+
+---
+
 ## 5. Limitations connues
 
 ### 5.1 Quota YouTube Data API
@@ -125,8 +137,10 @@ Lancez ytui et sélectionnez une vidéo YouTube, puis appuyez sur **L** (like) o
 - Coûts par action :
   | Action | Coût |
   |--------|------|
-  | `videos.rate` (like) | 50 unités |
+  | `videos.rate` (like ou retrait) | 50 unités |
+  | `videos.getRating` (état du bouton) | 1 unité |
   | `commentThreads.insert` (commentaire) | 50 unités |
+  | `commentThreads.list` (page de commentaires) | 1 unité |
 
   En pratique, cela permet ~200 likes ou commentaires par jour.
 
@@ -135,10 +149,11 @@ Lancez ytui et sélectionnez une vidéo YouTube, puis appuyez sur **L** (like) o
 - Les jetons expirent après **7 jours**. Il suffit de réappuyer sur **L** ou **C** pour relancer le flux OAuth (le navigateur s'ouvre à nouveau).
 - Pour une durée de vie permanente, il faut publier l'application (processus de vérification Google) et ajouter des utilisateurs testeurs permanents.
 
-### 5.3 Pas de "unlike" ni de réponse aux commentaires
+### 5.3 Pas de réponse aux commentaires
 
-- ytui ne gère que le like (rating = `like`). Il n'y a pas de fonctionnalité pour annuler un like (unlike).
-- Les réponses aux commentaires (reply) ne sont pas implémentées.
+- Le like est un vrai bouton bascule côté mobile et navigateur (rating `like` puis `none` pour l'annuler) ; la touche **L** de la TUI ne fait qu'ajouter le like.
+- Les réponses aux commentaires (reply) ne sont pas implémentées : seuls les commentaires de premier niveau sont listés et publiés.
+- La liste des commentaires YouTube passe aussi par le compte connecté (`commentThreads.list`, 1 unité de quota par page de 50) : sans jeton sur le serveur, les clients affichent « Compte YouTube non connecté ».
 
 ### 5.4 Commentaires désactivés
 
