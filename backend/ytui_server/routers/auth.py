@@ -37,7 +37,11 @@ async def push_token(request: Request) -> None:
 
 @router.post("/auth/youtube/cookies", status_code=204)
 async def push_cookies(request: Request) -> None:
-    """Store the account cookies, but only after YouTube accepts them."""
+    """Store the account cookies, but only after YouTube accepts them.
+
+    The candidate is probed while staged, so a periodic refresh whose browser
+    token has already been rotated cannot destroy a session that still works.
+    """
     body = await request.body()
     # A real youtube.com-only export measures ~350 KB: YouTube keeps a ~2.8 KB
     # `ST-*` widget cookie per embed. The cap only rejects absurd payloads.
@@ -45,25 +49,27 @@ async def push_cookies(request: Request) -> None:
         raise HTTPException(status_code=413, detail="Cookie payload too large")
     store = request.app.state.youtube_cookies
     try:
-        store.save(body.decode("utf-8"))
+        staged = store.stage(body.decode("utf-8"))
     except (CookieError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        videos = await ytdlp.home_recommendations(store.path, limit=1)
+        videos = await ytdlp.home_recommendations(staged, limit=1)
     except ytdlp.UpstreamError as exc:
-        store.clear()
+        store.discard(staged)
         raise HTTPException(
             status_code=422, detail=f"YouTube refused the cookies: {exc}"
         ) from exc
     if not videos:
-        store.clear()
+        store.discard(staged)
         raise HTTPException(
             status_code=422,
             detail=(
-                "YouTube does not recognise this session. Export the cookies from a "
-                "private window and close it without browsing further."
+                "YouTube does not recognise this session. YouTube ties it to a "
+                "__Secure-1PSIDTS cookie that only one holder may refresh: export "
+                "from a browser profile you are not browsing in."
             ),
         )
+    store.commit(staged)
 
 
 @router.delete("/auth/youtube/cookies", status_code=204)

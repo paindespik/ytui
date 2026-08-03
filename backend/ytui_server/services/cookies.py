@@ -34,11 +34,12 @@ class CookieStore:
     def exists(self) -> bool:
         return self.path.exists()
 
-    def save(self, netscape_text: str) -> None:
-        """Validate then atomically install the cookie file (0600).
+    def stage(self, netscape_text: str) -> Path:
+        """Validate a candidate jar and return its path, leaving the live one alone.
 
-        Raises CookieError with a user-readable message; never leaves a partial
-        file behind.
+        Callers probe the staged file against YouTube before `commit`, so a
+        refresh that Google refuses never destroys a session that still works.
+        Raises CookieError with a user-readable message.
         """
         tmp = self.path.with_suffix(".tmp")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,8 +50,16 @@ class CookieStore:
         except CookieError:
             tmp.unlink(missing_ok=True)
             raise
-        os.replace(tmp, self.path)
+        return tmp
+
+    def commit(self, staged: Path) -> None:
+        """Atomically promote a staged jar to the live one."""
+        os.replace(staged, self.path)
         self.path.chmod(0o600)
+
+    def discard(self, staged: Path) -> None:
+        """Drop a rejected candidate; the live jar is untouched."""
+        staged.unlink(missing_ok=True)
 
     def clear(self) -> bool:
         """Remove the stored cookies; True when a file was actually removed."""

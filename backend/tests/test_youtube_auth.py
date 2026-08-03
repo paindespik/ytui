@@ -379,6 +379,22 @@ def test_push_cookies_rejected_when_youtube_ignores_the_session(client, settings
     assert client.get("/api/auth/youtube/status").json()["cookies"] is False
 
 
+def test_a_refused_refresh_keeps_the_working_session(client, settings):
+    """A periodic refresh runs with whatever token the browser holds; if Google
+    has already rotated it, the session that still works must survive."""
+    with _home(make_video("homeVid00001")):
+        assert client.post("/api/auth/youtube/cookies", content=VALID_COOKIES).status_code == 204
+    live = settings.data_dir / "youtube_cookies.txt"
+    kept = live.read_text()
+
+    stale = VALID_COOKIES + ".youtube.com\tTRUE\t/\tTRUE\t4102444800\tEXTRA\tz\n"
+    with _home():  # YouTube answers anonymously: the candidate is dead
+        assert client.post("/api/auth/youtube/cookies", content=stale).status_code == 422
+    assert live.read_text() == kept
+    assert client.get("/api/auth/youtube/status").json()["cookies"] is True
+    assert not live.with_suffix(".tmp").exists()
+
+
 def test_push_cookies_invalid_payload(client, settings):
     resp = client.post("/api/auth/youtube/cookies", content="not a cookie jar")
     assert resp.status_code == 422

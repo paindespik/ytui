@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the YouTube session ytui pushed to the server
+# YouTube ties the session to a __Secure-1PSIDTS cookie that only its holder can
+# renew, and the server cannot: it must be re-exported from the browser. Hence
+# this timer runs on the desktop, not on the server.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust the browser (firefox, zen, chromium, chrome, brave, edge) and, if the
+# profile you browse in keeps stealing the token, point at a dedicated one:
+#   --from-browser zen:ytui
+ExecStart=%h/.local/bin/ytui auth cookies --from-browser zen

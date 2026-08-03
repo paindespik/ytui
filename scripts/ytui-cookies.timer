@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-push the YouTube session before it goes stale
+
+[Timer]
+# YouTube stops honouring a __Secure-1PSIDTS it did not issue recently — about
+# an hour in practice — so refresh well inside that window.
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
