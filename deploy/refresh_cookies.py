@@ -114,9 +114,26 @@ def push(text: str, token: str) -> None:
         sys.exit(f"Backend unreachable at {BACKEND}: {exc.reason}")
 
 
+def snapshot(text: str) -> None:
+    """Keep the last session the backend accepted.
+
+    If the browser ever loses its session (a crash landing on a signed-out
+    youtube.com wipes the .youtube.com cookies), this file restores service
+    without redoing the interactive sign-in:
+        curl -H "Authorization: Bearer $TOKEN" --data-binary @last-good.txt \\
+             -H 'Content-Type: text/plain' http://127.0.0.1:8776/api/auth/youtube/cookies
+    """
+    path = PROFILE.parent / "last-good.txt"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.chmod(0o600)
+    tmp.replace(path)
+
+
 def main() -> None:
     text = read_cookies(PROFILE)
     push(text, api_token())
+    snapshot(text)
     print(f"Pushed {text.count(chr(10)) - 3} youtube.com cookies from {PROFILE}")
 
 
