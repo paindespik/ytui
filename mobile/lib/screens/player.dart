@@ -619,15 +619,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     unawaited(_applyAudioDelay(milliseconds));
   }
 
-  Future<void> _savePosition() async {
-    final video = ref.read(queueProvider).current;
-    if (video == null || _isLiveId(video)) return;
+  /// Pushes the playing position for [video] (defaults to the queue's current
+  /// one — pass it explicitly when the queue has already moved on).
+  Future<void> _savePosition([Video? video]) async {
+    final target = video ?? ref.read(queueProvider).current;
+    if (target == null || _isLiveId(target)) return;
     final pos = player.state.position;
     final dur = player.state.duration;
     if (dur.inSeconds == 0) return;
     try {
       await ref.read(apiProvider).savePosition(
-            video.videoId,
+            target.videoId,
             pos.inSeconds.toDouble(),
             duration: dur.inSeconds.toDouble(),
           );
@@ -637,6 +639,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void dispose() {
     _heartbeat?.cancel();
+    // Final flush: the 10 s heartbeat would otherwise drop the last seconds
+    // watched before leaving the player.
+    unawaited(_savePosition());
     _completedSub?.cancel();
     _errorSub?.cancel();
     _playingSub?.cancel();
@@ -666,6 +671,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     ref.listen(queueProvider, (previous, next) {
       final current = next.current;
       if (current != null && current.videoId != _loadedVideoId) {
+        // Save where the outgoing video stopped before the player reopens.
+        final leaving = previous?.current;
+        if (leaving != null && leaving.videoId == _loadedVideoId) {
+          unawaited(_savePosition(leaving));
+        }
         _retried = false;
         _load(current);
       }
