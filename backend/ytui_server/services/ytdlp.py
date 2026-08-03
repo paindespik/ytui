@@ -477,6 +477,26 @@ def _walk_lockups(node: object) -> list[dict]:
     return found
 
 
+def _find_browse_id(node: object) -> str:
+    """First browseEndpoint channel id (UC…) found anywhere under `node`."""
+    if isinstance(node, dict):
+        endpoint = node.get("browseEndpoint")
+        if isinstance(endpoint, dict):
+            browse_id = endpoint.get("browseId")
+            if isinstance(browse_id, str) and browse_id.startswith("UC"):
+                return browse_id
+        for value in node.values():
+            found = _find_browse_id(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _find_browse_id(item)
+            if found:
+                return found
+    return ""
+
+
 def _lockup_to_video(lockup: dict) -> Video | None:
     content_id = lockup.get("contentId") or ""
     if not content_id:
@@ -533,6 +553,7 @@ def _lockup_to_video(lockup: dict) -> Video | None:
         video_id=content_id,
         title=title,
         channel_title=channel_title,
+        channel_id=_find_browse_id(metadata_vm),
         thumbnail_url=thumbnail_url,
         duration=duration,
         kind="video",
