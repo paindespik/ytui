@@ -93,6 +93,15 @@ export const api = {
     request("GET", `/api/videos/${id(videoId)}/comments`, {
       query: { platform, cursor, page_size: pageSize },
     }),
+  commentReplies: (videoId, commentId, platform = "youtube", { cursor = "", pageSize = 50 } = {}) =>
+    request("GET", `/api/videos/${id(videoId)}/comments/${id(commentId)}/replies`, {
+      query: { platform, cursor, page_size: pageSize },
+    }),
+  replyComment: (videoId, commentId, text, platform = "youtube") =>
+    request("POST", `/api/videos/${id(videoId)}/comments/${id(commentId)}/reply`, {
+      query: { platform },
+      body: { text },
+    }),
 
   // ─── followed channels ───
   channels: () => request("GET", "/api/channels"),

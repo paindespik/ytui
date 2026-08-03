@@ -14,6 +14,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlparse
 
 import anyio
@@ -567,3 +568,27 @@ async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
         if len(videos) >= limit:
             break
     return videos
+
+
+async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video]:
+    """Personalised YouTube home feed; needs the account cookies file."""
+    return await _run(_BULK_SEM, _extract_recommended, cookie_file, limit)
+
+
+def _extract_recommended(cookie_file: Path, limit: int) -> list[Video]:
+    import yt_dlp
+
+    opts = {
+        **_YDL_FLAT_OPTS,
+        # ":ytrec" resolves to a playlist of URLs: with extract_flat=True (the
+        # module default) yt-dlp stops at the wrapper and yields zero entries.
+        "extract_flat": "in_playlist",
+        "playlist_items": f"1:{limit}",
+        # `cookiefile` (not cookiesfrombrowser): YoutubeDL.close() saves the
+        # jar back here, so Google's rotated cookies are persisted.
+        "cookiefile": str(cookie_file),
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(":ytrec", download=False)
+    videos = (entry_to_item(e) for e in (info.get("entries") or []) if e)
+    return [v for v in videos if v is not None]

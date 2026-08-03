@@ -345,6 +345,43 @@ async def test_sponsor_segments(client):
     assert respx.calls.last.request.url.params["platform"] == "youtube"
 
 
+@respx.mock
+async def test_push_youtube_cookies_sends_raw_body(client):
+    route = respx.post(f"{BASE}/api/auth/youtube/cookies").mock(
+        return_value=httpx.Response(204)
+    )
+    await client.push_youtube_cookies("# Netscape HTTP Cookie File\n")
+    request = route.calls.last.request
+    assert request.headers["Content-Type"] == "text/plain"
+    assert request.content == b"# Netscape HTTP Cookie File\n"
+
+
+@respx.mock
+async def test_delete_youtube_cookies(client):
+    route = respx.delete(f"{BASE}/api/auth/youtube/cookies").mock(
+        return_value=httpx.Response(204)
+    )
+    await client.delete_youtube_cookies()
+    assert route.called
+
+
+@respx.mock
+async def test_youtube_auth_status_reports_both_credentials(client):
+    respx.get(f"{BASE}/api/auth/youtube/status").mock(
+        return_value=httpx.Response(200, json={"authenticated": True, "cookies": True})
+    )
+    assert await client.youtube_auth_status() == (True, True)
+
+
+@respx.mock
+async def test_youtube_auth_status_tolerates_old_server(client):
+    # a server without the cookie feature omits the field entirely
+    respx.get(f"{BASE}/api/auth/youtube/status").mock(
+        return_value=httpx.Response(200, json={"authenticated": True})
+    )
+    assert await client.youtube_auth_status() == (True, False)
+
+
 def test_resume_start():
     assert resume_start(50.0, 600.0) == 50.0
     assert resume_start(590.0, 600.0) == 0.0  # within 5% of the end

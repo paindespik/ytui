@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     suggestions_ttl_minutes: int = Field(
         default=30, validation_alias="YTUI_SUGGESTIONS_TTL_MINUTES"
     )
+    # Periodic authenticated ping that keeps the pushed cookie session alive
+    # (yt-dlp rewrites the rotated cookies on each use). 0 disables.
+    suggestions_keepalive_hours: int = Field(
+        default=6, validation_alias="YTUI_SUGGESTIONS_KEEPALIVE_HOURS"
+    )
     live_check_minutes: int = Field(default=5, validation_alias="YTUI_LIVE_CHECK_MINUTES")
     # Twitch lives are one batched GQL request for all channels, so they can
     # be polled much faster than the per-channel YouTube scrape.

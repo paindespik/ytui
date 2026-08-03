@@ -1360,6 +1360,9 @@ class _CommentsSection extends ConsumerStatefulWidget {
 class _CommentsSectionState extends ConsumerState<_CommentsSection> {
   final List<Comment> _items = [];
   final TextEditingController _composer = TextEditingController();
+
+  /// Reply threads by parent comment id, created on first expand.
+  final Map<String, _ReplyThread> _threads = {};
   String? _cursor;
   int _total = 0;
   bool _loading = true;
@@ -1377,6 +1380,9 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
   @override
   void dispose() {
     _composer.dispose();
+    for (final thread in _threads.values) {
+      thread.composer.dispose();
+    }
     super.dispose();
   }
 
@@ -1444,6 +1450,157 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
     }
   }
 
+  /// Expands (or collapses) one comment's replies; [openComposer] forces the
+  /// thread open and reveals its reply field.
+  void _toggleReplies(Comment comment, {bool openComposer = false}) {
+    final thread = _threads.putIfAbsent(comment.commentId, _ReplyThread.new);
+    setState(() {
+      thread.expanded = openComposer ? true : !thread.expanded;
+      if (openComposer) thread.composerOpen = true;
+    });
+    if (thread.expanded &&
+        thread.items.isEmpty &&
+        !thread.exhausted &&
+        !thread.loading &&
+        comment.replies > 0) {
+      _loadReplies(comment);
+    }
+  }
+
+  Future<void> _loadReplies(Comment comment) async {
+    final thread = _threads.putIfAbsent(comment.commentId, _ReplyThread.new);
+    if (thread.loading || thread.exhausted) return;
+    setState(() {
+      thread.loading = true;
+      thread.error = null;
+    });
+    try {
+      final page = await ref.read(apiProvider).commentReplies(
+            widget.video.videoId,
+            comment.commentId,
+            platform: widget.video.platform,
+            cursor: thread.cursor,
+            pageSize: 20,
+          );
+      if (!mounted) return;
+      setState(() {
+        thread.items.addAll(page.items);
+        thread.cursor = page.nextCursor;
+        thread.exhausted = page.nextCursor == null;
+        thread.loading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        thread.loading = false;
+        thread.exhausted = true;
+        thread.error = e.statusCode == 409 ? _kNotConnected : e.detail;
+      });
+    }
+  }
+
+  Future<void> _postReply(Comment comment) async {
+    final thread = _threads.putIfAbsent(comment.commentId, _ReplyThread.new);
+    final text = thread.composer.text.trim();
+    if (text.isEmpty || thread.posting) return;
+    setState(() => thread.posting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final posted = await ref.read(apiProvider).replyComment(
+            widget.video.videoId,
+            comment.commentId,
+            text,
+            platform: widget.video.platform,
+          );
+      if (!mounted) return;
+      thread.composer.clear();
+      setState(() {
+        // Replies read oldest first, so a fresh one belongs at the end.
+        thread.items.add(posted);
+        thread.posting = false;
+      });
+      messenger.showSnackBar(const SnackBar(content: Text('Réponse publiée')));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => thread.posting = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(e.statusCode == 409 ? _kNotConnected : e.toString()),
+      ));
+    }
+  }
+
+  /// The expanded thread of [comment]: replies, loader, error, pager and — on
+  /// YouTube — its own composer, all indented under the parent card.
+  List<Widget> _replyWidgets(Comment comment) {
+    final thread = _threads[comment.commentId];
+    if (thread == null) return const [];
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return [
+      for (final reply in thread.items)
+        Padding(
+          padding: const EdgeInsets.only(left: 28),
+          child: CommentCard(comment: reply),
+        ),
+      if (thread.loading)
+        const Padding(
+          padding: EdgeInsets.only(left: 28, top: 8, bottom: 8),
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      if (thread.error != null)
+        Padding(
+          padding: const EdgeInsets.only(left: 28, bottom: 8),
+          child: Text(
+            thread.error!,
+            style: theme.textTheme.bodySmall?.copyWith(color: colors.error),
+          ),
+        ),
+      if (comment.replies > 0 && !thread.exhausted && !thread.loading)
+        Padding(
+          padding: const EdgeInsets.only(left: 28),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => _loadReplies(comment),
+              child: const Text('Charger plus de réponses'),
+            ),
+          ),
+        ),
+      if (_canPost && thread.composerOpen)
+        Padding(
+          padding: const EdgeInsets.only(left: 28, top: 4, bottom: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: thread.composer,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _postReply(comment),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    hintText: 'Répondre…',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                icon: thread.posting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send_rounded),
+                tooltip: 'Publier',
+                onPressed: thread.posting ? null : () => _postReply(comment),
+              ),
+            ],
+          ),
+        ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1489,7 +1646,25 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
                     _error!,
                     style: theme.textTheme.bodySmall?.copyWith(color: colors.error),
                   ),
-                for (final comment in _items) CommentCard(comment: comment),
+                for (final comment in _items) ...[
+                  CommentCard(
+                    comment: comment,
+                    repliesExpanded: _threads[comment.commentId]?.expanded ?? false,
+                    onToggleReplies:
+                        comment.replies > 0 ? () => _toggleReplies(comment) : null,
+                  ),
+                  if (_canPost)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.reply, size: 16),
+                        label: const Text('Répondre'),
+                        onPressed: () => _toggleReplies(comment, openComposer: true),
+                      ),
+                    ),
+                  if (_threads[comment.commentId]?.expanded ?? false)
+                    ..._replyWidgets(comment),
+                ],
                 if (_loading)
                   const Padding(
                     padding: EdgeInsets.all(16),
@@ -1548,4 +1723,17 @@ class _CommentsSectionState extends ConsumerState<_CommentsSection> {
       ],
     );
   }
+}
+
+/// Reply thread of one comment, owned by [_CommentsSectionState].
+class _ReplyThread {
+  final List<Comment> items = [];
+  final TextEditingController composer = TextEditingController();
+  String? cursor;
+  bool expanded = false;
+  bool loading = false;
+  bool exhausted = false;
+  bool posting = false;
+  bool composerOpen = false;
+  String? error;
 }

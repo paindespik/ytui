@@ -332,6 +332,22 @@ class YtuiClient:
             headers={"Content-Type": "application/json"},
         )
 
+    async def push_youtube_cookies(self, netscape_text: str) -> None:
+        await self._request(
+            "POST",
+            "/api/auth/youtube/cookies",
+            content=netscape_text.encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+        )
+
+    async def delete_youtube_cookies(self) -> None:
+        await self._request("DELETE", "/api/auth/youtube/cookies")
+
+    async def youtube_auth_status(self) -> tuple[bool, bool]:
+        """(OAuth token present, account cookies present)."""
+        data = (await self._request("GET", "/api/auth/youtube/status")).json()
+        return bool(data["authenticated"]), bool(data.get("cookies", False))
+
     # -- lives --
 
     async def lives(self) -> list[Video]:

@@ -27,6 +27,7 @@ from .routers import (
     videos,
 )
 from .security import require_token
+from .services.cookies import CookieStore
 from .services.feed import FeedService
 from .services.live import LiveMonitor
 from .services.livechat import ChatManager
@@ -49,7 +50,7 @@ class _WebStaticFiles(StaticFiles):
         return response
 
 
-def create_app(settings: Settings | None = None, start_live_poll: bool = True) -> FastAPI:
+def create_app(settings: Settings | None = None, start_pollers: bool = True) -> FastAPI:
     settings = settings or Settings()
     logging.basicConfig(
         level=settings.log_level.upper(),
@@ -73,8 +74,12 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
         )
         app.state.db = db
         app.state.feed_service = FeedService(db)
+        app.state.youtube_cookies = CookieStore(settings.data_dir)
         app.state.suggestions_service = SuggestionsService(
-            db, ttl_seconds=settings.suggestions_ttl_minutes * 60
+            db,
+            ttl_seconds=settings.suggestions_ttl_minutes * 60,
+            cookies=app.state.youtube_cookies,
+            keepalive_hours=settings.suggestions_keepalive_hours,
         )
         app.state.youtube_service = YouTubeService(settings.data_dir)
         app.state.sponsorblock = SponsorBlockService(
@@ -92,12 +97,16 @@ def create_app(settings: Settings | None = None, start_live_poll: bool = True) -
             tiktok_check_seconds=settings.tiktok_check_seconds,
         )
         app.state.chat_manager = ChatManager()
-        if start_live_poll:
+        # Every outbound background poller (live checks, cookie keep-alive) is
+        # behind one flag so the test suite stays offline.
+        if start_pollers:
             app.state.live_monitor.start()
+            app.state.suggestions_service.start()
         try:
             yield
         finally:
             await app.state.chat_manager.shutdown()
+            await app.state.suggestions_service.stop()
             await app.state.live_monitor.stop()
             await proxy_client.aclose()
             db.close()

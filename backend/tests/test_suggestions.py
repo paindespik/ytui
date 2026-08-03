@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 from conftest import make_video
 
-from ytui_server.services.suggestions import EMPTY_HISTORY_WARNING
+from ytui_server.services import ytdlp
+from ytui_server.services.suggestions import COOKIE_STALE_WARNING, EMPTY_HISTORY_WARNING
 
 
 def _watch(client, video_id: str, **kwargs) -> None:
@@ -135,3 +136,64 @@ def test_suggestions_cache_expires(client, app):
         app.state.suggestions_service.ttl_seconds = 0
         assert client.get("/api/suggestions").status_code == 200
         assert mock.call_count == 2
+
+
+
+def _with_cookies(app, settings) -> None:
+    """Pretend the account cookies were pushed (contents never read: yt-dlp is mocked)."""
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    app.state.youtube_cookies.path.write_text("# Netscape HTTP Cookie File\n")
+    app.state.suggestions_service.ttl_seconds = 0  # never serve a cached feed
+
+
+def test_suggestions_use_account_home_when_cookies_present(client, app, settings):
+    _watch(client, "seedA0000001", channel_id="UCchanA00000000000000000")
+    _with_cookies(app, settings)
+    home = AsyncMock(return_value=[make_video("homeVid00001")])
+    related = _related_mock({"seedA0000001": [make_video("relA1")]})
+    with (
+        patch("ytui_server.services.suggestions.ytdlp.home_recommendations", new=home),
+        patch("ytui_server.services.suggestions.ytdlp.related_videos", new=related),
+    ):
+        resp = client.get("/api/suggestions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["video_id"] for v in body["videos"]] == ["homeVid00001"]
+    assert body["warnings"] == []
+    related.assert_not_awaited()  # the history path is skipped entirely
+
+
+def test_suggestions_fall_back_when_home_is_empty(client, app, settings):
+    _watch(client, "seedA0000001", channel_id="UCchanA00000000000000000")
+    _with_cookies(app, settings)
+    related = _related_mock({"seedA0000001": [make_video("relA1")]})
+    with (
+        patch(
+            "ytui_server.services.suggestions.ytdlp.home_recommendations",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("ytui_server.services.suggestions.ytdlp.related_videos", new=related),
+    ):
+        resp = client.get("/api/suggestions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["video_id"] for v in body["videos"]] == ["relA1"]
+    assert COOKIE_STALE_WARNING in body["warnings"]
+
+
+def test_suggestions_fall_back_when_home_fails(client, app, settings):
+    _watch(client, "seedA0000001", channel_id="UCchanA00000000000000000")
+    _with_cookies(app, settings)
+    related = _related_mock({"seedA0000001": [make_video("relA1")]})
+    with (
+        patch(
+            "ytui_server.services.suggestions.ytdlp.home_recommendations",
+            new=AsyncMock(side_effect=ytdlp.UpstreamError("cookies rejected")),
+        ),
+        patch("ytui_server.services.suggestions.ytdlp.related_videos", new=related),
+    ):
+        resp = client.get("/api/suggestions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [v["video_id"] for v in body["videos"]] == ["relA1"]
+    assert COOKIE_STALE_WARNING in body["warnings"]

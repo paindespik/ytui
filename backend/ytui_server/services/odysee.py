@@ -247,7 +247,9 @@ async def stream_type(video_id: str) -> str:
         return ""
 
 
-async def comments(claim_id: str, page: int = 1, page_size: int = 50) -> CommentsResponse:
+async def comments(
+    claim_id: str, page: int = 1, page_size: int = 50, parent_id: str | None = None
+) -> CommentsResponse:
     """List comments for a claim (public Commentron API) with reaction counts."""
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -261,8 +263,8 @@ async def comments(claim_id: str, page: int = 1, page_size: int = 50) -> Comment
                         "claim_id": claim_id,
                         "page": page,
                         "page_size": page_size,
-                        "top_level": True,
                         "sort_by": 3,
+                        **({"parent_id": parent_id} if parent_id else {"top_level": True}),
                     },
                 },
                 headers=_HEADERS,

@@ -119,7 +119,7 @@ class YouTubeService:
             created = youtube.commentThreads().insert(part="snippet", body=body).execute()
         except Exception as exc:
             log.warning("youtube post_comment failed for %s: %s", video_id, exc)
-            raise ApiError(_api_message(exc)) from exc
+            raise ApiError(_write_message(exc)) from exc
         return _thread_comment(created)
 
     def list_comments(
@@ -157,6 +157,48 @@ class YouTubeService:
             next_cursor=response.get("nextPageToken"),
         )
 
+    def list_replies(
+        self, comment_id: str, cursor: str | None = None, limit: int = 50
+    ) -> CommentsResponse:
+        """Replies to one top-level comment, oldest first (blocking).
+
+        `comments.list` reports no grand total, so `total` stays 0: clients keep
+        the parent's `replies` count.
+        """
+        youtube = self._client()
+        try:
+            response = (
+                youtube.comments()
+                .list(
+                    part="snippet",
+                    parentId=comment_id,
+                    maxResults=limit,
+                    textFormat="plainText",
+                    pageToken=cursor or None,
+                )
+                .execute()
+            )
+        except Exception as exc:
+            if _is_comments_disabled(exc):
+                return CommentsResponse(items=[], disabled=True)
+            log.warning("youtube list_replies failed for %s: %s", comment_id, exc)
+            raise ApiError(_api_message(exc)) from exc
+        return CommentsResponse(
+            items=[_reply_comment(c) for c in response.get("items") or []],
+            next_cursor=response.get("nextPageToken"),
+        )
+
+    def post_reply(self, comment_id: str, text: str) -> CommentOut:
+        """Reply to a top-level comment and return it as stored (blocking)."""
+        youtube = self._client()
+        body = {"snippet": {"parentId": comment_id, "textOriginal": text}}
+        try:
+            created = youtube.comments().insert(part="snippet", body=body).execute()
+        except Exception as exc:
+            log.warning("youtube post_reply failed for %s: %s", comment_id, exc)
+            raise ApiError(_write_message(exc)) from exc
+        return _reply_comment(created)
+
     @staticmethod
     def _comment_count(youtube, video_id: str) -> int:
         """Total comment count from the video statistics, 0 when unavailable."""
@@ -183,6 +225,22 @@ def _thread_comment(thread: dict) -> CommentOut:
     )
 
 
+def _reply_comment(comment: dict) -> CommentOut:
+    """Map a raw `comment` resource (comments.list / comments.insert).
+
+    Unlike a commentThread the snippet sits at the top level, and a reply has
+    no reply count of its own.
+    """
+    snippet = comment.get("snippet") or {}
+    return CommentOut(
+        comment_id=comment.get("id") or "",
+        text=snippet.get("textOriginal") or snippet.get("textDisplay") or "",
+        channel_name=snippet.get("authorDisplayName") or "",
+        timestamp=_epoch(snippet.get("publishedAt")),
+        likes=int(snippet.get("likeCount") or 0),
+    )
+
+
 def _epoch(published_at: str | None) -> int | None:
     """RFC-3339 publication date → epoch seconds (the clients' comment format)."""
     if not published_at:
@@ -195,11 +253,31 @@ def _epoch(published_at: str | None) -> int | None:
 
 def _is_comments_disabled(exc: Exception) -> bool:
     """403 raised because the uploader turned comments off (not a real failure)."""
-    status = getattr(getattr(exc, "resp", None), "status", None)
+    return _status(exc) == 403 and "commentsDisabled" in _content(exc)
+
+
+def _write_message(exc: Exception) -> str:
+    """Message for a failed comment write.
+
+    YouTube answers 400 `processingFailure` for a well-formed request it simply
+    declines — a thread closed to new replies, or its spam heuristics. Observed
+    on most popular videos' top comments, so it must not surface as a raw
+    HttpError dump.
+    """
+    if _status(exc) == 400 and "processingFailure" in _content(exc):
+        return "YouTube declined the comment (this thread may not accept new replies)"
+    return _api_message(exc)
+
+
+def _status(exc: Exception) -> int | None:
+    return getattr(getattr(exc, "resp", None), "status", None)
+
+
+def _content(exc: Exception) -> str:
     content = getattr(exc, "content", b"") or b""
     if isinstance(content, bytes):
         content = content.decode("utf-8", "replace")
-    return status == 403 and "commentsDisabled" in content
+    return content
 
 
 def _api_message(exc: Exception) -> str:

@@ -259,6 +259,12 @@ class AuthStatusOut(BaseModel):
     authenticated: bool
 
 
+class YouTubeAuthStatusOut(BaseModel):
+    authenticated: bool
+    # Account cookies for the personalised home feed; independent of the token.
+    cookies: bool = False
+
+
 class StatusOut(BaseModel):
     version: str
     uptime_seconds: float

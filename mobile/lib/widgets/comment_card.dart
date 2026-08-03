@@ -9,7 +9,16 @@ import '../theme.dart';
 class CommentCard extends StatelessWidget {
   final Comment comment;
 
-  const CommentCard({super.key, required this.comment});
+  /// Tapping the reply count expands the thread; null keeps the count inert.
+  final VoidCallback? onToggleReplies;
+  final bool repliesExpanded;
+
+  const CommentCard({
+    super.key,
+    required this.comment,
+    this.onToggleReplies,
+    this.repliesExpanded = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -119,7 +128,37 @@ class CommentCard extends StatelessWidget {
                         ],
                         if (comment.likes > 0 && comment.replies > 0)
                           const SizedBox(width: 12),
-                        if (comment.replies > 0) ...[
+                        if (comment.replies > 0 && onToggleReplies != null)
+                          InkWell(
+                            onTap: onToggleReplies,
+                            borderRadius: BorderRadius.circular(kRadiusSm),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    repliesExpanded
+                                        ? Icons.expand_less
+                                        : Icons.reply_outlined,
+                                    size: 12,
+                                    color: colors.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: colors.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else if (comment.replies > 0) ...[
                           Icon(
                             Icons.reply_outlined,
                             size: 12,

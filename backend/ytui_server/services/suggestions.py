@@ -1,8 +1,9 @@
-"""History-based suggestions: aggregate related videos of recent watches.
+"""Home suggestions: the account's YouTube home feed, else history-based related videos.
 
-Anonymous approach (no Google account/cookies): take the last few YouTube
-videos from watch history as seeds, fetch their related videos in parallel,
-then interleave the sources round-robin for diversity.
+With account cookies pushed to the server (see services/cookies.py) the feed is
+YouTube's own personalised home page. Without them, the anonymous fallback takes
+the last few YouTube videos from watch history as seeds, fetches their related
+videos in parallel, then interleaves the sources round-robin for diversity.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import logging
 from ..db import Database
 from ..models import Video
 from . import ytdlp
+from .cookies import CookieStore
 from .feed import FeedResult
 
 SEED_COUNT = 8
@@ -21,6 +23,10 @@ MAX_SUGGESTIONS = 50
 CACHE_KEY = "suggestions:home"
 
 EMPTY_HISTORY_WARNING = "No watch history yet: watch a few videos to get suggestions"
+COOKIE_STALE_WARNING = (
+    "YouTube rejected the account cookies: run `ytui auth cookies` again "
+    "(falling back to history-based suggestions)"
+)
 
 log = logging.getLogger(__name__)
 
@@ -64,9 +70,55 @@ def _interleave(
 
 
 class SuggestionsService:
-    def __init__(self, db: Database, ttl_seconds: int = 30 * 60) -> None:
+    def __init__(
+        self,
+        db: Database,
+        ttl_seconds: int = 30 * 60,
+        cookies: CookieStore | None = None,
+        keepalive_hours: int = 0,
+    ) -> None:
         self.db = db
         self.ttl_seconds = ttl_seconds
+        self.cookies = cookies
+        self.keepalive_hours = keepalive_hours
+        self._keepalive: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Start the cookie keep-alive task (no-op without cookies or interval)."""
+        if (
+            self._keepalive is None
+            and self.keepalive_hours > 0
+            and self.cookies is not None
+        ):
+            self._keepalive = asyncio.get_running_loop().create_task(self._keepalive_loop())
+
+    async def stop(self) -> None:
+        task, self._keepalive = self._keepalive, None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _keepalive_loop(self) -> None:
+        """Periodic authenticated request so Google rotates (and yt-dlp rewrites)
+        the stored cookies instead of letting the session lapse."""
+        assert self.cookies is not None
+        while True:
+            await asyncio.sleep(self.keepalive_hours * 3600)
+            if not self.cookies.exists():
+                continue
+            try:
+                videos = await ytdlp.home_recommendations(self.cookies.path, limit=1)
+            except ytdlp.UpstreamError as exc:
+                log.warning("cookie keep-alive failed: %s", exc)
+                continue
+            if videos:
+                log.info("cookie session refreshed")
+            else:
+                log.warning("cookie keep-alive got no videos: session may be stale")
 
     async def suggestions(self, force_refresh: bool = False) -> FeedResult:
         if not force_refresh:
@@ -74,17 +126,32 @@ class SuggestionsService:
             if cached is not None:
                 return FeedResult(cached, [])
 
+        stale_warning: str | None = None
+        if self.cookies is not None and self.cookies.exists():
+            try:
+                videos = await ytdlp.home_recommendations(
+                    self.cookies.path, limit=MAX_SUGGESTIONS
+                )
+            except ytdlp.UpstreamError as exc:
+                log.warning("home recommendations failed: %s", exc)
+                videos = []
+            if videos:
+                self.db.set_feed(CACHE_KEY, videos)
+                return FeedResult(videos)
+            stale_warning = COOKIE_STALE_WARNING
+
         history = [video for video, _, _ in self.db.watch_history(limit=100)]
         seeds = _pick_seeds(history)
+        prefix = [stale_warning] if stale_warning else []
         if not seeds:
-            return FeedResult([], [EMPTY_HISTORY_WARNING])
+            return FeedResult([], [*prefix, EMPTY_HISTORY_WARNING])
 
         results = await asyncio.gather(
             *(ytdlp.related_videos(s.video_id, limit=RELATED_PER_SEED) for s in seeds),
             return_exceptions=True,
         )
         sources: list[list[Video]] = []
-        warnings: list[str] = []
+        warnings: list[str] = list(prefix)
         for seed, result in zip(seeds, results):
             if isinstance(result, BaseException):
                 warnings.append(f"{seed.title or seed.video_id}: {result}")

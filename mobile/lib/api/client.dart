@@ -198,6 +198,38 @@ class YtuiApi {
     return CommentsPage.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// One page of replies to a top-level comment.
+  Future<CommentsPage> commentReplies(
+    String videoId,
+    String commentId, {
+    String platform = 'youtube',
+    String? cursor,
+    int pageSize = 50,
+  }) async {
+    final r = await _request(
+      'GET',
+      '/api/videos/${_enc(videoId)}/comments/${_enc(commentId)}/replies',
+      query: {
+        'platform': platform,
+        'page_size': pageSize,
+        if (cursor != null) 'cursor': cursor,
+      },
+    );
+    return CommentsPage.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// Posts a reply and returns it as stored server-side.
+  Future<Comment> replyComment(String videoId, String commentId, String text,
+      {String platform = 'youtube'}) async {
+    final r = await _request(
+      'POST',
+      '/api/videos/${_enc(videoId)}/comments/${_enc(commentId)}/reply',
+      query: {'platform': platform},
+      data: {'text': text},
+    );
+    return Comment.fromJson(r.data as Map<String, dynamic>);
+  }
+
   // ─── Followed channels ───
 
   Future<List<FollowedChannel>> channels() async {

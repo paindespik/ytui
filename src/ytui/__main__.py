@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 from .config import Config, load_config
 
@@ -103,6 +104,60 @@ def _cmd_auth_push(config: Config) -> int:
     return asyncio.run(push())
 
 
+def _cmd_auth_cookies(config: Config, args) -> int:
+    """Push (or drop) the browser's YouTube cookies for personalised suggestions."""
+    from . import auth
+    from .api_client import YtuiApiError
+
+    client = _client(config)
+    if client is None:
+        return 1
+
+    cookies_text: str | None = None
+    from_browser = False
+    if not args.clear:
+        if args.file:
+            try:
+                cookies_text = Path(args.file).read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+        else:
+            browser, _, profile = args.from_browser.partition(":")
+            try:
+                cookies_text = auth.export_browser_cookies(browser, profile or None)
+            except auth.AuthError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            from_browser = True
+
+    async def run() -> int:
+        try:
+            if cookies_text is None:
+                await client.delete_youtube_cookies()
+                print("YouTube cookies removed from the server.")
+                return 0
+            await client.push_youtube_cookies(cookies_text)
+            _, cookies = await client.youtube_auth_status()
+        except YtuiApiError as exc:
+            print(f"Cookie upload failed: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            await client.close()
+        if not cookies:
+            print("Server did not keep the cookies.", file=sys.stderr)
+            return 1
+        print("Personalised suggestions enabled.")
+        if from_browser:
+            print(
+                "Tip: a session you keep browsing in gets rotated by Google. Export from "
+                "a private window and close it to keep the server session alive."
+            )
+        return 0
+
+    return asyncio.run(run())
+
+
 def main(argv: list[str] | None = None) -> int:
     from . import __version__
 
@@ -123,6 +178,21 @@ def main(argv: list[str] | None = None) -> int:
     auth_sub = auth_parser.add_subparsers(dest="auth_command")
     auth_sub.add_parser(
         "push", help="Run the OAuth consent flow locally and push the token to the server"
+    )
+    cookies_parser = auth_sub.add_parser(
+        "cookies", help="Push the browser's YouTube cookies (personalised suggestions)"
+    )
+    source = cookies_parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--from-browser",
+        metavar="BROWSER[:PROFILE]",
+        help="Read cookies from a local browser (firefox, chromium, chrome, brave, edge, vivaldi…)",
+    )
+    source.add_argument(
+        "--file", metavar="PATH", help="Netscape cookies.txt exported from the browser"
+    )
+    source.add_argument(
+        "--clear", action="store_true", help="Remove the cookies stored on the server"
     )
 
     args = parser.parse_args(argv)
@@ -145,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "auth":
         if args.auth_command == "push":
             return _cmd_auth_push(config)
+        if args.auth_command == "cookies":
+            return _cmd_auth_cookies(config, args)
         auth_parser.print_help()
         return 1
 

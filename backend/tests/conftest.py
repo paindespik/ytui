@@ -32,7 +32,7 @@ def settings(tmp_path: Path) -> Settings:
 
 @pytest.fixture()
 def app(settings):
-    return create_app(settings, start_live_poll=False)
+    return create_app(settings, start_pollers=False)
 
 
 @pytest.fixture()

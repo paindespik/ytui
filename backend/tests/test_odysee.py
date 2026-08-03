@@ -327,6 +327,49 @@ def test_comments_disabled_returns_empty(client):
     }
 
 
+def test_odysee_replies_requests_parent_only(client):
+    """`parent_id` replaces `top_level`, else Commentron returns the whole thread."""
+    seen: list[dict] = []
+    results = iter([_rpc(COMMENT_LIST_RESULT), _rpc(REACTION_LIST_RESULT)])
+
+    async def fake_post(url, **kwargs):
+        seen.append(kwargs["json"]["params"])
+        return httpx.Response(
+            200, json=next(results), request=httpx.Request("POST", str(url))
+        )
+
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/comments/cid1/replies",
+            params={"platform": "odysee"},
+        )
+    assert resp.status_code == 200
+    assert seen[0]["parent_id"] == "cid1"
+    assert "top_level" not in seen[0]
+    assert resp.json()["items"][0]["text"] == "Great video"
+
+
+def test_odysee_replies_cursor_pagination(client):
+    post_patch, _ = _mock_odysee_http(
+        [_rpc(COMMENT_LIST_RESULT), _rpc(REACTION_LIST_RESULT)]
+    )
+    with post_patch as post_mock:
+        resp = client.get(
+            "/api/videos/linux-video:aa11/comments/cid1/replies",
+            params={"platform": "odysee", "page_size": 2, "cursor": "3"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["next_cursor"] == "4"
+    assert post_mock.call_args_list[0].kwargs["json"]["params"]["page"] == 3
+
+
+def test_replies_unsupported_platform(client):
+    resp = client.get(
+        "/api/videos/vid000000001/comments/cid1/replies", params={"platform": "bitchute"}
+    )
+    assert resp.status_code == 501
+
+
 # ─── like/comment write guards ───
 
 

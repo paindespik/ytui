@@ -278,6 +278,71 @@ async def video_comments(
     return response
 
 
+@router.get(
+    "/videos/{video_id}/comments/{comment_id}/replies", response_model=CommentsResponse
+)
+async def comment_replies(
+    video_id: str,
+    comment_id: str,
+    request: Request,
+    platform: Platform = "youtube",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = None,
+) -> CommentsResponse:
+    """Replies to one comment. `video_id` is only needed by Odysee (claim id)."""
+    if platform == "youtube":
+        yt = request.app.state.youtube_service
+        try:
+            return await anyio.to_thread.run_sync(
+                functools.partial(
+                    yt.list_replies, comment_id, cursor=cursor, limit=page_size
+                )
+            )
+        except AuthError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if platform != "odysee":
+        raise HTTPException(
+            status_code=501, detail=f"Comment replies are not available for {platform}"
+        )
+    if cursor and cursor.isdigit():
+        page = int(cursor)
+    try:
+        response = await odysee.comments(
+            odysee.claim_id_from_video_id(video_id),
+            page=page,
+            page_size=page_size,
+            parent_id=comment_id,
+        )
+    except odysee.OdyseeError as exc:
+        raise HTTPException(status_code=502, detail=f"Replies fetch failed: {exc}") from exc
+    if len(response.items) == page_size:
+        response.next_cursor = str(page + 1)
+    return response
+
+
+@router.post("/videos/{video_id}/comments/{comment_id}/reply", response_model=CommentOut)
+async def reply_to_comment(
+    video_id: str,
+    comment_id: str,
+    body: CommentIn,
+    request: Request,
+    platform: Platform = "youtube",
+) -> CommentOut:
+    """Post a reply and return it, so clients can append it right away."""
+    if platform != "youtube":
+        raise HTTPException(status_code=409, detail=_write_unsupported_detail(platform))
+    yt = request.app.state.youtube_service
+    try:
+        return await anyio.to_thread.run_sync(yt.post_reply, comment_id, body.text)
+    except AuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.get("/videos/{video_id}/rating", response_model=RatingOut)
 async def video_rating(video_id: str, request: Request, platform: Platform = "youtube") -> RatingOut:
     """The signed-in account's rating, so a client can show the like button state."""

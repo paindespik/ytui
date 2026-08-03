@@ -1,12 +1,15 @@
-"""Local YouTube OAuth2 consent flow (Desktop app), for `ytui auth push`.
+"""Local YouTube credentials for `ytui auth push` / `ytui auth cookies`.
 
 The browser consent runs on this machine; the resulting token is then pushed
 to the backend server, which performs the actual like/comment calls.
 Google client libraries are optional; install with `pip install 'ytui[auth]'`.
+Cookie export only needs yt-dlp, which is a hard dependency.
 """
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
 from .config import Config, config_dir
@@ -63,3 +66,37 @@ def _save_token(path: Path, token_json: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(token_json, encoding="utf-8")
     path.chmod(0o600)
+
+
+def export_browser_cookies(browser: str, profile: str | None = None) -> str:
+    """Netscape cookie text holding only the youtube.com cookies of `browser`.
+
+    Never returns the whole browser jar: the server has no business with
+    unrelated sites' cookies.
+    """
+    from yt_dlp.cookies import YoutubeDLCookieJar, extract_cookies_from_browser
+
+    try:
+        source = extract_cookies_from_browser(browser, profile)
+    except Exception as exc:
+        raise AuthError(f"Could not read {browser} cookies: {exc}") from exc
+
+    jar = YoutubeDLCookieJar()
+    for cookie in source:
+        if (cookie.domain or "").endswith("youtube.com"):
+            jar.set_cookie(cookie)
+    if not any(True for _ in jar):
+        raise AuthError(
+            f"No youtube.com cookies in the {browser} profile (sign in to youtube.com first)"
+        )
+
+    fd, name = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        jar.save(str(tmp), ignore_discard=True, ignore_expires=True)
+        return tmp.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise AuthError(f"Could not read {browser} cookies: {exc}") from exc
+    finally:
+        tmp.unlink(missing_ok=True)
