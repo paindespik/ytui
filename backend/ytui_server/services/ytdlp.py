@@ -23,6 +23,8 @@ import httpx
 from ..models import StreamInfo, SubtitleTrackOut, Video, VideoDetails
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
+# Only for the signed-in home feed: YouTube tailors that grid to the client.
+_BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/143.0"
 
 log = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
@@ -571,24 +573,78 @@ async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
 
 
 async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video]:
-    """Personalised YouTube home feed; needs the account cookies file."""
-    return await _run(_BULK_SEM, _extract_recommended, cookie_file, limit)
+    """The account's YouTube home feed, scraped with the pushed cookies.
+
+    Reads the very page the browser shows, so the content and its order match
+    what the account sees on youtube.com. yt-dlp's `:ytrec`
+    (/feed/recommended) was measured to carry the same videos but also mixes in
+    radio playlists ("My Mix") in a different order, which made the tab look
+    nothing like the real home.
+
+    Returns [] when the cookies no longer authenticate, so callers can warn and
+    fall back instead of serving an anonymous feed as if it were personal.
+    """
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    jar = YoutubeDLCookieJar(str(cookie_file))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as exc:
+        raise UpstreamError(f"unreadable cookie file: {exc}") from exc
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            cookies=jar,
+            # A browser User-Agent is not cosmetic here: with the server's own
+            # UA YouTube returns a thinner grid (measured 18 items vs 23).
+            headers={"User-Agent": _BROWSER_UA},
+        ) as http_client:
+            resp = await http_client.get("https://www.youtube.com/")
+            if resp.status_code == 429:
+                raise UpstreamError("YouTube rate-limited the home feed (429)")
+            resp.raise_for_status()
+            html = resp.text
+        if '"LOGGED_IN":true' not in html:
+            log.warning("home feed served anonymously: the cookies no longer authenticate")
+            return []
+        match = _YT_INITIAL_DATA_RE.search(html)
+        if not match:
+            raise UpstreamError("ytInitialData not found")
+        data = json.loads(match.group(1))
+    except UpstreamError:
+        raise
+    except Exception as exc:
+        log.warning("home recommendations failed: %s", exc)
+        raise UpstreamError(str(exc)) from exc
+
+    # Google rotates session cookies on every request; persisting them is what
+    # keeps the pushed session from lapsing.
+    _save_cookies(jar, cookie_file)
+
+    videos: list[Video] = []
+    seen: set[str] = set()
+    # _walk_lockups keeps only LOCKUP_CONTENT_TYPE_VIDEO, which drops the ad
+    # slots, the Shorts shelf and the radio playlists of the real grid.
+    for lockup in _walk_lockups(data):
+        try:
+            video = _lockup_to_video(lockup)
+        except Exception:
+            continue
+        if video is None or video.video_id in seen:
+            continue
+        seen.add(video.video_id)
+        videos.append(video)
+        if len(videos) >= limit:
+            break
+    return videos
 
 
-def _extract_recommended(cookie_file: Path, limit: int) -> list[Video]:
-    import yt_dlp
-
-    opts = {
-        **_YDL_FLAT_OPTS,
-        # ":ytrec" resolves to a playlist of URLs: with extract_flat=True (the
-        # module default) yt-dlp stops at the wrapper and yields zero entries.
-        "extract_flat": "in_playlist",
-        "playlist_items": f"1:{limit}",
-        # `cookiefile` (not cookiesfrombrowser): YoutubeDL.close() saves the
-        # jar back here, so Google's rotated cookies are persisted.
-        "cookiefile": str(cookie_file),
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(":ytrec", download=False)
-    videos = (entry_to_item(e) for e in (info.get("entries") or []) if e)
-    return [v for v in videos if v is not None]
+def _save_cookies(jar, cookie_file: Path) -> None:
+    """Write the (possibly rotated) jar back, keeping it private."""
+    try:
+        jar.save(str(cookie_file), ignore_discard=True, ignore_expires=True)
+        cookie_file.chmod(0o600)
+    except Exception as exc:  # a stale file is recoverable; a crash here is not
+        log.warning("could not persist rotated cookies: %s", exc)
