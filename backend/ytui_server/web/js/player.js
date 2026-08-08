@@ -60,9 +60,11 @@ export class Player {
     this._onTimeUpdate = this._onTimeUpdate.bind(this);
     this._onElementError = this._onElementError.bind(this);
     this._onVolume = this._onVolume.bind(this);
+    this._onPlay = this._onPlay.bind(this);
     videoEl.addEventListener("timeupdate", this._onTimeUpdate);
     videoEl.addEventListener("error", this._onElementError);
     videoEl.addEventListener("volumechange", this._onVolume);
+    videoEl.addEventListener("play", this._onPlay);
     videoEl.volume = prefs.volume;
     videoEl.muted = prefs.muted;
 
@@ -103,6 +105,7 @@ export class Player {
     this.el.removeEventListener("timeupdate", this._onTimeUpdate);
     this.el.removeEventListener("error", this._onElementError);
     this.el.removeEventListener("volumechange", this._onVolume);
+    this.el.removeEventListener("play", this._onPlay);
     for (const k of Object.keys(playerActions)) delete playerActions[k];
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = null;
@@ -524,6 +527,13 @@ export class Player {
     this._gainNode = gain;
     this._limiter = limiter;
     return true;
+  }
+
+  // Un AudioContext créé hors geste utilisateur naît « suspended » : sans cette
+  // reprise, une préférence ×N restaurée à l'ouverture de la page donnerait une
+  // vidéo muette (le graphe avale le son de l'élément sans rien sortir).
+  _onPlay() {
+    this._audioCtx?.resume().catch(() => {});
   }
 
   _onVolume() {
