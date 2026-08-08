@@ -56,6 +56,7 @@ export class Player {
     this._audioCtx = null;
     this._gainNode = null;
     this._limiter = null;
+    this._gestureResume = null;
 
     this._onTimeUpdate = this._onTimeUpdate.bind(this);
     this._onElementError = this._onElementError.bind(this);
@@ -118,6 +119,7 @@ export class Player {
       }
     }
     this._audioCtx?.close().catch(() => {});
+    this._unbindGestureResume();
     this._audioCtx = null;
     this._gainNode = null;
     this._limiter = null;
@@ -504,7 +506,7 @@ export class Player {
     // Retour à ×1 : limiteur transparent (ratio 1), le son reste celui du flux.
     this._limiter.threshold.value = this.gain > 1 ? -6 : 0;
     this._limiter.ratio.value = this.gain > 1 ? 12 : 1;
-    this._audioCtx.resume().catch(() => {});
+    this._resumeAudio();
   }
 
   _ensureGraph() {
@@ -526,14 +528,41 @@ export class Player {
     this._audioCtx = ctx;
     this._gainNode = gain;
     this._limiter = limiter;
+    // Créé hors geste utilisateur, le contexte naît « suspended » : le graphe
+    // avalerait alors le son de l'élément sans rien sortir.
+    if (ctx.state !== "running") this._bindGestureResume();
     return true;
   }
 
-  // Un AudioContext créé hors geste utilisateur naît « suspended » : sans cette
-  // reprise, une préférence ×N restaurée à l'ouverture de la page donnerait une
-  // vidéo muette (le graphe avale le son de l'élément sans rien sortir).
+  // Reprise du contexte : à la lecture, sinon au premier geste utilisateur —
+  // une piste lancée en autoplay ne fournit aucune activation, et resume() est
+  // alors refusé.
+  _resumeAudio() {
+    const ctx = this._audioCtx;
+    if (!ctx) return;
+    if (ctx.state === "running") {
+      this._unbindGestureResume();
+      return;
+    }
+    ctx.resume().then(() => this._unbindGestureResume()).catch(() => {});
+  }
+
+  _bindGestureResume() {
+    if (this._gestureResume) return;
+    this._gestureResume = () => this._resumeAudio();
+    document.addEventListener("pointerdown", this._gestureResume, true);
+    document.addEventListener("keydown", this._gestureResume, true);
+  }
+
+  _unbindGestureResume() {
+    if (!this._gestureResume) return;
+    document.removeEventListener("pointerdown", this._gestureResume, true);
+    document.removeEventListener("keydown", this._gestureResume, true);
+    this._gestureResume = null;
+  }
+
   _onPlay() {
-    this._audioCtx?.resume().catch(() => {});
+    this._resumeAudio();
   }
 
   _onVolume() {
