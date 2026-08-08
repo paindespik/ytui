@@ -23,6 +23,9 @@ function set(key, value) {
 
 // Échelle de qualité partagée (Réglages + sélecteur du lecteur).
 export const QUALITIES = [360, 480, 720, 1080, 1440, 2160];
+// Amplification audio du lecteur : au-delà de ×1 il faut passer par Web Audio,
+// l'élément <video> plafonnant à 100 % du niveau de la source.
+export const GAINS = [1, 1.25, 1.5, 2, 2.5, 3];
 
 export const prefs = {
   get sponsorblock() { return getBool("sponsorblock", true); },
@@ -35,6 +38,8 @@ export const prefs = {
   set volume(v) { set("volume", v); },
   get muted() { return getBool("muted", false); },
   set muted(v) { set("muted", v); },
+  get gain() { return getNum("gain", 1); },
+  set gain(v) { set("gain", v); },
 };
 
 export const watched = {

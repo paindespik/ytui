@@ -7,6 +7,11 @@
 //   kind=progressive       → URL directe ; 1er échec → même URL via /api/proxy.
 //   split sans MPD         → re-résolution en 360p progressive.
 // Erreur fatale → une seule re-résolution complète (URL expirée), puis message.
+//
+// Amplification (>100 %) : impossible sur l'élément seul, il faut un GainNode
+// Web Audio. Brancher un MediaElementSource sur un média cross-origin le rend
+// muet (flux « tainted »), donc dès que le graphe existe les URL progressives
+// passent par le proxy same-origin — cf. _sourceUrl.
 
 import { api } from "./api.js";
 import { prefs, watched } from "./state.js";
@@ -47,6 +52,10 @@ export class Player {
     this._segments = [];
     this._lastSkip = 0;
     this._destroyed = false;
+    this.gain = prefs.gain;
+    this._audioCtx = null;
+    this._gainNode = null;
+    this._limiter = null;
 
     this._onTimeUpdate = this._onTimeUpdate.bind(this);
     this._onElementError = this._onElementError.bind(this);
@@ -105,11 +114,18 @@ export class Player {
         }
       }
     }
+    this._audioCtx?.close().catch(() => {});
+    this._audioCtx = null;
+    this._gainNode = null;
+    this._limiter = null;
   }
 
   // ─── Résolution + choix du moteur ───
 
   async _attach(start) {
+    // Avant tout choix de source : _useProgressive doit savoir si le graphe
+    // Web Audio existe (il impose le proxy same-origin).
+    this._applyGain();
     const v = this.video;
     const streamsP = api.videoStreams(v.video_id, {
       platform: v.platform,
@@ -177,10 +193,18 @@ export class Player {
     this._applyRate();
   }
 
+  // Le graphe Web Audio rend muet un média cross-origin : dès qu'il existe, la
+  // lecture progressive doit venir du proxy same-origin.
+  _sourceUrl(url) {
+    if (!this._audioCtx) return url;
+    this._proxied = true;
+    return api.proxyUrl(url);
+  }
+
   _useProgressive(url, start) {
     this._engine = "progressive";
     this._directUrl = url;
-    this.el.src = url; // jouable inter-IP sans CORS (élément natif)
+    this.el.src = this._sourceUrl(url); // jouable inter-IP sans CORS (élément natif)
     this._seekOnReady(start);
     this._play();
   }
@@ -450,6 +474,56 @@ export class Player {
 
   _applyRate() {
     this.el.playbackRate = this.rate;
+  }
+
+  // Amplification au-delà de 100 %. Le limiteur qui suit le gain empêche la
+  // saturation franche sur les pics d'un flux déjà proche du 0 dBFS.
+  setGain(g) {
+    this.gain = Math.min(3, Math.max(1, g));
+    prefs.gain = this.gain;
+    const wasDirect = this._engine === "progressive" && !this._audioCtx;
+    this._applyGain();
+    if (wasDirect && this._audioCtx && this._directUrl) {
+      // Le graphe vient de naître : rebasculer la source sur le proxy, sinon
+      // le média cross-origin devient muet.
+      const pos = this.el.currentTime;
+      this.el.src = this._sourceUrl(this._directUrl);
+      this._seekOnReady(pos);
+      this._play();
+    }
+    toast(`Volume ×${this.gain.toLocaleString("fr-FR")}`);
+  }
+
+  _applyGain() {
+    if (this.gain === 1 && !this._gainNode) return; // aucun graphe à créer
+    if (!this._ensureGraph()) return;
+    this._gainNode.gain.value = this.gain;
+    // Retour à ×1 : limiteur transparent (ratio 1), le son reste celui du flux.
+    this._limiter.threshold.value = this.gain > 1 ? -6 : 0;
+    this._limiter.ratio.value = this.gain > 1 ? 12 : 1;
+    this._audioCtx.resume().catch(() => {});
+  }
+
+  _ensureGraph() {
+    if (this._gainNode) return true;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      toast("Amplification non prise en charge par ce navigateur");
+      return false;
+    }
+    const ctx = new Ctx();
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.knee.value = 6;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.25;
+    const gain = ctx.createGain();
+    ctx.createMediaElementSource(this.el).connect(gain);
+    gain.connect(limiter);
+    limiter.connect(ctx.destination);
+    this._audioCtx = ctx;
+    this._gainNode = gain;
+    this._limiter = limiter;
+    return true;
   }
 
   _onVolume() {

@@ -15,7 +15,7 @@ import { queue } from "../js/queue.js";
 import { replace, navigate } from "../js/router.js";
 import { Player, isLiveId } from "../js/player.js";
 import { playerActions } from "../js/shortcuts.js";
-import { prefs, QUALITIES } from "../js/state.js";
+import { prefs, QUALITIES, GAINS } from "../js/state.js";
 import { createComments } from "../js/comments.js";
 
 export async function render(view, { params }) {
@@ -67,6 +67,13 @@ export async function render(view, { params }) {
     "select",
     { class: "input", title: "Sous-titres" },
     el("option", { value: "-1" }, "Sous-titres : aucun"),
+  );
+  const gainSel = el(
+    "select",
+    { class: "input", title: "Amplification audio (au-delà de 100 %)" },
+    GAINS.map((g) =>
+      el("option", { value: String(g), selected: g === prefs.gain }, `Vol ×${g}`),
+    ),
   );
   const qualitySel = el(
     "select",
@@ -228,6 +235,7 @@ export async function render(view, { params }) {
             "div",
             { class: "watch-actions" },
             speedSel,
+            gainSel,
             qualitySel,
             subSel,
             pipBtn,
@@ -341,6 +349,7 @@ export async function render(view, { params }) {
   });
 
   speedSel.addEventListener("change", () => player.setRate(Number(speedSel.value)));
+  gainSel.addEventListener("change", () => player.setGain(Number(gainSel.value)));
   qualitySel.onchange = (e) => player.setMaxHeight(Number(e.target.value));
   subSel.addEventListener("change", () => player.setSubtitle(Number(subSel.value)));
   videoEl.addEventListener("play", clearOverlay);
