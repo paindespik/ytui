@@ -230,6 +230,67 @@ def test_streams_expiry_parsed(client):
     assert resp.json()["expires_at"] == "2024-07-03T09:46:40Z"
 
 
+# ─── BitChute seed hosts ───
+
+BC_URL = "https://seed132.bitchute.com/Ynl2NN4t7THl/pCkE9k5o6DUE.mp4"
+BC_PROG = {"format_id": "0", "url": BC_URL, "protocol": "https",
+           "vcodec": None, "acodec": None}
+
+
+def _patch_head(by_url):
+    """Fake httpx.Client whose HEAD answers per URL: (status, content-type)."""
+    seen: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def head(self, url):
+            seen.append(url)
+            outcome = by_url.get(url, (404, "text/html"))
+            if isinstance(outcome, Exception):
+                raise outcome
+            status, ctype = outcome
+            return httpx.Response(status, headers={"content-type": ctype})
+
+    return patch.object(ytdlp.httpx, "Client", FakeClient), seen
+
+
+def test_streams_bitchute_keeps_canonical_seed(client):
+    head, seen = _patch_head({BC_URL: (200, "video/mp4")})
+    with _patch_ydl(_info([BC_PROG], url=BC_URL)), head:
+        resp = client.get("/api/videos/pCkE9k5o6DUE/streams", params={"platform": "bitchute"})
+    assert resp.json()["url"] == BC_URL
+    assert seen == [BC_URL]
+
+
+def test_streams_bitchute_skips_seed_serving_html(client):
+    """A seed answering 200 text/html is a Cloudflare page, not the video."""
+    good = BC_URL.replace("seed132", "seed150")
+    head, seen = _patch_head(
+        {BC_URL: httpx.ConnectError("aborted"), good: (200, "video/mp4")}
+    )
+    with _patch_ydl(_info([BC_PROG], url=BC_URL)), head:
+        resp = client.get("/api/videos/pCkE9k5o6DUE/streams", params={"platform": "bitchute"})
+    assert resp.json()["url"] == good
+    # The canonical host is retried before any alternate is considered.
+    assert seen[:2] == [BC_URL, BC_URL]
+    assert BC_URL.replace("seed132", "seed122") in seen
+
+
+def test_streams_bitchute_falls_back_to_canonical_when_no_seed_serves(client):
+    head, _ = _patch_head({})
+    with _patch_ydl(_info([BC_PROG], url=BC_URL)), head:
+        resp = client.get("/api/videos/pCkE9k5o6DUE/streams", params={"platform": "bitchute"})
+    assert resp.json()["url"] == BC_URL
+
+
 def test_streams_none_found(client):
     with _patch_ydl(_info([])):
         resp = client.get("/api/videos/vid000000001/streams")

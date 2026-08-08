@@ -51,6 +51,69 @@ _INTERACTIVE_SEM = asyncio.Semaphore(3)  # streams/details: a user is waiting
 _BULK_SEM = asyncio.Semaphore(4)         # search/listings/suggestions
 
 
+# BitChute serves every file from one of many "seedNNN" hosts. yt-dlp probes a
+# hardcoded host list and keeps the first HEAD that does not raise; a flaky HEAD
+# on the canonical host (RemoteDisconnected, seen in production) makes it fall
+# through to a host that answers 200 with a Cloudflare HTML page, and the player
+# is then handed a text/html "video". yt-dlp's probing is therefore turned off
+# (check_formats) and the URL validated here, on content type.
+_BITCHUTE_SEED_RE = re.compile(r"^(https?://)seed[\w-]+(\.bitchute\.com/)")
+_BITCHUTE_SEEDS = (
+    "seed122", "seed125", "seed126", "seed128", "seed132", "seed150", "seed151",
+    "seed152", "seed153", "seed167", "seed171", "seed177", "seed305", "seed307",
+    "seedp29xb", "zb10-7gsop1v78",
+)
+_MEDIA_CONTENT_TYPES = ("video/", "audio/", "application/octet-stream")
+
+
+def _serves_media(client: httpx.Client, url: str, attempts: int) -> bool:
+    """True when `url` answers a HEAD with a media content type."""
+    for _ in range(attempts):
+        try:
+            resp = client.head(url)
+        except httpx.HTTPError as exc:
+            log.debug("bitchute HEAD failed for %s: %s", url, exc)
+            continue
+        if resp.status_code >= 400:
+            return False
+        ctype = (resp.headers.get("content-type") or "").lower()
+        return ctype.startswith(_MEDIA_CONTENT_TYPES)
+    return False
+
+
+def _bitchute_media_url(url: str) -> str:
+    """The first BitChute seed host actually serving the file behind `url`.
+
+    The canonical host gets a second try (its HEADs drop connections at random);
+    the alternates only one. Nothing playable found: keep the canonical URL.
+    """
+    if ".m3u8" in url or not _BITCHUTE_SEED_RE.match(url):
+        return url
+    with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+        if _serves_media(client, url, attempts=2):
+            return url
+        for host in _BITCHUTE_SEEDS:
+            alt = _BITCHUTE_SEED_RE.sub(rf"\g<1>{host}\g<2>", url)
+            if alt != url and _serves_media(client, alt, attempts=1):
+                log.info("bitchute: %s unusable, serving from %s", url, host)
+                return alt
+    log.warning("bitchute: no seed host serves %s", url)
+    return url
+
+
+def _fix_bitchute_formats(info: dict) -> None:
+    """Point every BitChute format at a host that really serves the file."""
+    resolved: dict[str, str] = {}
+    for fmt in [*(info.get("formats") or []), info]:
+        src = fmt.get("url")
+        if not src:
+            continue
+        fixed = resolved.get(src)
+        if fixed is None:
+            fixed = resolved[src] = _bitchute_media_url(src)
+        fmt["url"] = fixed
+
+
 # TTL cache for full (non-flat) extract_info results. The web player hits
 # /streams then /mpd for the same video back to back; without this, each
 # request pays a full multi-second yt-dlp extraction.
@@ -69,9 +132,14 @@ def _extract_info_cached(url: str) -> dict:
             return cached[1]
     import yt_dlp
 
+    bitchute = "bitchute.com" in url
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
+    if bitchute:
+        opts["check_formats"] = False  # see _bitchute_media_url
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
+    if bitchute:
+        _fix_bitchute_formats(info)
     with _INFO_CACHE_LOCK:
         if url not in _INFO_CACHE and len(_INFO_CACHE) >= _INFO_CACHE_MAX:
             oldest = min(_INFO_CACHE, key=lambda k: _INFO_CACHE[k][0])
@@ -207,7 +275,15 @@ async def playlist_videos(playlist_url: str, limit: int = 200) -> tuple[list[Vid
 def _extract_details(url: str) -> VideoDetails:
     import yt_dlp
 
-    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
+    # check_formats: /details never serves a stream URL, so BitChute's seed
+    # probing would only cost a pointless HEAD round.
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "socket_timeout": 15,
+        "check_formats": False,
+    }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     upload_date = info.get("upload_date") or ""
