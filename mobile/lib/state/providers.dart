@@ -71,18 +71,23 @@ class ChannelVideos {
 
 const kChannelPageSize = 50;
 
+/// Family key: (channelId, platform, query). An empty query lists the whole
+/// channel; a non-empty one searches within it.
 final channelVideosProvider = AsyncNotifierProvider.autoDispose
-    .family<ChannelVideosNotifier, ChannelVideos, (String, String)>(
+    .family<ChannelVideosNotifier, ChannelVideos, (String, String, String)>(
         ChannelVideosNotifier.new);
 
-class ChannelVideosNotifier
-    extends AutoDisposeFamilyAsyncNotifier<ChannelVideos, (String, String)> {
+class ChannelVideosNotifier extends AutoDisposeFamilyAsyncNotifier<ChannelVideos,
+    (String, String, String)> {
+  String? get _query => arg.$3.isEmpty ? null : arg.$3;
+
   @override
-  Future<ChannelVideos> build((String, String) arg) async {
+  Future<ChannelVideos> build((String, String, String) arg) async {
     final (videos, title, hasMore) = await ref.watch(apiProvider).channelVideos(
         arg.$1,
         platform: arg.$2,
-        limit: kChannelPageSize);
+        limit: kChannelPageSize,
+        q: _query);
     return ChannelVideos(videos: videos, title: title, hasMore: hasMore);
   }
 
@@ -98,6 +103,7 @@ class ChannelVideosNotifier
             platform: arg.$2,
             limit: kChannelPageSize,
             offset: current.videos.length,
+            q: _query,
           );
       state = AsyncData(current.copyWith(
         videos: [...current.videos, ...videos],

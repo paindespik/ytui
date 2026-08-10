@@ -203,6 +203,39 @@ def test_odysee_channel_videos_requests_media_only(client):
     assert seen[0]["stream_types"] == ["video", "audio"]
 
 
+def test_odysee_channel_videos_query_scopes_lighthouse(client):
+    """claim_search has no full-text filter, so `q` goes through Lighthouse."""
+    seen: list[dict] = []
+
+    async def fake_get(url, **kwargs):
+        seen.append(kwargs["params"])
+        return httpx.Response(
+            200, json=LIGHTHOUSE_HITS, request=httpx.Request("GET", str(url))
+        )
+
+    async def fake_post(url, **kwargs):
+        return httpx.Response(
+            200, json=_rpc(RESOLVE_RESULT), request=httpx.Request("POST", str(url))
+        )
+
+    with (
+        patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get)),
+        patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)),
+    ):
+        resp = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "q": "linux", "limit": 5, "offset": 10},
+        )
+    assert resp.status_code == 200
+    assert seen[0]["channel_id"] == "cc33"
+    assert seen[0]["s"] == "linux"
+    assert seen[0]["from"] == 10
+    assert [i["video_id"] for i in resp.json()["items"]] == [
+        "linux-video:aa11",
+        "other-video:bb22",
+    ]
+
+
 # ─── /api/videos/{id}/streams?platform=odysee ───
 
 

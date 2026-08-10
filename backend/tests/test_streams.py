@@ -107,6 +107,55 @@ def test_channel_videos_exhausted(client):
     assert resp.json()["has_more"] is False
 
 
+def test_channel_videos_query_hits_youtube_search_tab(client):
+    """`q` searches inside the channel rather than filtering client-side."""
+    entries = [{"id": "vid000000001", "title": "Linux", "channel": "Chan"}]
+
+    class RecordingYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            self.url = url
+            return super().extract_info(url, download)
+
+    ydl = RecordingYDL({"entries": entries, "title": "Chan"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl):
+        resp = client.get(
+            "/api/channels/UCtest000000000000000000/videos",
+            params={"q": "linux hits", "limit": 3, "offset": 10},
+        )
+    assert resp.status_code == 200
+    assert ydl.url == (
+        "https://www.youtube.com/channel/UCtest000000000000000000"
+        "/search?query=linux+hits"
+    )
+    assert ydl._opts["playlist_items"] == "11:14"
+    assert [i["video_id"] for i in resp.json()["items"]] == ["vid000000001"]
+
+
+def test_channel_videos_query_filters_platforms_without_search(client):
+    """BitChute has no in-channel search: the listing is filtered on title."""
+    entries = [
+        {"id": "aaaaaaaaaaaa", "title": "Cooking pasta"},
+        {"id": "bbbbbbbbbbbb", "title": "PASTA machine review"},
+        {"id": "cccccccccccc", "title": "Bread"},
+    ]
+    with _patch_ydl({"entries": entries, "title": "Chan"}):
+        resp = client.get(
+            "/api/channels/chan0000/videos",
+            params={"platform": "bitchute", "q": "pasta"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [i["video_id"] for i in body["items"]] == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+    assert body["has_more"] is False
+
+
+def test_channel_videos_rejects_empty_query(client):
+    resp = client.get("/api/channels/UCtest000000000000000000/videos", params={"q": ""})
+    assert resp.status_code == 422
+
+
 def test_playlist_videos(client):
     entries = [{"id": "vid000000001", "title": "V1"}]
     with _patch_ydl({"entries": entries, "title": "My List"}):

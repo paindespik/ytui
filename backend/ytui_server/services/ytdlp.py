@@ -268,6 +268,17 @@ async def channel_videos(channel_url: str, limit: int = 50, offset: int = 0) -> 
     return await _run(_BULK_SEM, _extract_flat, url, limit, offset)
 
 
+async def channel_search(
+    channel_url: str, query: str, limit: int = 50, offset: int = 0
+) -> list[Video]:
+    """Videos of a YouTube channel matching `query` (the channel's Search tab).
+
+    Only YouTube serves this tab; callers must not route other platforms here.
+    """
+    url = f"{channel_url.rstrip('/')}/search?query={quote_plus(query)}"
+    return await _run(_BULK_SEM, _extract_flat, url, limit, offset)
+
+
 async def playlist_videos(playlist_url: str, limit: int = 200) -> tuple[list[Video], str]:
     return await _run(_BULK_SEM, _extract_flat_info, playlist_url, limit)
 

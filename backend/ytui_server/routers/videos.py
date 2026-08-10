@@ -49,6 +49,29 @@ def _video_url(video_id: str, platform: Platform) -> str:
     return Video(video_id=video_id, title="", platform=platform).url
 
 
+# No platform but YouTube and Odysee exposes an in-channel search upstream; for
+# the others the newest uploads are listed once and filtered on title locally.
+_CHANNEL_SCAN_CAP = 200
+
+
+def _channel_url(channel_id: str, platform: Platform) -> str:
+    return Video(video_id=channel_id, title="", kind="channel", platform=platform).url
+
+
+async def _search_channel(
+    channel_id: str, platform: Platform, query: str, limit: int, offset: int
+) -> list[Video]:
+    if platform == "youtube":
+        url = _channel_url(channel_id, platform)
+        return await ytdlp.channel_search(url, query, limit=limit, offset=offset)
+    if platform == "odysee":
+        return await odysee.search(query, limit=limit, offset=offset, channel_id=channel_id)
+    items = await ytdlp.channel_videos(_channel_url(channel_id, platform), limit=_CHANNEL_SCAN_CAP)
+    needle = query.casefold()
+    matches = [item for item in items if needle in item.title.casefold()]
+    return matches[offset : offset + limit]
+
+
 @router.get("/channels/{channel_id}/videos", response_model=ChannelVideosResponse)
 async def channel_videos(
     channel_id: str,
@@ -56,15 +79,19 @@ async def channel_videos(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     platform: Platform = "youtube",
+    q: str | None = Query(default=None, min_length=1),
 ) -> ChannelVideosResponse:
     # One extra item is fetched to tell "more available" from "exhausted".
     probe = limit + 1
     try:
-        if platform == "odysee":
+        if q:
+            items = await _search_channel(channel_id, platform, q, probe, offset)
+        elif platform == "odysee":
             items = await odysee.channel_videos(channel_id, limit=probe, offset=offset)
         else:
-            url = Video(video_id=channel_id, title="", kind="channel", platform=platform).url
-            items = await ytdlp.channel_videos(url, limit=probe, offset=offset)
+            items = await ytdlp.channel_videos(
+                _channel_url(channel_id, platform), limit=probe, offset=offset
+            )
     except (ytdlp.UpstreamError, odysee.OdyseeError) as exc:
         raise HTTPException(status_code=502, detail=f"Channel listing failed: {exc}") from exc
     has_more = len(items) > limit

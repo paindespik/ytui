@@ -41,7 +41,9 @@ class FakeClient:
         self._next_playlist_id = 1
         self.unfollowed: str | None = None
         self.channel_offsets: list[int] = []
+        self.channel_queries: list[str | None] = []
         self.channel_pages: list[list[Video]] = [[VIDEO]]
+        self.channel_search_pages: list[list[Video]] = [[]]
 
     async def close(self) -> None:
         pass
@@ -53,13 +55,15 @@ class FakeClient:
         self.last_search_source = source
         return [ODYSEE_VIDEO] if source == "odysee" else [VIDEO]
 
-    async def channel_videos(self, channel_id, platform="youtube", limit=50, offset=0):
+    async def channel_videos(self, channel_id, platform="youtube", limit=50, offset=0, q=None):
         """offset counts items already received, as the real endpoint does."""
         self.channel_offsets.append(offset)
+        self.channel_queries.append(q)
+        pages = self.channel_pages if q is None else self.channel_search_pages
         start = 0
-        for index, page in enumerate(self.channel_pages):
+        for index, page in enumerate(pages):
             if start == offset:
-                return page, index + 1 < len(self.channel_pages)
+                return page, index + 1 < len(pages)
             start += len(page)
         return [], False
 
@@ -288,6 +292,80 @@ async def test_channel_load_more_appends_page_then_stops(app):
         await pilot.pause()
         assert app.client.channel_offsets == [0, 1]
         assert video_list.row_count == 2
+
+
+async def test_channel_search_filters_then_escape_restores_listing(app):
+    """'/' searches within the channel; escape clears it before leaving the screen."""
+    match = Video(video_id="match000000", title="Matching video", channel_id="UC123")
+    app.client.channel_search_pages = [[match]]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(CHANNEL)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from textual.widgets import Input
+
+        from ytui.ui.widgets.video_list import VideoList
+
+        screen = app.screen
+        search = screen.query_one("#channel-search", Input)
+        assert not search.display
+
+        await pilot.press("slash")
+        await pilot.pause()
+        assert search.display and search.has_focus
+
+        await pilot.press(*"match", "enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        video_list = screen.query_one("#channel-list", VideoList)
+        assert app.client.channel_queries[-1] == "match"
+        assert video_list.video_at_cursor() == match
+        assert "results for 'match'" in screen.sub_title
+        assert video_list.has_focus  # focus handed back to the list
+
+        await pilot.press("escape")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.screen is screen  # escape cleared the search, did not pop
+        assert not search.display
+        assert screen._query is None
+        assert app.client.channel_queries[-1] is None
+        assert video_list.video_at_cursor() == VIDEO
+        assert screen.sub_title.endswith("1 videos (end)")
+
+        await pilot.press("escape")  # no search left: leaves the screen
+        await pilot.pause()
+        assert app.screen is not screen
+
+
+async def test_channel_search_load_more_keeps_query(app):
+    """'m' paginates inside the search results, not the full listing."""
+    first = Video(video_id="match000001", title="First match", channel_id="UC123")
+    second = Video(video_id="match000002", title="Second match", channel_id="UC123")
+    app.client.channel_search_pages = [[first], [second]]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(CHANNEL)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.video_list import VideoList
+
+        await pilot.press("slash")
+        await pilot.press(*"match", "enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        video_list = app.screen.query_one("#channel-list", VideoList)
+        assert video_list.row_count == 1
+
+        await pilot.press("m")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert video_list.row_count == 2
+        assert app.client.channel_queries[-1] == "match"
+        assert app.client.channel_offsets[-1] == 1
 
 
 async def test_playlist_screen_opens(app):

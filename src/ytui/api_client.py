@@ -130,14 +130,29 @@ class YtuiClient:
         return [Video.model_validate(v) for v in data["items"]]
 
     async def channel_videos(
-        self, channel_id: str, platform: str = "youtube", limit: int = 50, offset: int = 0
+        self,
+        channel_id: str,
+        platform: str = "youtube",
+        limit: int = 50,
+        offset: int = 0,
+        q: str | None = None,
     ) -> tuple[list[Video], bool]:
-        """One page of a channel's videos, plus whether older videos remain."""
+        """One page of a channel's videos, plus whether older videos remain.
+
+        With ``q``, the page holds only this channel's videos matching the query.
+        """
+        params: dict[str, str | int] = {
+            "platform": platform,
+            "limit": limit,
+            "offset": offset,
+        }
+        if q:
+            params["q"] = q  # the server rejects an empty q
         data = (
             await self._request(
                 "GET",
                 f"/api/channels/{_encode(channel_id)}/videos",
-                params={"platform": platform, "limit": limit, "offset": offset},
+                params=params,
             )
         ).json()
         return [Video.model_validate(v) for v in data["items"]], data.get("has_more", False)

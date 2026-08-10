@@ -96,9 +96,17 @@ class YtuiApi {
     String platform = 'youtube',
     int limit = 50,
     int offset = 0,
+    String? q,
   }) async {
     final r = await _request('GET', '/api/channels/${_enc(channelId)}/videos',
-        query: {'platform': platform, 'limit': limit, 'offset': offset});
+        query: {
+          'platform': platform,
+          'limit': limit,
+          'offset': offset,
+          // The backend rejects an empty q (min_length=1): omit it entirely
+          // when listing the whole channel.
+          if (q != null && q.isNotEmpty) 'q': q,
+        });
     final data = r.data as Map<String, dynamic>;
     final items = (data['items'] as List<dynamic>? ?? const [])
         .map((e) => Video.fromJson(e as Map<String, dynamic>))

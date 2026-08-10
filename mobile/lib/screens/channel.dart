@@ -1,4 +1,4 @@
-/// Channel screen: latest videos + follow button.
+/// Channel screen: latest videos, in-channel search and follow button.
 library;
 
 import 'package:flutter/material.dart';
@@ -13,7 +13,7 @@ import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
 
-class ChannelScreen extends ConsumerWidget {
+class ChannelScreen extends ConsumerStatefulWidget {
   final String channelId;
   final String platform;
   final String title;
@@ -26,55 +26,125 @@ class ChannelScreen extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final data = ref.watch(channelVideosProvider((channelId, platform)));
+  ConsumerState<ChannelScreen> createState() => _ChannelScreenState();
+}
+
+class _ChannelScreenState extends ConsumerState<ChannelScreen> {
+  /// Search bar shown in place of the title.
+  bool _searching = false;
+
+  /// Submitted query; empty means "list the whole channel".
+  String _query = '';
+
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// The family key of the list currently displayed.
+  (String, String, String) get _arg =>
+      (widget.channelId, widget.platform, _query);
+
+  void _submit(String value) => setState(() => _query = value.trim());
+
+  void _closeSearch() {
+    _controller.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final data = ref.watch(channelVideosProvider(_arg));
     final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          data.valueOrNull?.title.isNotEmpty == true
-              ? data.valueOrNull!.title
-              : title,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.person_add),
-            tooltip: 'Suivre',
-            onPressed: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              final ref_ = switch (platform) {
-                'bitchute' => 'bitchute:$channelId',
-                'odysee' => 'odysee:$channelId',
-                _ => channelId,
-              };
-              try {
-                await ref.read(apiProvider).followChannel(ref_);
-                messenger.showSnackBar(
-                    const SnackBar(content: Text('Channel followed')));
-              } on ApiException catch (e) {
-                messenger.showSnackBar(SnackBar(
-                    content: Text(e.statusCode == 409
-                        ? 'Already followed'
-                        : e.toString())));
-              }
-            },
-          ),
-        ],
+        title: _searching
+            ? Container(
+                height: 40,
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(kRadiusLg),
+                ),
+                child: TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  textInputAction: TextInputAction.search,
+                  decoration: const InputDecoration(
+                    hintText: 'Search this channel…',
+                    prefixIcon: Icon(Icons.search),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  onSubmitted: _submit,
+                ),
+              )
+            : Text(
+                data.valueOrNull?.title.isNotEmpty == true
+                    ? data.valueOrNull!.title
+                    : widget.title,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+        actions: _searching
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Fermer la recherche',
+                  onPressed: _closeSearch,
+                ),
+              ]
+            : [
+                IconButton(
+                  icon: const Icon(Icons.search),
+                  tooltip: 'Rechercher dans la chaîne',
+                  onPressed: () => setState(() => _searching = true),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.person_add),
+                  tooltip: 'Suivre',
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final ref_ = switch (widget.platform) {
+                      'bitchute' => 'bitchute:${widget.channelId}',
+                      'odysee' => 'odysee:${widget.channelId}',
+                      _ => widget.channelId,
+                    };
+                    try {
+                      await ref.read(apiProvider).followChannel(ref_);
+                      messenger.showSnackBar(
+                          const SnackBar(content: Text('Channel followed')));
+                    } on ApiException catch (e) {
+                      messenger.showSnackBar(SnackBar(
+                          content: Text(e.statusCode == 409
+                              ? 'Already followed'
+                              : e.toString())));
+                    }
+                  },
+                ),
+              ],
       ),
       body: data.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
-            onRetry: () =>
-                ref.invalidate(channelVideosProvider((channelId, platform)))),
+            onRetry: () => ref.invalidate(channelVideosProvider(_arg))),
         data: (result) {
           final videos = result.videos;
           if (videos.isEmpty) {
-            return const AppEmpty(
-              message: 'This channel has no videos',
-              icon: Icons.videocam_off_outlined,
-            );
+            return _query.isEmpty
+                ? const AppEmpty(
+                    message: 'This channel has no videos',
+                    icon: Icons.videocam_off_outlined,
+                  )
+                : AppEmpty(
+                    message: 'No videos matching "$_query"',
+                    icon: Icons.search_off,
+                  );
           }
           return ResponsiveCenter(
             // Reaching the end pulls the next page in, so neither a thumb nor a
@@ -86,7 +156,7 @@ class ChannelScreen extends ConsumerWidget {
                     !result.loadingMore &&
                     m.axis == Axis.vertical &&
                     m.pixels > m.maxScrollExtent - 800) {
-                  _loadMore(context, ref);
+                  _loadMore();
                 }
                 return false;
               },
@@ -96,17 +166,20 @@ class ChannelScreen extends ConsumerWidget {
                 itemCount: videos.length + (result.hasMore ? 2 : 1),
                 itemBuilder: (context, index) {
                   if (index == 0) {
-                    // Prominent "Play all" header
+                    // Prominent "Play all" header; in search mode it plays the
+                    // matching videos instead of the whole channel.
                     return Padding(
-                      padding:
-                          const EdgeInsets.fromLTRB(kGutter, kGutter, kGutter, 8),
+                      padding: const EdgeInsets.fromLTRB(
+                          kGutter, kGutter, kGutter, 8),
                       child: FilledButton.icon(
                         onPressed: () {
                           ref.read(queueProvider.notifier).play(videos);
                           context.push('/player');
                         },
                         icon: const Icon(Icons.play_arrow),
-                        label: Text('Play all ${videos.length} videos'),
+                        label: Text(_query.isEmpty
+                            ? 'Play all ${videos.length} videos'
+                            : 'Play ${videos.length} results'),
                         style: FilledButton.styleFrom(
                           backgroundColor: colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
@@ -120,7 +193,7 @@ class ChannelScreen extends ConsumerWidget {
                   }
                   final videoIndex = index - 1;
                   if (videoIndex == videos.length) {
-                    return _loadMoreFooter(context, ref, result);
+                    return _loadMoreFooter(result);
                   }
                   return VideoTile(
                     video: videos[videoIndex],
@@ -141,19 +214,17 @@ class ChannelScreen extends ConsumerWidget {
   }
 
   /// Fetches the next page; the notifier ignores redundant calls itself.
-  Future<void> _loadMore(BuildContext context, WidgetRef ref) async {
+  Future<void> _loadMore() async {
     final messenger = ScaffoldMessenger.of(context);
-    final error = await ref
-        .read(channelVideosProvider((channelId, platform)).notifier)
-        .loadMore();
+    final error =
+        await ref.read(channelVideosProvider(_arg).notifier).loadMore();
     if (error != null) {
       messenger.showSnackBar(SnackBar(content: Text('$error')));
     }
   }
 
   /// Footer below the last video: fetches the next page of older videos.
-  Widget _loadMoreFooter(
-      BuildContext context, WidgetRef ref, ChannelVideos result) {
+  Widget _loadMoreFooter(ChannelVideos result) {
     if (result.loadingMore) {
       return const Padding(
         padding: EdgeInsets.all(kGutter),
@@ -163,9 +234,9 @@ class ChannelScreen extends ConsumerWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, kGutter),
       child: OutlinedButton.icon(
-        onPressed: () => _loadMore(context, ref),
+        onPressed: _loadMore,
         icon: const Icon(Icons.expand_more),
-        label: const Text('Load older videos'),
+        label: Text(_query.isEmpty ? 'Load older videos' : 'Load more results'),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
       ),
     );

@@ -6,7 +6,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer, Header, LoadingIndicator
+from textual.widgets import Footer, Header, Input, LoadingIndicator
 
 from ...api_client import YtuiApiError
 from ...models import Video
@@ -19,6 +19,7 @@ from .browse import BrowseScreen
 class ChannelScreen(BrowseScreen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
+        Binding("slash", "search", "Search"),
         Binding("a", "add_this_channel", "Follow channel"),
         Binding("m", "load_more", "Load more"),
     ]
@@ -31,6 +32,7 @@ class ChannelScreen(BrowseScreen):
         self._loaded: list[Video] = []
         self._has_more = False
         self._loading_page = False
+        self._query: str | None = None
 
     @property
     def channel_ref(self) -> str:
@@ -40,6 +42,9 @@ class ChannelScreen(BrowseScreen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        search = Input(placeholder="Search this channel…", id="channel-search")
+        search.display = False
+        yield search
         yield LoadingIndicator(id="channel-loading")
         with Horizontal():
             yield VideoList(id="channel-list")
@@ -55,7 +60,10 @@ class ChannelScreen(BrowseScreen):
     async def load_videos(self) -> None:
         try:
             videos, has_more = await self.app.client.channel_videos(
-                self.channel_ref, platform=self.channel.platform, limit=self.PAGE_SIZE
+                self.channel_ref,
+                platform=self.channel.platform,
+                limit=self.PAGE_SIZE,
+                q=self._query,
             )
         except YtuiApiError as exc:
             self._show_error(exc.detail)
@@ -86,6 +94,7 @@ class ChannelScreen(BrowseScreen):
                 platform=self.channel.platform,
                 limit=self.PAGE_SIZE,
                 offset=len(self._loaded),
+                q=self._query,
             )
         except YtuiApiError as exc:
             self.app.notify(f"Failed to load more: {exc.detail}", severity="error", timeout=8)
@@ -116,10 +125,48 @@ class ChannelScreen(BrowseScreen):
     def _update_sub_title(self) -> None:
         name = self.channel.channel_title or self.channel.title or "Channel"
         suffix = "" if self._has_more else " (end)"
-        self.sub_title = f"{name} — {len(self._loaded)} videos{suffix}"
+        count = len(self._loaded)
+        if self._query:
+            self.sub_title = f"{name} — {count} results for '{self._query}'{suffix}"
+        else:
+            self.sub_title = f"{name} — {count} videos{suffix}"
 
     def action_add_this_channel(self) -> None:
         self.app.follow_channel(self.channel)
 
     def action_go_back(self) -> None:
+        search = self.query_one("#channel-search", Input)
+        if search.display:
+            # Escape leaves the search first, the screen second.
+            search.display = False
+            search.value = ""
+            self.query_one("#channel-list", VideoList).focus()
+            if self._query is not None:
+                self._set_query(None)
+            return
         self.app.pop_screen()
+
+    def action_search(self) -> None:
+        search = self.query_one("#channel-search", Input)
+        search.display = True
+        search.value = self._query or ""
+        search.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "channel-search":
+            return
+        query = event.value.strip() or None
+        if query is None:
+            event.input.display = False
+            if self._query is None:  # nothing searched yet: keep the listing as is
+                self.query_one("#channel-list", VideoList).focus()
+                return
+        self._set_query(query)
+
+    def _set_query(self, query: str | None) -> None:
+        """Restart the listing from page one, searching when a query is given."""
+        self._query = query
+        self._loaded = []
+        self._has_more = False
+        self.query_one("#channel-loading", LoadingIndicator).display = True
+        self.load_videos()  # focuses the list once the first page lands

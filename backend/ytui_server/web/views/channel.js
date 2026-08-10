@@ -1,6 +1,7 @@
-// Page chaîne : dernières vidéos + bouton Suivre + Tout lire.
+// Page chaîne : dernières vidéos, recherche dans la chaîne, Suivre et Tout lire.
 
 import { api, ApiError } from "../js/api.js";
+import { navigate } from "../js/router.js";
 import {
   el,
   spinner,
@@ -9,6 +10,7 @@ import {
   toast,
   videoCard,
   playVideos,
+  channelPath,
 } from "../js/ui.js";
 
 // Ref de follow — même construction que mobile/lib/screens/channel.dart :
@@ -19,11 +21,48 @@ function followRef(platform, channelId) {
 
 export async function render(view, { params, query }) {
   const { platform, id } = params;
-  const title = el("h1", { text: query.get("title") || "Chaîne" });
+  const channelName = query.get("title") || "";
+  // La recherche vit dans le hash : l'URL reste partageable et un nouveau terme
+  // re-rend la vue depuis zéro, donc la pagination repart proprement.
+  const q = (query.get("q") || "").trim();
+  const title = el("h1", { text: channelName || "Chaîne" });
   const followBtn = el("button", { class: "btn", text: "Suivre", disabled: true });
   const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
   const body = el("div");
-  view.append(el("div", { class: "page-head" }, title, playAllBtn, followBtn), body);
+
+  const searchInput = el("input", {
+    class: "input",
+    id: "search-input",
+    type: "search",
+    placeholder: "Rechercher dans la chaîne…",
+    value: q,
+  });
+  const searchForm = el(
+    "form",
+    {
+      class: "search-form",
+      onsubmit: (e) => {
+        e.preventDefault();
+        const term = searchInput.value.trim();
+        if (term === q) return;
+        let target = channelPath(id, platform, channelName);
+        if (term) target += (target.includes("?") ? "&" : "?") + `q=${encodeURIComponent(term)}`;
+        navigate(target);
+      },
+    },
+    searchInput,
+    el("button", { class: "btn primary", type: "submit", text: "Rechercher" }),
+    q ? el("button", { class: "btn", type: "button", text: "Effacer", onclick: () => {
+      searchInput.value = "";
+      navigate(channelPath(id, platform, channelName));
+    } }) : null,
+  );
+
+  view.append(
+    el("div", { class: "page-head" }, title, playAllBtn, followBtn),
+    searchForm,
+    body,
+  );
   body.append(spinner());
 
   // État de suivi (non bloquant si /channels échoue).
@@ -83,7 +122,7 @@ export async function render(view, { params, query }) {
       moreBtn.disabled = true;
       moreBtn.textContent = "Chargement…";
       try {
-        const page = await api.channelVideos(id, platform, PAGE_SIZE, videos.length);
+        const page = await api.channelVideos(id, platform, PAGE_SIZE, videos.length, q);
         appendPage(page.items || []);
         if (!page.has_more) {
           moreBtn.remove();
@@ -98,12 +137,14 @@ export async function render(view, { params, query }) {
   });
 
   try {
-    const out = await api.channelVideos(id, platform, PAGE_SIZE, 0);
+    const out = await api.channelVideos(id, platform, PAGE_SIZE, 0, q);
     await followedCheck;
     syncFollowBtn();
     if (out.channel && out.channel.title) title.textContent = out.channel.title;
     if (!(out.items || []).length) {
-      body.replaceChildren(emptyState("Cette chaîne n'a aucune vidéo"));
+      body.replaceChildren(
+        emptyState(q ? `Aucune vidéo pour « ${q} »` : "Cette chaîne n'a aucune vidéo"),
+      );
       return;
     }
     playAllBtn.disabled = false;

@@ -65,6 +65,34 @@ async def test_search(client):
 
 
 @respx.mock
+async def test_channel_videos_omits_empty_query(client):
+    respx.get(f"{BASE}/api/channels/UC1/videos").mock(
+        return_value=httpx.Response(200, json={"items": [VIDEO_JSON], "has_more": True})
+    )
+    videos, has_more = await client.channel_videos("UC1", limit=5, offset=10)
+    assert len(videos) == 1
+    assert has_more is True
+    params = respx.calls.last.request.url.params
+    assert "q" not in params  # the server rejects q=""
+    assert params["limit"] == "5"
+    assert params["offset"] == "10"
+
+
+@respx.mock
+async def test_channel_videos_sends_query(client):
+    respx.get(f"{BASE}/api/channels/UC1/videos").mock(
+        return_value=httpx.Response(200, json={"items": [VIDEO_JSON]})
+    )
+    videos, has_more = await client.channel_videos("UC1", q="foo", offset=50)
+    assert len(videos) == 1
+    assert has_more is False
+    params = respx.calls.last.request.url.params
+    assert params["q"] == "foo"
+    assert params["offset"] == "50"
+    assert params["platform"] == "youtube"
+
+
+@respx.mock
 async def test_video_streams_sends_max_height(client):
     respx.get(f"{BASE}/api/videos/abc/streams").mock(
         return_value=httpx.Response(200, json={"kind": "progressive", "url": "u", "height": 720})

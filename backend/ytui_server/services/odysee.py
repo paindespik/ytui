@@ -108,13 +108,24 @@ def _claim_to_video(claim: dict) -> Video | None:
     )
 
 
-async def search(query: str, limit: int = 20) -> list[Video]:
-    """Search Odysee: Lighthouse for hits, batch resolve for full metadata."""
+async def search(
+    query: str, limit: int = 20, offset: int = 0, channel_id: str | None = None
+) -> list[Video]:
+    """Search Odysee: Lighthouse for hits, batch resolve for full metadata.
+
+    `channel_id` ('@name:claim' or a bare claim id) scopes the search to a single
+    channel — claim_search has no usable full-text filter, Lighthouse does.
+    """
+    params: dict[str, Any] = {"s": query, "size": limit, "nsfw": "false"}
+    if offset:
+        params["from"] = offset
+    if channel_id:
+        params["channel_id"] = claim_id_from_video_id(channel_id)
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.get(
                 LIGHTHOUSE_URL,
-                params={"s": query, "size": limit, "nsfw": "false"},
+                params=params,
                 headers=_HEADERS,
             )
             resp.raise_for_status()

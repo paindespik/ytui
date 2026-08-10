@@ -86,11 +86,20 @@ export function initShortcuts() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
     switch (e.key) {
-      case "/":
+      case "/": {
         e.preventDefault();
-        if (parseHash().path !== "/search") navigate("/search");
+        // Pages carrying their own search field (search, chaîne) focus it in
+        // place instead of jumping to the global search.
+        const input = document.getElementById("search-input");
+        if (input) {
+          input.focus();
+          input.select();
+          return;
+        }
+        navigate("/search");
         setTimeout(() => document.getElementById("search-input")?.focus(), 60);
         return;
+      }
       case "?":
         e.preventDefault();
         showHelp();
