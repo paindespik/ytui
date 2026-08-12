@@ -243,6 +243,11 @@ export class Player {
     const p = dashjs.MediaPlayer().create();
     this._dash = p;
     p.on(dashjs.MediaPlayer.events.ERROR, () => this._deferFatal("Erreur du flux DASH"));
+    // dash.js ne relaye pas toujours l'événement `ended` à l'élément vidéo :
+    // l'émettre explicitement pour que watch.js enchaîne la file d'attente.
+    p.on(dashjs.MediaPlayer.events.PLAYBACK_ENDED, () => {
+      if (!this._destroyed) this.el.dispatchEvent(new Event("ended"));
+    });
     p.initialize(this.el, mpdUrl, true);
     this._seekOnReady(start);
     this._play();
