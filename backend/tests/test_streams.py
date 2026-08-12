@@ -211,12 +211,34 @@ def test_streams_prefers_hls(client):
     assert body["duration"] == 212
 
 
-def test_streams_progressive_fallback(client):
+def test_streams_split_beats_lower_progressive(client):
+    # YouTube only muxes up to 360p: a muxed format must not cap the video below
+    # the separate video/audio ladder just by being checked first.
     with _patch_ydl(_info([PROG, VONLY, AONLY])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["video_url"] == "https://x/video.mp4"
+    assert body["height"] == 1080
+
+
+def test_streams_progressive_wins_tie(client):
+    # Same height on both paths: one muxed file, no external audio to sync.
+    tie = {**VONLY, "height": 720}
+    with _patch_ydl(_info([PROG, tie, AONLY])):
         resp = client.get("/api/videos/vid000000001/streams")
     body = resp.json()
     assert body["kind"] == "progressive"
     assert body["url"] == "https://x/prog.mp4"
+
+
+def test_streams_cap_applies_across_both_paths(client):
+    # A 720p cap must drop the 1080p video-only format, leaving the muxed 720p.
+    with _patch_ydl(_info([PROG, VONLY, AONLY])):
+        resp = client.get("/api/videos/vid000000001/streams?max_height=720")
+    body = resp.json()
+    assert body["kind"] == "progressive"
+    assert body["height"] == 720
 
 
 def test_streams_split_dash(client):

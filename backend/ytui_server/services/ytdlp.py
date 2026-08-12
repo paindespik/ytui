@@ -431,31 +431,53 @@ def _extract_streams(
         manifest = info.get("manifest_url") or ""
         return make("hls", manifest or best["url"], height=height)
 
-    # 2. Progressive (audio+video in one file)
-    progressive = _capped(
-        [
-            f
-            for f in formats
-            if f.get("acodec") not in (None, "none")
-            and f.get("vcodec") not in (None, "none")
-        ],
-        max_height,
-    )
-    if progressive:
-        best = max(progressive, key=lambda f: f.get("height") or 0)
-        return make("progressive", best["url"], height=best.get("height") or None)
-
-    # 3. Split DASH: best video + best audio
-    videos = _capped(
-        [f for f in formats if f.get("vcodec") not in (None, "none")], max_height
-    )
+    # 2/3. Progressive (one muxed file) vs split DASH (video-only + audio-only).
+    # Order must not decide: YouTube only muxes up to 360p, so taking the first
+    # progressive hit caps every VOD at 360p however high the client asked. Pick
+    # whichever reaches higher, progressive on a tie — one file needs no external
+    # audio track to stay in sync, and it keeps the web player's 360p fallback
+    # (max_height=360) on the single-file path.
+    muxed_all = [
+        f
+        for f in formats
+        if f.get("acodec") not in (None, "none") and f.get("vcodec") not in (None, "none")
+    ]
+    video_all = [
+        f
+        for f in formats
+        if f.get("vcodec") not in (None, "none") and f.get("acodec") in (None, "none")
+    ]
     audios = [
         f
         for f in formats
         if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
     ]
-    if videos and audios:
-        bv = max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
+    if not audios:
+        video_all = []  # video-only formats are unplayable without an audio track
+
+    progressive = [f for f in muxed_all if (f.get("height") or 0) <= max_height]
+    videos = [f for f in video_all if (f.get("height") or 0) <= max_height]
+    if not progressive and not videos:
+        # Nothing fits: degrade to the lowest available rather than fail, but only
+        # once neither path can honour the cap (_capped applied per path would let
+        # an over-cap split outrank a compliant progressive).
+        progressive = _capped(muxed_all, max_height)
+        videos = _capped(video_all, max_height)
+
+    best_prog = (
+        max(progressive, key=lambda f: f.get("height") or 0) if progressive else None
+    )
+    bv = (
+        max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
+        if videos
+        else None
+    )
+
+    # -1 keeps an absent candidate below a real 0-height one (unknown height).
+    prog_height = (best_prog.get("height") or 0) if best_prog else -1
+    split_height = (bv.get("height") or 0) if bv else -1
+
+    if bv is not None and split_height > prog_height:
         ba = max(audios, key=lambda f: f.get("abr") or f.get("tbr") or 0)
         return make(
             "split",
@@ -463,6 +485,10 @@ def _extract_streams(
             video_url=bv["url"],
             audio_url=ba["url"],
             height=bv.get("height") or None,
+        )
+    if best_prog is not None:
+        return make(
+            "progressive", best_prog["url"], height=best_prog.get("height") or None
         )
 
     # 4. Last resort: top-level url
