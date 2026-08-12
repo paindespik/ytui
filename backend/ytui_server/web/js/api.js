@@ -131,6 +131,12 @@ export const api = {
     request("PATCH", `/api/playlists/${playlistId}`, { body: { name } }),
   deletePlaylist: (playlistId) => request("DELETE", `/api/playlists/${playlistId}`),
   playlistItems: (playlistId) => request("GET", `/api/playlists/${playlistId}/items`),
+  // `source` is a playlist id or any URL carrying one; without `targetId` the
+  // server creates a playlist named `name` or after the upstream title.
+  importPlaylist: (source, { platform = "youtube", name = "", targetId = null, limit = 500 } = {}) =>
+    request("POST", "/api/playlists/import", {
+      body: { source, platform, name, limit, ...(targetId === null ? {} : { target_id: targetId }) },
+    }),
   addPlaylistItem: (playlistId, video) =>
     request("POST", `/api/playlists/${playlistId}/items`, { body: { video } }),
   removePlaylistItem: (playlistId, position) =>

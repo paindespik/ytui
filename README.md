@@ -8,10 +8,11 @@ A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch and TikTok) v
 - **Playback** — resolves the best available stream (HLS/progressive/DASH up to 4320p) via `yt-dlp`; the TUI drives `mpv` over JSON IPC, the mobile app uses `media_kit`.
 - **Resolution cap** — one max height per client (360p…2160p, default 1440p), stored locally (TUI `config.toml`, mobile `SharedPreferences`, web `localStorage`) and changeable mid-playback from the player as well as from the settings screen. Honoured on all five platforms, VOD and live (a Twitch/YouTube master playlist is narrowed to a single variant, TikTok picks the best FLV quality under the cap); a source that only exists above the cap degrades to its lowest track instead of failing.
 - **Cross-device continuity** — watch history, resume position (10s heartbeat), local playlists, and followed channels all live on the server, not per-client config.
+- **Playlist import** — copy a whole upstream playlist (URL or id) into a local ytui playlist, either as a new playlist named after the upstream title or appended to an existing one (duplicates skipped). Available on every client: TUI (`S` on a playlist, `i` in local playlists), CLI (`ytui import`), mobile (playlist screen / long-press menu), web (playlist page and the Playlists tab).
 - **Live notifications** — the server polls followed channels' `/live` pages every 5 min; clients poll `/api/lives` and surface desktop/mobile notifications, pinning live videos in the feed.
 - **YouTube interactions** — an OAuth2 "token push" model: the desktop client completes OAuth consent and uploads the token to the server, which then acts for every client through the YouTube Data API v3 — like (a toggle, so it can be undone), read paginated comments, post one. In the mobile app and the browser SPA both live in the player: the comments panel takes over the queue/suggestions column without interrupting playback.
 - **Search** — YouTube and Odysee search via `yt-dlp`/the LBRY API, from any client.
-- **Four clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/auth`), a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling), and a zero-build browser SPA (vanilla ES modules; dash.js/hls.js/mpegts.js playback through a same-origin stream proxy, server-generated DASH manifests for >360p YouTube, session-cookie auth, TUI-style keyboard shortcuts).
+- **Four clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/import/auth`), a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling), and a zero-build browser SPA (vanilla ES modules; dash.js/hls.js/mpegts.js playback through a same-origin stream proxy, server-generated DASH manifests for >360p YouTube, session-cookie auth, TUI-style keyboard shortcuts).
 
 ## Architecture
 
@@ -86,6 +87,7 @@ Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
    ```bash
    ytui play <url>
    ytui search <query>
+   ytui import <playlist-url>
    ```
 4. To enable YouTube like/comment actions:
    ```bash
@@ -130,6 +132,12 @@ ytui search "linux kernel changelog"
 
 # play a video directly by URL
 ytui play https://youtu.be/dQw4w9WgXcQ
+
+# copy a YouTube playlist into a local ytui playlist
+ytui import "https://www.youtube.com/playlist?list=PLxxxx" --name "Guitar lessons"
+
+# …or append it to an existing local playlist (id from the Playlists screen)
+ytui import PLxxxx --into 3
 
 # launch the full terminal UI
 ytui

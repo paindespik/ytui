@@ -480,6 +480,51 @@ class Database:
             self._conn.commit()
         return True
 
+    def add_playlist_items(self, playlist_id: int, videos: list[Video]) -> tuple[int, int]:
+        """Append many items in one transaction: (added, skipped).
+
+        Items already in the playlist — and duplicates inside the batch — are
+        skipped instead of failing the whole import.
+        """
+        added = 0
+        with self._lock:
+            known = {
+                row[0]
+                for row in self._conn.execute(
+                    "SELECT video_id FROM local_playlist_items WHERE playlist_id = ?",
+                    (playlist_id,),
+                )
+            }
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM local_playlist_items "
+                "WHERE playlist_id = ?",
+                (playlist_id,),
+            ).fetchone()
+            position = row[0]
+            for video in videos:
+                if video.video_id in known:
+                    continue
+                known.add(video.video_id)
+                self._conn.execute(
+                    "INSERT INTO local_playlist_items "
+                    "(playlist_id, position, video_id, title, channel_title, url, kind, platform) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        playlist_id,
+                        position,
+                        video.video_id,
+                        video.title,
+                        video.channel_title,
+                        video.url,
+                        video.kind,
+                        video.platform,
+                    ),
+                )
+                position += 1
+                added += 1
+            self._conn.commit()
+        return added, len(videos) - added
+
     def playlist_items(self, playlist_id: int) -> list[tuple[int, Video]]:
         with self._lock:
             rows = self._conn.execute(

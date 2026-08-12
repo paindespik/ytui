@@ -21,6 +21,7 @@ class BrowseScreen(Screen):
         Binding("A", "play_audio", "Audio only", show=False),
         Binding("d", "download", "Download", show=False),
         Binding("s", "save_to_playlist", "Save to playlist"),
+        Binding("S", "import_playlist", "Import playlist"),
         Binding("L", "like", "Like"),
         Binding("C", "comment", "Comment", show=False),
         Binding("space", "pause_toggle", "Pause", show=False),
@@ -99,6 +100,17 @@ class BrowseScreen(Screen):
         if video is None:
             return
         self.app.save_to_local_playlist(video)
+
+    def action_import_playlist(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        if video.kind != "playlist":
+            self.app.notify(
+                "Highlight a playlist to import it (or open it and press S).", timeout=5
+            )
+            return
+        self.app.import_playlist_to_local(video.video_id, video.platform, video.title)
 
     def action_like(self) -> None:
         video = self._highlighted()

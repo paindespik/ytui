@@ -11,6 +11,7 @@ import '../state/providers.dart';
 import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/playlist_import.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
 
@@ -28,6 +29,13 @@ class LocalPlaylistsScreen extends ConsumerWidget {
           'Playlists',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.download),
+            tooltip: 'Import a YouTube playlist',
+            onPressed: () => promptImportPlaylist(context, ref),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _createOrRename(context, ref),

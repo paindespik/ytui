@@ -147,7 +147,7 @@ export function videoCard(video, { live = false, onOpen } = {}) {
         el("div", { class: "title", title: video.title, text: video.title }),
         sub ? el("div", { class: "sub", text: sub }) : null,
       ),
-      isVideo
+      isVideo || video.kind === "playlist"
         ? el(
             "button",
             {
@@ -188,30 +188,51 @@ document.addEventListener("click", closeMenus);
 
 export function cardMenu(evt, video) {
   closeMenus();
+  const isPlaylist = video.kind === "playlist";
   const menu = el(
     "div",
     { class: "ctx-menu" },
-    el(
-      "button",
-      {
-        onclick: () => {
-          closeMenus();
-          queue.enqueue(video);
-          toast("Ajouté à la file d'attente");
-        },
-      },
-      "Ajouter à la file d'attente",
-    ),
-    el(
-      "button",
-      {
-        onclick: () => {
-          closeMenus();
-          navigate(detailPath(video));
-        },
-      },
-      "Détails",
-    ),
+    isPlaylist
+      ? null
+      : el(
+          "button",
+          {
+            onclick: () => {
+              closeMenus();
+              queue.enqueue(video);
+              toast("Ajouté à la file d'attente");
+            },
+          },
+          "Ajouter à la file d'attente",
+        ),
+    isPlaylist
+      ? null
+      : el(
+          "button",
+          {
+            onclick: () => {
+              closeMenus();
+              navigate(detailPath(video));
+            },
+          },
+          "Détails",
+        ),
+    isPlaylist
+      ? el(
+          "button",
+          {
+            onclick: () => {
+              closeMenus();
+              importPlaylistModal({
+                source: video.video_id,
+                platform: video.platform,
+                defaultName: video.title,
+              });
+            },
+          },
+          "Importer dans une playlist locale",
+        )
+      : null,
     // Les cartes « chaîne » ouvrent déjà la chaîne au clic.
     video.kind !== "channel" && video.channel_id
       ? el(
@@ -225,16 +246,18 @@ export function cardMenu(evt, video) {
           "Ouvrir la chaîne",
         )
       : null,
-    el(
-      "button",
-      {
-        onclick: () => {
-          closeMenus();
-          addToPlaylistModal(video);
-        },
-      },
-      "Ajouter à une playlist",
-    ),
+    isPlaylist
+      ? null
+      : el(
+          "button",
+          {
+            onclick: () => {
+              closeMenus();
+              addToPlaylistModal(video);
+            },
+          },
+          "Ajouter à une playlist",
+        ),
   );
   document.body.append(menu);
   const rect = menu.getBoundingClientRect();
@@ -283,6 +306,77 @@ export async function addToPlaylistModal(video) {
       ),
     ),
   );
+}
+
+// ─── Import d'une playlist distante ───
+
+/// POST l'import puis résume le résultat ; renvoie la playlist locale ou null.
+async function runImport(source, { platform = "youtube", name = "", targetId = null } = {}) {
+  toast("Import en cours…");
+  try {
+    const out = await api.importPlaylist(source, { platform, name, targetId });
+    const skipped = out.skipped ? `, ${out.skipped} ignorée(s)` : "";
+    toast(`${out.added} vidéo(s) importée(s) dans « ${out.playlist.name} »${skipped}`);
+    return out.playlist;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 409) {
+      toast("Nom déjà pris — choisissez la playlist existante", { error: true });
+    } else {
+      errorToast(err);
+    }
+    return null;
+  }
+}
+
+/// Choix de la cible (playlist existante ou nouvelle) puis import complet.
+export async function importPlaylistModal({ source, platform = "youtube", defaultName = "" }) {
+  if (!source) return null;
+  let lists = [];
+  try {
+    lists = await api.playlists();
+  } catch (err) {
+    errorToast(err);
+    return null;
+  }
+  return new Promise((resolve) => {
+    const { close } = openModal(
+      "Importer la playlist dans…",
+      el(
+        "div",
+        { class: "list-pick" },
+        el(
+          "button",
+          {
+            class: "btn primary",
+            onclick: async () => {
+              close();
+              const name = await promptModal("Nouvelle playlist", {
+                value: defaultName,
+                placeholder: "Nom de la playlist",
+                submitLabel: "Importer",
+              });
+              if (!name) return resolve(null);
+              resolve(await runImport(source, { platform, name }));
+            },
+          },
+          "＋ Nouvelle playlist",
+        ),
+        lists.map((p) =>
+          el(
+            "button",
+            {
+              class: "btn",
+              onclick: async () => {
+                close();
+                resolve(await runImport(source, { platform, targetId: p.id }));
+              },
+            },
+            `${p.name} (${p.count})`,
+          ),
+        ),
+      ),
+    );
+  });
 }
 
 // ─── Toasts ───

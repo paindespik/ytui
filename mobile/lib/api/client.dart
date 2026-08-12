@@ -40,13 +40,14 @@ class YtuiApi {
     String path, {
     Map<String, dynamic>? query,
     Object? data,
+    Duration? receiveTimeout,
   }) async {
     try {
       return await dio.request(
         path,
         queryParameters: query,
         data: data,
-        options: Options(method: method),
+        options: Options(method: method, receiveTimeout: receiveTimeout),
       );
     } on DioException catch (e) {
       final response = e.response;
@@ -340,6 +341,31 @@ class YtuiApi {
       if (e.statusCode == 409) return false;
       rethrow;
     }
+  }
+
+  /// Copy a whole upstream playlist into a local one.
+  ///
+  /// [source] is a playlist id or any URL carrying one. Without [targetId] the
+  /// server creates a playlist named [name], or after the upstream title.
+  /// Throws [ApiException] with 409 when that name is already taken.
+  Future<PlaylistImport> importPlaylist(
+    String source, {
+    String platform = 'youtube',
+    String name = '',
+    int? targetId,
+    int limit = 500,
+  }) async {
+    final r = await _request('POST', '/api/playlists/import',
+        // Listing hundreds of entries upstream outlasts the default timeout.
+        receiveTimeout: const Duration(minutes: 3),
+        data: {
+          'source': source,
+          'platform': platform,
+          'name': name,
+          'limit': limit,
+          if (targetId != null) 'target_id': targetId,
+        });
+    return PlaylistImport.fromJson(r.data as Map<String, dynamic>);
   }
 
   Future<void> removePlaylistItem(int id, int position) =>

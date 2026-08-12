@@ -647,6 +647,40 @@ class YtuiApp(App):
 
         self.push_screen(PlaylistPickerModal(), on_picked)
 
+    def import_playlist_to_local(
+        self, source: str, platform: str = "youtube", title: str = ""
+    ) -> None:
+        """Copy a whole upstream playlist into a local one (picked or created)."""
+        if not source.strip():
+            return
+
+        def on_picked(playlist_id: int | None) -> None:
+            if playlist_id is None:
+                return
+            self.run_worker(
+                self._import_playlist_async(source, platform, playlist_id), group="playlists"
+            )
+
+        self.push_screen(
+            PlaylistPickerModal(prompt="Import playlist into", default_name=title), on_picked
+        )
+
+    async def _import_playlist_async(
+        self, source: str, platform: str, playlist_id: int
+    ) -> None:
+        self.notify("Importing playlist…", timeout=4)
+        try:
+            result = await self.client.import_playlist(
+                source, platform=platform, target_id=playlist_id
+            )
+        except YtuiApiError as exc:
+            self.notify(f"Import failed: {exc.detail}", severity="error", timeout=8)
+            return
+        skipped = f", {result.skipped} skipped" if result.skipped else ""
+        self.notify(
+            f"Imported {result.added} videos into {result.playlist.name!r}{skipped}.", timeout=6
+        )
+
     async def _save_to_playlist_async(self, playlist_id: int, video: Video) -> None:
         try:
             added = await self.client.add_playlist_item(playlist_id, video)

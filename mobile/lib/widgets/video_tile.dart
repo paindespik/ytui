@@ -11,6 +11,7 @@ import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
 import '../theme.dart';
+import 'playlist_import.dart';
 
 class VideoTile extends ConsumerWidget {
   final Video video;
@@ -28,7 +29,8 @@ class VideoTile extends ConsumerWidget {
 
     return InkWell(
       onTap: onTap ?? () => _defaultTap(context, ref),
-      onLongPress: video.kind == 'video' ? () => _showActions(context, ref) : null,
+      onLongPress:
+          video.kind == 'channel' ? null : () => _showActions(context, ref),
       borderRadius: BorderRadius.circular(kRadiusSm),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: kGutter, vertical: 8),
@@ -199,7 +201,7 @@ class VideoTile extends ConsumerWidget {
             ),
             // A remote has no long-press: on TV the actions sheet needs a
             // focusable affordance, reachable with D-pad right from the tile.
-            if (video.kind == 'video' && ref.watch(isTvProvider))
+            if (video.kind != 'channel' && ref.watch(isTvProvider))
               IconButton(
                 icon: const Icon(Icons.more_vert),
                 tooltip: 'Actions',
@@ -285,34 +287,52 @@ class VideoTile extends ConsumerWidget {
                   ),
                 ),
               ),
-              _sheetTile(
-                sheetContext,
-                icon: Icons.queue,
-                label: 'Add to queue',
-                onTap: () {
-                  ref.read(queueProvider.notifier).enqueue(video);
-                  Navigator.pop(sheetContext);
-                },
-              ),
-              _sheetTile(
-                sheetContext,
-                icon: Icons.info_outline,
-                label: 'Details',
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  context.push('/detail/${Uri.encodeComponent(video.videoId)}'
-                      '?platform=${video.platform}');
-                },
-              ),
-              _sheetTile(
-                sheetContext,
-                icon: Icons.playlist_add,
-                label: 'Save to playlist',
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _pickPlaylist(context, ref);
-                },
-              ),
+              if (video.kind == 'video') ...[
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.queue,
+                  label: 'Add to queue',
+                  onTap: () {
+                    ref.read(queueProvider.notifier).enqueue(video);
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.info_outline,
+                  label: 'Details',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    context.push('/detail/${Uri.encodeComponent(video.videoId)}'
+                        '?platform=${video.platform}');
+                  },
+                ),
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.playlist_add,
+                  label: 'Save to playlist',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _pickPlaylist(context, ref);
+                  },
+                ),
+              ],
+              if (video.kind == 'playlist')
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.library_add,
+                  label: 'Import every video',
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    showImportPlaylistSheet(
+                      context,
+                      ref,
+                      source: video.videoId,
+                      platform: video.platform,
+                      defaultName: video.title,
+                    );
+                  },
+                ),
               if (video.kind != 'channel' && video.channelId.isNotEmpty)
                 _sheetTile(
                   sheetContext,

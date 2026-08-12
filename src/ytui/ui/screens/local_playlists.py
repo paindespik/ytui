@@ -22,6 +22,7 @@ class LocalPlaylistsScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("n", "new_playlist", "New"),
+        Binding("i", "import_playlist", "Import YouTube playlist"),
         Binding("r", "rename_playlist", "Rename"),
         Binding("x", "delete_playlist", "Delete"),
         Binding("j", "cursor_down", "Down", show=False),
@@ -95,6 +96,33 @@ class LocalPlaylistsScreen(Screen):
                 self.app.notify(f"A playlist named {name!r} already exists.", timeout=5)
         except YtuiApiError as exc:
             self.app.notify(f"Could not create: {exc.detail}", severity="error", timeout=8)
+        self._reload()
+
+    def action_import_playlist(self) -> None:
+        def on_source(source: str | None) -> None:
+            if not source:
+                return
+            self._import_playlist(source)
+
+        self.app.push_screen(
+            TextInputModal("Import a YouTube playlist (URL or id):"), on_source
+        )
+
+    @work
+    async def _import_playlist(self, source: str) -> None:
+        self.app.notify("Importing playlist…", timeout=4)
+        try:
+            result = await self.app.client.import_playlist(source)
+        except YtuiApiError as exc:
+            detail = exc.detail
+            if exc.status_code == 409:
+                detail = f"{detail} — rename it or import from the playlist view."
+            self.app.notify(f"Import failed: {detail}", severity="error", timeout=8)
+            return
+        skipped = f", {result.skipped} skipped" if result.skipped else ""
+        self.app.notify(
+            f"Imported {result.added} videos into {result.playlist.name!r}{skipped}.", timeout=6
+        )
         self._reload()
 
     def action_rename_playlist(self) -> None:

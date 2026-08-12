@@ -279,6 +279,29 @@ class LocalPlaylist {
       );
 }
 
+/// Outcome of importing a whole upstream playlist into a local one.
+class PlaylistImport {
+  final LocalPlaylist playlist;
+  final int added;
+  final int skipped;
+  final String sourceTitle;
+
+  const PlaylistImport({
+    required this.playlist,
+    required this.added,
+    required this.skipped,
+    this.sourceTitle = '',
+  });
+
+  factory PlaylistImport.fromJson(Map<String, dynamic> json) => PlaylistImport(
+        playlist:
+            LocalPlaylist.fromJson(json['playlist'] as Map<String, dynamic>),
+        added: json['added'] as int? ?? 0,
+        skipped: json['skipped'] as int? ?? 0,
+        sourceTitle: json['source_title'] as String? ?? '',
+      );
+}
+
 class PlaylistItem {
   final int position;
   final Video video;

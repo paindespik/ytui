@@ -69,6 +69,16 @@ class PlaylistItem:
         self.video = video
 
 
+class PlaylistImport:
+    """Outcome of importing an upstream playlist into a local one."""
+
+    def __init__(self, playlist: LocalPlaylist, added: int, skipped: int, source_title: str) -> None:
+        self.playlist = playlist
+        self.added = added
+        self.skipped = skipped
+        self.source_title = source_title
+
+
 class YtuiClient:
     """Async client for the ytui backend REST API."""
 
@@ -316,6 +326,31 @@ class YtuiClient:
                 return False
             raise
         return True
+
+    async def import_playlist(
+        self,
+        source: str,
+        platform: str = "youtube",
+        name: str = "",
+        target_id: int | None = None,
+        limit: int = 500,
+    ) -> PlaylistImport:
+        """Copy a whole upstream playlist into a local playlist (new or existing)."""
+        payload = {"source": source, "platform": platform, "name": name, "limit": limit}
+        if target_id is not None:
+            payload["target_id"] = target_id
+        data = (
+            await self._request("POST", "/api/playlists/import", json=payload, timeout=120.0)
+        ).json()
+        playlist = data["playlist"]
+        return PlaylistImport(
+            LocalPlaylist(
+                playlist["id"], playlist["name"], playlist["created_at"], playlist["count"]
+            ),
+            data["added"],
+            data["skipped"],
+            data.get("source_title", ""),
+        )
 
     async def remove_playlist_item(self, playlist_id: int, position: int) -> None:
         await self._request("DELETE", f"/api/playlists/{playlist_id}/items/{position}")

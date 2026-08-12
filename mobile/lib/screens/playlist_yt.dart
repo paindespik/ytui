@@ -9,6 +9,7 @@ import '../state/providers.dart';
 import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/playlist_import.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
 
@@ -33,6 +34,25 @@ class YtPlaylistScreen extends ConsumerWidget {
           data.valueOrNull?.$2 ?? 'Playlist',
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.playlist_add),
+            tooltip: 'Import into a ytui playlist',
+            onPressed: () async {
+              final playlist = await showImportPlaylistSheet(
+                context,
+                ref,
+                source: playlistId,
+                platform: platform,
+                defaultName: data.valueOrNull?.$2 ?? '',
+              );
+              if (playlist != null && context.mounted) {
+                context.push('/playlists/${playlist.id}'
+                    '?name=${Uri.encodeComponent(playlist.name)}');
+              }
+            },
+          ),
+        ],
       ),
       body: data.when(
         loading: () => const AppLoading(),

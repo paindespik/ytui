@@ -1,4 +1,5 @@
-"""CLI entry point: ytui | ytui play <url> | ytui search "query" | ytui auth push."""
+"""CLI entry point: ytui | ytui play <url> | ytui search "query" | ytui import <url> |
+ytui auth push."""
 
 from __future__ import annotations
 
@@ -68,6 +69,38 @@ def _cmd_search(config: Config, query: str, limit: int) -> int:
             await client.close()
         for video in videos:
             print(f"{video.url}  {video.channel_title}  {video.title}")
+        return 0
+
+    return asyncio.run(run())
+
+
+def _cmd_import_playlist(config: Config, args) -> int:
+    """Copy a whole upstream playlist into a local ytui playlist."""
+    from .api_client import YtuiApiError
+
+    client = _client(config)
+    if client is None:
+        return 1
+
+    async def run() -> int:
+        try:
+            result = await client.import_playlist(
+                args.url,
+                platform=args.platform,
+                name=args.name or "",
+                target_id=args.into,
+                limit=args.limit,
+            )
+        except YtuiApiError as exc:
+            print(f"Import failed: {exc.detail}", file=sys.stderr)
+            return 1
+        finally:
+            await client.close()
+        skipped = f", {result.skipped} skipped" if result.skipped else ""
+        print(
+            f"Imported {result.added} videos into '{result.playlist.name}' "
+            f"(id {result.playlist.id}, {result.playlist.item_count} total){skipped}."
+        )
         return 0
 
     return asyncio.run(run())
@@ -174,6 +207,23 @@ def main(argv: list[str] | None = None) -> int:
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
 
+    import_parser = sub.add_parser(
+        "import", help="Import a whole YouTube playlist into a local ytui playlist"
+    )
+    import_parser.add_argument("url", help="Playlist URL or id")
+    import_parser.add_argument(
+        "--name", help="Name of the playlist to create (default: the upstream title)"
+    )
+    import_parser.add_argument(
+        "--into", type=int, metavar="ID", help="Append into this existing local playlist"
+    )
+    import_parser.add_argument(
+        "--platform", default="youtube", help="youtube (default), bitchute, twitch, tiktok"
+    )
+    import_parser.add_argument(
+        "-n", "--limit", type=int, default=500, help="Max videos to import (default 500)"
+    )
+
     auth_parser = sub.add_parser("auth", help="YouTube account management")
     auth_sub = auth_parser.add_subparsers(dest="auth_command")
     auth_sub.add_parser(
@@ -211,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "search":
         return _cmd_search(config, args.query, args.limit)
+
+    if args.command == "import":
+        return _cmd_import_playlist(config, args)
 
     if args.command == "auth":
         if args.auth_command == "push":

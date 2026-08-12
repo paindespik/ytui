@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..models import PlaylistIn, PlaylistItemIn, PlaylistItemOut, PlaylistOut
+from ..models import (
+    PlaylistImportIn,
+    PlaylistImportOut,
+    PlaylistIn,
+    PlaylistItemIn,
+    PlaylistItemOut,
+    PlaylistOut,
+    Video,
+    playlist_id_from_url,
+)
+from ..services import ytdlp
 
 router = APIRouter()
 
@@ -29,6 +39,44 @@ async def create_playlist(body: PlaylistIn, request: Request) -> PlaylistOut:
     if playlist_id is None:
         raise HTTPException(status_code=409, detail="Playlist name already taken")
     return _to_out(request.app.state.db.get_playlist(playlist_id))
+
+
+@router.post("/playlists/import", response_model=PlaylistImportOut, status_code=201)
+async def import_playlist(body: PlaylistImportIn, request: Request) -> PlaylistImportOut:
+    """Copy a whole upstream playlist into a local playlist (new or existing)."""
+    db = request.app.state.db
+    source = playlist_id_from_url(body.source)
+    if not source:
+        raise HTTPException(status_code=422, detail="Empty playlist reference")
+    if body.platform == "odysee":
+        # odysee.com/$/playlist/{id} is a JS route with no yt-dlp extractor
+        raise HTTPException(status_code=400, detail="Odysee playlists are not supported")
+    limit = max(1, min(body.limit, 500))
+    url = Video(video_id=source, title="", kind="playlist", platform=body.platform).url
+    try:
+        items, source_title = await ytdlp.playlist_videos(url, limit=limit)
+    except ytdlp.UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Playlist listing failed: {exc}") from exc
+    videos = [item for item in items if item.kind == "video"]
+
+    if body.target_id is not None:
+        target = db.get_playlist(body.target_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        playlist_id = target.id
+    else:
+        name = (body.name or source_title or f"Playlist {source}").strip()
+        playlist_id = db.create_playlist(name)
+        if playlist_id is None:
+            raise HTTPException(status_code=409, detail="Playlist name already taken")
+
+    added, skipped = db.add_playlist_items(playlist_id, videos)
+    return PlaylistImportOut(
+        playlist=_to_out(db.get_playlist(playlist_id)),
+        added=added,
+        skipped=skipped,
+        source_title=source_title,
+    )
 
 
 @router.patch("/playlists/{playlist_id}", response_model=PlaylistOut)

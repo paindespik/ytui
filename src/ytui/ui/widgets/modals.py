@@ -88,9 +88,14 @@ class PlaylistPickerModal(ModalScreen[int | None]):
 
     _NEW_ID = "__new__"
 
+    def __init__(self, prompt: str = "Save to local playlist", default_name: str = "") -> None:
+        super().__init__()
+        self._prompt = prompt
+        self._default_name = default_name
+
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("Save to local playlist ([b]n[/b] = new, Escape = cancel)")
+            yield Label(f"{self._prompt} ([b]n[/b] = new, Escape = cancel)")
             yield OptionList(id="playlist-options")
 
     def on_mount(self) -> None:
@@ -128,7 +133,9 @@ class PlaylistPickerModal(ModalScreen[int | None]):
                 return
             self._create_and_dismiss(name)
 
-        self.app.push_screen(TextInputModal("New playlist name:"), on_name)
+        self.app.push_screen(
+            TextInputModal("New playlist name:", initial=self._default_name), on_name
+        )
 
     @work
     async def _create_and_dismiss(self, name: str) -> None:

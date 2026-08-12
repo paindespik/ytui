@@ -12,6 +12,7 @@ _YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
 _YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
 _BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
 _ODYSEE_RE = re.compile(r"odysee\.com/(?:@[^/?#]+/)?([^/?#@][^/?#]*:[0-9a-f]+)")
+_YT_LIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
 
 
 def video_id_from_url(url: str) -> str | None:
@@ -21,6 +22,22 @@ def video_id_from_url(url: str) -> str | None:
         return match.group(1)
     match = _ODYSEE_RE.search(url)
     return match.group(1) if match else None
+
+
+def playlist_id_from_url(text: str) -> str:
+    """Accept a playlist id or any URL carrying one, and return the bare id.
+
+    Clients let users paste a full "…/playlist?list=PL…" (or a watch URL opened
+    from a playlist), so the id is extracted server-side once for every surface.
+    """
+    value = text.strip()
+    match = _YT_LIST_RE.search(value)
+    if match:
+        return match.group(1)
+    if "://" in value:
+        # Non-YouTube playlist URLs end with the id (BitChute, Odysee…).
+        return value.rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+    return value
 
 
 class Channel(BaseModel):
@@ -198,6 +215,27 @@ class PlaylistItemOut(BaseModel):
 
 class PlaylistItemIn(BaseModel):
     video: Video
+
+
+class PlaylistImportIn(BaseModel):
+    """Import a whole upstream playlist into a local one.
+
+    `source` is a playlist id or any URL carrying one. Without `target_id` a new
+    local playlist is created, named after `name` or the upstream title.
+    """
+
+    source: str
+    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
+    name: str = ""
+    target_id: int | None = None
+    limit: int = 500
+
+
+class PlaylistImportOut(BaseModel):
+    playlist: PlaylistOut
+    added: int
+    skipped: int
+    source_title: str = ""
 
 
 class CommentIn(BaseModel):

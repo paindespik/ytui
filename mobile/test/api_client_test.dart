@@ -385,6 +385,53 @@ void main() {
     expect(title, 'x');
   });
 
+  test('importPlaylist posts the source and parses the outcome', () async {
+    final adapter = _FakeAdapter({
+      'POST /api/playlists/import': (
+        201,
+        {
+          'playlist': {'id': 7, 'name': 'Mix', 'created_at': 1.0, 'count': 12},
+          'added': 10,
+          'skipped': 2,
+          'source_title': 'Upstream mix',
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final out = await api.importPlaylist(
+      'https://www.youtube.com/playlist?list=PL1',
+      targetId: 7,
+    );
+    final body = adapter.requests.single.data as Map<String, dynamic>;
+    expect(body['source'], 'https://www.youtube.com/playlist?list=PL1');
+    expect(body['platform'], 'youtube');
+    expect(body['target_id'], 7);
+    expect(out.added, 10);
+    expect(out.skipped, 2);
+    expect(out.playlist.name, 'Mix');
+    expect(out.sourceTitle, 'Upstream mix');
+  });
+
+  test('importPlaylist omits target_id when creating a playlist', () async {
+    final adapter = _FakeAdapter({
+      'POST /api/playlists/import': (
+        201,
+        {
+          'playlist': {'id': 8, 'name': 'New', 'created_at': 1.0, 'count': 3},
+          'added': 3,
+          'skipped': 0,
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final out = await api.importPlaylist('PL1', name: 'New');
+    final body = adapter.requests.single.data as Map<String, dynamic>;
+    expect(body.containsKey('target_id'), isFalse);
+    expect(body['name'], 'New');
+    expect(out.playlist.id, 8);
+    expect(out.sourceTitle, '');
+  });
+
   test('search tolerates missing items', () async {
     final api = _api({
       'GET /api/search': (200, {'total': 0}),

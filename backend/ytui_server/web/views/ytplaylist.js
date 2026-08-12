@@ -1,14 +1,36 @@
 // Playlist distante (YouTube/Odysee) : titre + Tout lire + grille.
 
 import { api } from "../js/api.js";
-import { el, spinner, emptyState, errorToast, videoCard, playVideos } from "../js/ui.js";
+import {
+  el,
+  spinner,
+  emptyState,
+  errorToast,
+  videoCard,
+  playVideos,
+  importPlaylistModal,
+} from "../js/ui.js";
+import { navigate } from "../js/router.js";
 
 export async function render(view, { params, query }) {
   const { platform, id } = params;
   const title = el("h1", { text: query.get("title") || "Playlist" });
   const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
+  const importBtn = el("button", {
+    class: "btn",
+    text: "＋ Importer",
+    title: "Copier toute la playlist dans une playlist ytui",
+    onclick: async () => {
+      const playlist = await importPlaylistModal({
+        source: id,
+        platform,
+        defaultName: title.textContent,
+      });
+      if (playlist) navigate(`/playlist/${playlist.id}?name=${encodeURIComponent(playlist.name)}`);
+    },
+  });
   const body = el("div");
-  view.append(el("div", { class: "page-head" }, title, playAllBtn), body);
+  view.append(el("div", { class: "page-head" }, title, playAllBtn, importBtn), body);
   body.append(spinner());
 
   try {

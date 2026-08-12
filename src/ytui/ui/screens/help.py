@@ -27,6 +27,7 @@ HELP_TEXT = """\
   A               Play audio only (this video)
   d               Download to [player].download_dir
   s               Save to a local playlist
+  S               Import a whole playlist into a local playlist
   L               Like the video (YouTube account)
   C               Comment on the video (YouTube account)
   Space           Pause / resume mpv
@@ -54,6 +55,7 @@ HELP_TEXT = """\
 [b]Playlist view (YouTube)[/b]
   Enter           Play one video
   p               Play the whole playlist
+  S               Import every video into a local playlist
 
 [b]Watch history[/b]
   Enter           Replay
@@ -61,6 +63,7 @@ HELP_TEXT = """\
 
 [b]Local playlists[/b]
   n / r / x       New / rename / delete playlist
+  i               Import a YouTube playlist (URL or id) as a new playlist
   Enter           Open the playlist
   In a playlist:  Enter play entry, p play all (mpv queue), x remove
 

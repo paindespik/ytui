@@ -10,6 +10,7 @@ import {
   toast,
   confirmModal,
   promptModal,
+  importPlaylistModal,
   fmtDate,
 } from "../js/ui.js";
 
@@ -36,8 +37,24 @@ export async function render(view) {
       }
     },
   });
+  const importBtn = el("button", {
+    class: "btn",
+    text: "Importer depuis YouTube",
+    onclick: async () => {
+      const source = await promptModal("Importer une playlist YouTube", {
+        placeholder: "URL ou identifiant de la playlist",
+        submitLabel: "Continuer",
+      });
+      if (!source) return;
+      const playlist = await importPlaylistModal({ source });
+      if (playlist) await load();
+    },
+  });
   const body = el("div");
-  view.append(el("div", { class: "page-head" }, el("h1", { text: "Playlists" }), newBtn), body);
+  view.append(
+    el("div", { class: "page-head" }, el("h1", { text: "Playlists" }), newBtn, importBtn),
+    body,
+  );
 
   async function load() {
     body.replaceChildren(spinner());

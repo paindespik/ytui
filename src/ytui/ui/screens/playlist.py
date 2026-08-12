@@ -20,6 +20,7 @@ class PlaylistScreen(BrowseScreen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("p", "play_all", "Play whole playlist"),
+        Binding("S", "import_playlist", "Import to local playlist"),
     ]
 
     def __init__(self, playlist: Video) -> None:
@@ -64,6 +65,12 @@ class PlaylistScreen(BrowseScreen):
 
     def action_play_all(self) -> None:
         self.app.play_video(self.playlist)
+
+    def action_import_playlist(self) -> None:
+        # This screen lists videos: import the playlist being browsed, not the row.
+        self.app.import_playlist_to_local(
+            self.playlist.video_id, self.playlist.platform, self.playlist.title
+        )
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

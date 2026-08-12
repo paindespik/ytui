@@ -410,6 +410,57 @@ async def test_youtube_auth_status_tolerates_old_server(client):
     assert await client.youtube_auth_status() == (True, False)
 
 
+@respx.mock
+async def test_import_playlist_into_existing_playlist(client):
+    route = respx.post(f"{BASE}/api/playlists/import").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "playlist": {"id": 3, "name": "Mix", "created_at": 1.0, "count": 12},
+                "added": 10,
+                "skipped": 2,
+                "source_title": "Upstream mix",
+            },
+        )
+    )
+    result = await client.import_playlist("PLxyz", target_id=3)
+    assert (result.added, result.skipped) == (10, 2)
+    assert result.playlist.name == "Mix"
+    assert result.source_title == "Upstream mix"
+    import json
+
+    body = json.loads(route.calls.last.request.content)
+    assert body == {
+        "source": "PLxyz",
+        "platform": "youtube",
+        "name": "",
+        "limit": 500,
+        "target_id": 3,
+    }
+
+
+@respx.mock
+async def test_import_playlist_creates_new_playlist(client):
+    route = respx.post(f"{BASE}/api/playlists/import").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "playlist": {"id": 4, "name": "Upstream", "created_at": 1.0, "count": 3},
+                "added": 3,
+                "skipped": 0,
+                "source_title": "Upstream",
+            },
+        )
+    )
+    result = await client.import_playlist(
+        "https://www.youtube.com/playlist?list=PLxyz", name="Upstream"
+    )
+    import json
+
+    assert "target_id" not in json.loads(route.calls.last.request.content)
+    assert result.playlist.id == 4
+
+
 def test_resume_start():
     assert resume_start(50.0, 600.0) == 50.0
     assert resume_start(590.0, 600.0) == 0.0  # within 5% of the end
