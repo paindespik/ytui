@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../state/providers.dart';
+import '../state/settings.dart';
 import '../theme.dart';
 
 /// Ask for a playlist URL/id, then run the import flow. Returns the local
@@ -28,6 +29,9 @@ Future<LocalPlaylist?> promptImportPlaylist(
       content: TextField(
         controller: controller,
         autofocus: true,
+        // A remote has no "validate" button: Enter on the IME submits.
+        textInputAction: TextInputAction.done,
+        onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
         decoration: const InputDecoration(hintText: 'Playlist URL or id'),
       ),
       actions: [
@@ -55,6 +59,9 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
   String defaultName = '',
 }) async {
   if (source.isEmpty) return null;
+  // A remote cannot dismiss the IME safely, so on TV nothing grabs focus for
+  // text input: the pre-filled name can be validated with one D-pad press.
+  final isTv = ref.read(isTvProvider);
   final messenger = ScaffoldMessenger.of(context);
   List<LocalPlaylist> playlists;
   try {
@@ -100,6 +107,8 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
             ListTile(
               leading: const Icon(Icons.playlist_add),
               title: const Text('New playlist'),
+              // TV bottom sheets do not take focus on their own.
+              autofocus: isTv,
               onTap: () => Navigator.pop(sheetContext, 'new'),
             ),
             ...playlists.map((p) => ListTile(
@@ -128,7 +137,9 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
         title: const Text('New playlist'),
         content: TextField(
           controller: controller,
-          autofocus: true,
+          autofocus: !isTv,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
           decoration: const InputDecoration(hintText: 'Playlist name'),
         ),
         actions: [
@@ -137,6 +148,7 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
             child: const Text('Cancel'),
           ),
           FilledButton(
+            autofocus: isTv,
             onPressed: () =>
                 Navigator.pop(dialogContext, controller.text.trim()),
             child: const Text('Import'),

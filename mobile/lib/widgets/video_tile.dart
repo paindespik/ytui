@@ -27,13 +27,26 @@ class VideoTile extends ConsumerWidget {
     final colors = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    return InkWell(
+    // A remote has no long-press: on TV the actions sheet needs a focusable
+    // affordance. It must be a SIBLING of the tile, never a child: directional
+    // focus traversal only considers nodes whose centre lies beyond the current
+    // node's edge, so a button nested inside the row is unreachable with
+    // D-pad right (focus jumps to the app bar instead).
+    final showActionsButton =
+        video.kind != 'channel' && ref.watch(isTvProvider);
+
+    final tile = InkWell(
       onTap: onTap ?? () => _defaultTap(context, ref),
       onLongPress:
           video.kind == 'channel' ? null : () => _showActions(context, ref),
       borderRadius: BorderRadius.circular(kRadiusSm),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: kGutter, vertical: 8),
+        padding: EdgeInsets.fromLTRB(
+          kGutter,
+          8,
+          showActionsButton ? 4 : kGutter,
+          8,
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -199,17 +212,25 @@ class VideoTile extends ConsumerWidget {
                 ],
               ),
             ),
-            // A remote has no long-press: on TV the actions sheet needs a
-            // focusable affordance, reachable with D-pad right from the tile.
-            if (video.kind != 'channel' && ref.watch(isTvProvider))
-              IconButton(
-                icon: const Icon(Icons.more_vert),
-                tooltip: 'Actions',
-                onPressed: () => _showActions(context, ref),
-              ),
           ],
         ),
       ),
+    );
+
+    if (!showActionsButton) return tile;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: tile),
+        Padding(
+          padding: const EdgeInsets.only(right: kGutter / 2, top: 8),
+          child: IconButton(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Actions',
+            onPressed: () => _showActions(context, ref),
+          ),
+        ),
+      ],
     );
   }
 
@@ -264,6 +285,9 @@ class VideoTile extends ConsumerWidget {
   }
 
   void _showActions(BuildContext context, WidgetRef ref) {
+    // A bottom sheet does not take focus on its own: on TV the first entry
+    // grabs it so the remote can act without a blind D-pad down.
+    final tvFocus = ref.read(isTvProvider);
     showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -292,6 +316,7 @@ class VideoTile extends ConsumerWidget {
                   sheetContext,
                   icon: Icons.queue,
                   label: 'Add to queue',
+                  autofocus: tvFocus,
                   onTap: () {
                     ref.read(queueProvider.notifier).enqueue(video);
                     Navigator.pop(sheetContext);
@@ -322,6 +347,7 @@ class VideoTile extends ConsumerWidget {
                   sheetContext,
                   icon: Icons.library_add,
                   label: 'Import every video',
+                  autofocus: tvFocus,
                   onTap: () {
                     Navigator.pop(sheetContext);
                     showImportPlaylistSheet(
@@ -382,6 +408,7 @@ class VideoTile extends ConsumerWidget {
     required IconData icon,
     required String label,
     required VoidCallback onTap,
+    bool autofocus = false,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
@@ -390,6 +417,7 @@ class VideoTile extends ConsumerWidget {
         borderRadius: BorderRadius.circular(kRadiusSm),
         child: InkWell(
           onTap: onTap,
+          autofocus: autofocus,
           borderRadius: BorderRadius.circular(kRadiusSm),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
