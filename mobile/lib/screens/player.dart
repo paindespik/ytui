@@ -65,7 +65,27 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   late final Player player = Player(
     configuration: const PlayerConfiguration(logLevel: MPVLogLevel.info),
   );
-  late final mkv.VideoController controller = mkv.VideoController(player);
+  /// media_kit's Android default (`vo=gpu`, `hwdec=auto-safe`) decodes in
+  /// hardware but copies every frame back through the CPU before Flutter
+  /// uploads it as a texture. On the projector's TV SoC that readback saturates
+  /// a core at 1080p and playback collapses to ~10 fps (measured: 100 ms median
+  /// between presented frames, against 33 ms of content). `mediacodec_embed`
+  /// lets the decoder render straight into the Android surface — same footage
+  /// then presents at a flat 33 ms with the app at half a core.
+  ///
+  /// Kept to leanback: it costs mpv-drawn OSD (subtitles still render, they go
+  /// through media_kit's Dart-side [SubtitleView], fed by libmpv's `sub-text`)
+  /// and it puts video on a SurfaceView, which the touch overlay and rotation
+  /// of the phone build have no need to risk.
+  late final mkv.VideoController controller = mkv.VideoController(
+    player,
+    configuration: ref.read(isTvProvider)
+        ? const mkv.VideoControllerConfiguration(
+            vo: 'mediacodec_embed',
+            hwdec: 'mediacodec',
+          )
+        : const mkv.VideoControllerConfiguration(),
+  );
 
   /// Applied once before the first [Player.open]; see [_configureMpv].
   late final Future<void> _mpvConfigured = _configureMpv();
