@@ -52,6 +52,18 @@ export class Player {
     this._segments = [];
     this._lastSkip = 0;
     this._destroyed = false;
+    // Reprise : cible demandée pour ce chargement, et si le seek a atterri.
+    // Tant qu'il n'a pas atterri, la position courante (≈ 0) ne doit surtout
+    // pas être écrite côté serveur — elle effacerait le point de reprise.
+    this._resumeTarget = 0;
+    this._resumeSettled = true;
+    this._resumeTries = 0;
+    this._resumeLastTry = 0;
+    this._pendingSeekTo = null;
+    this._ended = false;
+    // Incrémenté à chaque load() : une résolution lente qui se termine après
+    // un changement de vidéo (ou après destroy) doit être abandonnée.
+    this._loadToken = 0;
     this.gain = prefs.gain;
     this._audioCtx = null;
     this._gainNode = null;
@@ -62,10 +74,14 @@ export class Player {
     this._onElementError = this._onElementError.bind(this);
     this._onVolume = this._onVolume.bind(this);
     this._onPlay = this._onPlay.bind(this);
+    this._onSeeked = this._onSeeked.bind(this);
+    this._onEnded = this._onEnded.bind(this);
     videoEl.addEventListener("timeupdate", this._onTimeUpdate);
     videoEl.addEventListener("error", this._onElementError);
     videoEl.addEventListener("volumechange", this._onVolume);
     videoEl.addEventListener("play", this._onPlay);
+    videoEl.addEventListener("seeked", this._onSeeked);
+    videoEl.addEventListener("ended", this._onEnded);
     videoEl.volume = prefs.volume;
     videoEl.muted = prefs.muted;
 
@@ -75,6 +91,7 @@ export class Player {
   // ─── Cycle de vie ───
 
   async load(video) {
+    const token = ++this._loadToken;
     this._teardownEngines();
     this.video = video;
     this.streams = null;
@@ -90,16 +107,32 @@ export class Player {
     let start = 0;
     if (!this.live) {
       const r = await api.resume(video.video_id).catch(() => null);
+      if (this._stale(token)) return;
       if (r) start = resumeStart(r.position, r.duration);
     }
     await this._attach(start);
+    if (this._stale(token)) return;
     if (!this.live && video.platform === "youtube") this._loadSponsor();
     this._startHeartbeat();
     this._mediaSession();
   }
 
+  // Un chargement dont le résultat n'intéresse plus personne : lecteur détruit
+  // (navigation) ou vidéo suivante déjà demandée. Sans ce garde-fou, une
+  // résolution lente ressuscitait le lecteur après coup — moteur qui continue
+  // à télécharger et, surtout, pulsation zombie qui réécrivait indéfiniment une
+  // position périmée par-dessus la vraie progression.
+  _stale(token) {
+    if (this._destroyed || token !== this._loadToken) {
+      this._teardownEngines();
+      return true;
+    }
+    return false;
+  }
+
   destroy() {
     this._destroyed = true;
+    this._loadToken += 1; // invalide toute résolution en vol
     this._savePosition(); // flush final avant démontage
     clearInterval(this._heartbeat);
     this._teardownEngines();
@@ -107,6 +140,8 @@ export class Player {
     this.el.removeEventListener("error", this._onElementError);
     this.el.removeEventListener("volumechange", this._onVolume);
     this.el.removeEventListener("play", this._onPlay);
+    this.el.removeEventListener("seeked", this._onSeeked);
+    this.el.removeEventListener("ended", this._onEnded);
     for (const k of Object.keys(playerActions)) delete playerActions[k];
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = null;
@@ -130,6 +165,8 @@ export class Player {
   async _attach(start) {
     // Avant tout choix de source : _useProgressive doit savoir si le graphe
     // Web Audio existe (il impose le proxy same-origin).
+    this._armResume(start);
+    this._ended = false;
     this._applyGain();
     const v = this.video;
     const streamsP = api.videoStreams(v.video_id, {
@@ -146,16 +183,19 @@ export class Player {
         ? fetch(mpdUrl).then((r) => r.ok).catch(() => false)
         : Promise.resolve(false);
 
+    const token = this._loadToken;
     let streams;
     try {
       streams = await streamsP;
     } catch (err) {
       if (await mpdP) {
+        if (this._stale(token)) return;
         this._useDash(mpdUrl, start);
         return;
       }
       throw err;
     }
+    if (this._stale(token)) return;
     this.streams = streams;
     this.cb.onMeta?.(streams);
 
@@ -175,6 +215,7 @@ export class Player {
       if (!mpdOk && streams.kind === "split") {
         mpdOk = await fetch(mpdUrl).then((r) => r.ok).catch(() => false);
       }
+      if (this._stale(token)) return;
       if (mpdOk) {
         this._useDash(mpdUrl, start);
       } else if (streams.kind === "progressive") {
@@ -186,6 +227,7 @@ export class Player {
           maxHeight: 360,
           subLangs: prefs.subLangs,
         });
+        if (this._stale(token)) return;
         if (low.kind === "progressive") {
           this._useProgressive(low.url, start);
         } else {
@@ -237,18 +279,34 @@ export class Player {
     }
   }
 
-  _useDash(mpdUrl, start) {
+  _useDash(relativeMpdUrl, start) {
     this._engine = "dash";
+    // URL absolue : le module CMCD de dash.js construit un `new URL(source)`
+    // sans base et lance une TypeError sur une URL relative.
+    const mpdUrl = new URL(relativeMpdUrl, location.origin).href;
     const dashjs = window.dashjs;
     const p = dashjs.MediaPlayer().create();
     this._dash = p;
     p.on(dashjs.MediaPlayer.events.ERROR, () => this._deferFatal("Erreur du flux DASH"));
     // dash.js ne relaye pas toujours l'événement `ended` à l'élément vidéo :
-    // l'émettre explicitement pour que watch.js enchaîne la file d'attente.
-    p.on(dashjs.MediaPlayer.events.PLAYBACK_ENDED, () => {
-      if (!this._destroyed) this.el.dispatchEvent(new Event("ended"));
-    });
-    p.initialize(this.el, mpdUrl, true);
+    // passer par le point d'entrée unique (dédoublonné avec l'événement natif).
+    p.on(dashjs.MediaPlayer.events.PLAYBACK_ENDED, () => this._onEnded());
+    // La reprise se joue ici : dash.js fixe lui-même le temps de départ après
+    // avoir chargé le manifeste, et écrase un `currentTime` posé sur l'élément
+    // (résultat : la vidéo repartait du début une fois sur deux). Le 4ᵉ
+    // argument de initialize() est ce temps de départ, seul point où dash.js
+    // accepte la consigne avant de bufferiser.
+    const startTime = start > 0 ? start : NaN;
+    p.initialize(this.el, mpdUrl, true, startTime);
+    // Ceinture et bretelles : si le flux démarre quand même à 0 (période
+    // multi-segments, manifeste sans index), reposer la consigne dès que
+    // dash.js a de quoi chercher.
+    if (start > 0) {
+      const ev = dashjs.MediaPlayer.events;
+      for (const name of [ev.STREAM_INITIALIZED, ev.PLAYBACK_METADATA_LOADED]) {
+        if (name) p.on(name, () => this._verifyResume());
+      }
+    }
     this._seekOnReady(start);
     this._play();
   }
@@ -352,13 +410,75 @@ export class Player {
 
   // ─── Position / reprise ───
 
+  // Arme la protection du point de reprise pour le chargement en cours.
+  _armResume(start) {
+    this._resumeTarget = start > 0 ? start : 0;
+    this._resumeSettled = this._resumeTarget === 0;
+    this._resumeTries = 0;
+    this._resumeLastTry = 0;
+  }
+
+  // Tout seek émis par le lecteur note sa cible : `seeked` la compare à la
+  // position atteinte pour distinguer notre seek de celui de l'utilisateur.
+  // (Un simple drapeau ne suffit pas : le navigateur fusionne les seeks
+  // rapprochés en un seul événement, et un vrai seek utilisateur héritait
+  // alors du drapeau — la barre de progression était ramenée en arrière.)
+  _seekTo(t) {
+    this._pendingSeekTo = t;
+    this._resumeLastTry = Date.now();
+    try {
+      this.el.currentTime = t;
+    } catch {
+      this._pendingSeekTo = null; // média pas encore seekable
+    }
+  }
+
   _seekOnReady(start) {
     if (!start || start <= 0) return;
     const apply = () => {
-      if (Math.abs(this.el.currentTime - start) > 2) this.el.currentTime = start;
+      if (this._destroyed) return;
+      if (Math.abs(this.el.currentTime - start) > 2) this._seekTo(start);
     };
     if (this.el.readyState >= 1) apply();
     else this.el.addEventListener("loadedmetadata", apply, { once: true });
+  }
+
+  // Le moteur a-t-il vraiment démarré au point demandé ? Sinon, réappliquer
+  // (au plus 3 fois, jamais plus d'une fois par seconde) : dash.js remet le
+  // temps de lecture à zéro entre le manifeste et le premier segment.
+  _verifyResume() {
+    if (this._destroyed || this._resumeSettled) return;
+    const target = this._resumeTarget;
+    if (this.el.currentTime >= target - 2) {
+      this._resumeSettled = true;
+      return;
+    }
+    if (this.el.seeking || this._resumeTries >= 3) return;
+    if (Date.now() - this._resumeLastTry < 1000) return;
+    this._resumeTries += 1;
+    this._seekTo(target);
+  }
+
+  _onSeeked() {
+    const requested = this._pendingSeekTo;
+    this._pendingSeekTo = null;
+    const t = this.el.currentTime;
+    if (requested !== null && Math.abs(t - requested) <= 2) {
+      if (Math.abs(t - this._resumeTarget) <= 2) this._resumeSettled = true;
+      return;
+    }
+    // Seek utilisateur : c'est lui qui décide où il en est, plus rien à protéger.
+    this._resumeSettled = true;
+    this._resumeTarget = 0;
+  }
+
+  // Fin de média : dash.js émet PLAYBACK_ENDED *et* l'élément émet `ended`
+  // (endOfStream MSE). Sans dédoublonnage, la file avançait de deux vidéos.
+  _onEnded() {
+    if (this._destroyed || this._ended) return;
+    this._ended = true;
+    this._savePosition(); // marque la vidéo comme vue jusqu'au bout
+    this.cb.onEnded?.();
   }
 
   _play() {
@@ -372,7 +492,14 @@ export class Player {
 
   _startHeartbeat() {
     clearInterval(this._heartbeat);
-    this._heartbeat = setInterval(() => this._savePosition(), HEARTBEAT_MS);
+    if (this._destroyed) return;
+    this._heartbeat = setInterval(() => {
+      if (this._destroyed) {
+        clearInterval(this._heartbeat);
+        return;
+      }
+      this._savePosition();
+    }, HEARTBEAT_MS);
   }
 
   _savePosition() {
@@ -380,9 +507,24 @@ export class Player {
     const duration = this.el.duration;
     if (!duration || !Number.isFinite(duration)) return;
     const position = this.el.currentTime;
-    if (position > 0) {
-      api.savePosition(this.video.video_id, position, duration).catch(() => {});
-    }
+    if (!(position > 0)) return;
+    // Seek de reprise pas encore atterri : la position lue est celle du début
+    // du flux, l'écrire effacerait le point de reprise qu'on vient de lire.
+    if (!this._resumeSettled && position < this._resumeTarget - 5) return;
+    const video = this.video;
+    api.savePosition(video.video_id, position, duration).catch(async (err) => {
+      // 404 : l'enregistrement dans l'historique (fire and forget) n'a pas
+      // encore atterri, ou la ligne a été évincée. Réenregistrer puis réessayer
+      // une fois, sinon les premières secondes d'une vidéo quittée vite sont
+      // perdues.
+      if (!err || err.status !== 404) return;
+      try {
+        await api.recordWatch(video);
+        await api.savePosition(video.video_id, position, duration);
+      } catch {
+        /* la prochaine pulsation réessaiera */
+      }
+    });
   }
 
   // ─── SponsorBlock ───
@@ -397,6 +539,7 @@ export class Player {
   }
 
   _onTimeUpdate() {
+    this._verifyResume();
     if (!this._segments.length || !prefs.sponsorblock) return;
     const now = Date.now();
     if (now - this._lastSkip < SKIP_THROTTLE_MS) return;
@@ -587,7 +730,11 @@ export class Player {
   _registerShortcuts() {
     playerActions.toggle = () => (this.el.paused ? this._play() : this.el.pause());
     playerActions.seekBy = (d) => {
-      if (!this.live) this.el.currentTime = Math.max(0, this.el.currentTime + d);
+      if (this.live) return;
+      // Déplacement volontaire : la position choisie fait foi.
+      this._resumeSettled = true;
+      this._resumeTarget = 0;
+      this.el.currentTime = Math.max(0, this.el.currentTime + d);
     };
     playerActions.speedBy = (d) => this.setRate(this.rate + d);
     playerActions.cycleSubtitles = () => this.cycleSubtitles();

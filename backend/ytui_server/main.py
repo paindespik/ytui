@@ -42,7 +42,19 @@ class _WebStaticFiles(StaticFiles):
 
     Without an explicit Cache-Control, browsers apply heuristic caching and
     may keep serving stale JS modules after a deploy.
+
+    The front-end test suite lives next to the code it exercises (web/tests),
+    which is handy to develop but has no business being served.
     """
+
+    #: Directories under web/ that are never served.
+    PRIVATE = ("tests",)
+
+    def lookup_path(self, path: str):
+        head = str(path).replace("\\", "/").lstrip("/").split("/", 1)[0]
+        if head in self.PRIVATE:
+            return "", None
+        return super().lookup_path(path)
 
     def file_response(self, *args, **kwargs):
         response = super().file_response(*args, **kwargs)

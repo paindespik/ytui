@@ -3,6 +3,12 @@
 
 const routes = [];
 let currentCleanup = null;
+// Numéro de la navigation en cours. Un rendu lent (une vue qui attend le
+// réseau) peut se terminer après qu'une autre route a pris la main : sans ce
+// compteur, son nettoyage écrasait celui de la vue réellement affichée, et le
+// lecteur de la vue abandonnée continuait de jouer en fond — en réécrivant sa
+// position périmée par-dessus la progression réelle.
+let generation = 0;
 
 export function route(pattern, handler) {
   const names = [];
@@ -37,6 +43,7 @@ export function replace(path) {
 }
 
 export async function dispatch(view) {
+  const gen = ++generation;
   const { path, query } = parseHash();
   for (const { regex, names, handler } of routes) {
     const m = path.match(regex);
@@ -56,6 +63,17 @@ export async function dispatch(view) {
       params[n] = decodeURIComponent(m[i + 1]);
     });
     const cleanup = await handler(view, { params, query, path });
+    if (gen !== generation) {
+      // Navigation dépassée : démonter immédiatement ce qui vient d'être monté.
+      if (typeof cleanup === "function") {
+        try {
+          cleanup();
+        } catch (err) {
+          console.warn("stale route cleanup failed", err);
+        }
+      }
+      return path;
+    }
     if (typeof cleanup === "function") currentCleanup = cleanup;
     return path;
   }

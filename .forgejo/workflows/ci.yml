@@ -31,6 +31,20 @@ jobs:
       - name: TUI client tests
         run: pytest tests
 
+
+  # Front web : lanceur de tests intégré à Node, aucune dépendance npm. Node 20+
+  # est requis (Node 18 refuse les ESM en `.js` sans `"type": "module"`, et le
+  # front est servi tel quel au navigateur).
+  web-tests:
+    runs-on: docker
+    container:
+      image: node:22-bookworm-slim
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+
+      - name: Web front tests
+        run: node --test backend/ytui_server/web/tests/*.test.mjs
+
   build-apk:
     runs-on: docker
     container:

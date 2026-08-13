@@ -24,3 +24,4 @@ mobile/test/golden_visual_test.dart
 
 # harnais de captures local (TUI)
 scripts/visual_test.py
+.pi/subagents/

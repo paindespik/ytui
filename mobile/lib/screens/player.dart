@@ -18,6 +18,7 @@ import '../services/background_playback.dart';
 import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
+import '../state/resume_guard.dart';
 import '../theme.dart';
 import '../widgets/comment_card.dart';
 import '../widgets/remote_controls.dart';
@@ -92,6 +93,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   String? _loadedVideoId;
 
+  /// Video id whose end of playback has already been handled: media_kit can
+  /// re-emit `completed` (and the next `open()` re-arms the stream), which
+  /// otherwise advanced the queue twice and silently skipped a video.
+  String? _completedFor;
+
+  /// Keeps a pending resume seek from being overwritten by the heartbeat.
+  final ResumeGuard _resume = ResumeGuard();
+
   /// Snapshot of what [_savePosition] needs, kept usable from [dispose] (where
   /// `ref.read` is no longer allowed).
   Video? _playing;
@@ -154,6 +163,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void initState() {
     super.initState();
     _completedSub = player.stream.completed.where((done) => done).listen((_) {
+      // media_kit re-emits `completed` (and re-arms it on the next open()):
+      // without this guard the queue advanced twice and skipped a video.
+      final finishedId = _loadedVideoId;
+      if (!shouldHandleCompletion(
+          loadedVideoId: finishedId, alreadyHandledFor: _completedFor)) {
+        return;
+      }
+      _completedFor = finishedId;
+      _markFinished(finishedId!); // non nul : shouldHandleCompletion l'a vérifié
       final queue = ref.read(queueProvider);
       if (queue.hasNext) {
         ref.read(queueProvider.notifier).next();
@@ -183,7 +201,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
       _retried = true;
       final video = ref.read(queueProvider).current;
-      if (video != null) _load(video, resume: false);
+      // Re-resolve from where playback died, not from the start: an expired
+      // URL mid-video used to throw the viewer back to 00:00.
+      if (video != null) {
+        final at = _isLivePlayback(video) ? null : player.state.position;
+        _load(video, resume: false, startAt: at);
+      }
     });
     // Keep the background notification in sync with play/pause state.
     _playingSub = player.stream.playing.listen((playing) {
@@ -194,7 +217,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         text: playing ? '▶ ${video.channelTitle}' : '⏸ ${video.channelTitle}',
       );
     });
-    _positionSub = player.stream.position.listen(_maybeSkipSponsor);
+    _positionSub = player.stream.position.listen((position) {
+      // Playback reaching the resume target confirms it, whichever way it got
+      // there (seek landed, or the stream simply started at the right place).
+      _resume.confirm(position.inSeconds.toDouble());
+      _maybeSkipSponsor(position);
+    });
     _logSub = player.stream.log.listen((log) {
       // Only the audio-output banner: it names the backend and, for opensles,
       // the device latency it managed to query — the two things that decide
@@ -264,9 +292,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       (video.platform == 'twitch' || video.platform == 'tiktok') &&
       video.videoId.contains(':');
 
+  /// Marks a video as watched through to the end so the next open starts over
+  /// instead of resuming on the closing seconds.
+  void _markFinished(String videoId) {
+    final api = _api;
+    final duration = player.state.duration.inSeconds.toDouble();
+    final playing = _playing;
+    if (api == null || duration <= 0) return;
+    if (playing == null || playing.videoId != videoId || _isLiveId(playing)) return;
+    unawaited(api
+        .savePosition(videoId, duration, duration: duration)
+        .catchError((_) {}));
+  }
+
   Future<void> _load(Video video,
       {bool resume = true, Duration? startAt}) async {
     _loadedVideoId = video.videoId;
+    _completedFor = null;
     // Nothing to flush until the new media is actually open: a heartbeat firing
     // mid-load would otherwise store the outgoing media's position under this id.
     _playing = null;
@@ -293,6 +335,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         final info = await api.resume(video.videoId).catchError((_) => null);
         if (info != null) start = resumeStart(info.position, info.duration);
       }
+      // A slower resume lookup for a video the user already left must not
+      // disarm the guard of the load that replaced it.
+      if (!mounted || _loadedVideoId != video.videoId) return;
+      // Armed before open(): every position write is now checked against it.
+      _resume.arm(start);
       final streams = await api.videoStreams(video.videoId,
           platform: video.platform, maxHeight: ref.read(maxHeightProvider));
       if (!mounted || _loadedVideoId != video.videoId) return;
@@ -312,8 +359,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       // measured to either be ignored (playback restarts at 0) or leave the
       // player stuck buffering. Seek explicitly once the media is seekable.
       if (start > 0) {
-        // Stay unflushable until the seek lands, or a heartbeat would store the
-        // pre-seek position (~0) and wipe the resume point.
+        // [_resume] keeps the heartbeat from storing the pre-seek position
+        // (~0) and wiping the resume point, even if the seek never lands.
         unawaited(_seekToResume(video.videoId, Duration(seconds: start.toInt()))
             .whenComplete(() {
           if (_loadedVideoId == video.videoId) _playing = video;
@@ -330,8 +377,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
   }
 
-  /// Applies the resume position once the freshly opened media is seekable.
-  /// Gives up (plays from the start) if no duration shows up within 20 s.
+  /// Applies the resume position once the freshly opened media is seekable,
+  /// and retries while playback keeps coming back at the start.
+  ///
+  /// A duration that never shows up no longer means "give up": mpv can seek
+  /// before publishing one, and silently starting over used to overwrite the
+  /// bookmark with ~0 on the next heartbeat.
   Future<void> _seekToResume(String videoId, Duration target) async {
     // player.open() returns before the demuxer reports a duration, and the
     // duration stream may have emitted already — poll the state instead.
@@ -340,12 +391,36 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (player.state.duration > Duration.zero) break;
       await Future<void>.delayed(const Duration(milliseconds: 200));
     }
-    if (!mounted ||
-        _loadedVideoId != videoId ||
-        player.state.duration <= target) {
+    if (!mounted || _loadedVideoId != videoId) return;
+    final seconds = target.inSeconds.toDouble();
+    final duration = player.state.duration.inSeconds.toDouble();
+    if (!shouldSeekToResume(duration: duration, target: seconds)) {
+      // Stale bookmark (the real media is shorter): start over and clear it,
+      // otherwise every future open would try — and fail — to jump there.
+      _resume.release();
+      _markStaleBookmark(videoId, duration);
       return;
     }
-    await player.seek(target);
+    // Up to three attempts: the first seek can land before the demuxer is
+    // ready and silently snap back to the start.
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (!mounted || _loadedVideoId != videoId || _resume.settled) return;
+      _resume.noteAttempt();
+      await player.seek(target);
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        if (!mounted || _loadedVideoId != videoId) return;
+        if (_resume.confirm(player.state.position.inSeconds.toDouble())) return;
+      }
+    }
+  }
+
+  /// Overwrites a resume point that points past the end of the real media.
+  void _markStaleBookmark(String videoId, double duration) {
+    final api = _api;
+    if (api == null || duration <= 0) return;
+    unawaited(
+        api.savePosition(videoId, 0, duration: duration).catchError((_) {}));
   }
 
   Future<void> _fetchSegments(Video video) async {
@@ -407,6 +482,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     for (final seg in _segments) {
       if (pos >= seg.start && pos < seg.end - 0.5) {
         _lastSkip = DateTime.now();
+        // Pas de release() ici : un saut de sponsor en début de vidéo ne veut
+        // pas dire que la reprise en cours est caduque.
         unawaited(player.seek(Duration(milliseconds: (seg.end * 1000).round())));
         break;
       }
@@ -459,6 +536,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final video = ref.read(queueProvider).current;
     if (video == null || _isLiveId(video)) return;
     final duration = player.state.duration;
+    _resume.release(); // déplacement volontaire : sa position fait foi
     var target = (_seekTarget ?? player.state.position) + offset;
     if (target < Duration.zero) target = Duration.zero;
     if (duration > Duration.zero && target > duration) target = duration;
@@ -692,6 +770,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final pos = player.state.position;
     final dur = player.state.duration;
     if (dur.inSeconds == 0) return;
+    // A resume seek that has not landed yet: the player still reports the
+    // start of the stream, and writing that would erase the resume point.
+    if (!_resume.allowsSave(pos.inSeconds.toDouble())) return;
     try {
       await api.savePosition(
         target.videoId,
@@ -735,14 +816,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final colors = theme.colorScheme;
     ref.listen(queueProvider, (previous, next) {
       final current = next.current;
-      if (current != null && current.videoId != _loadedVideoId) {
+      if (shouldReloadForQueueChange(
+        currentVideoId: current?.videoId,
+        loadedVideoId: _loadedVideoId,
+        previousIndex: previous?.index,
+        nextIndex: next.index,
+      )) {
         // Save where the outgoing video stopped before the player reopens.
         final leaving = previous?.current;
         if (leaving != null && leaving.videoId == _loadedVideoId) {
           unawaited(_savePosition(leaving));
         }
         _retried = false;
-        _load(current);
+        _load(current!); // non nul : shouldReloadForQueueChange l'a vérifié
       }
     });
 

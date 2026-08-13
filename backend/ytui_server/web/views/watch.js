@@ -27,7 +27,19 @@ export async function render(view, { params }) {
       ? queue.current
       : null;
   if (!video) {
-    // Lien direct (marque-page, back/forward avec file périmée) : file d'un seul élément.
+    // Retour arrière / avant du navigateur pendant une playlist : la vidéo est
+    // déjà dans la file, il faut s'y repositionner — la remplacer par une file
+    // d'un seul élément jetterait le reste de la playlist.
+    const known = queue.items.findIndex(
+      (v) => v.video_id === id && v.platform === platform,
+    );
+    if (known >= 0) {
+      queue.jumpTo(known);
+      video = queue.current;
+    }
+  }
+  if (!video) {
+    // Lien direct (marque-page, file périmée) : file d'un seul élément.
     video = {
       video_id: id,
       platform,
@@ -340,6 +352,8 @@ export async function render(view, { params }) {
         ),
       );
     },
+    // Déclaration hissée (function declaration) : définie plus bas, avec la file.
+    onEnded: () => onEnded(),
     onSubtitleChange: (index) => {
       subSel.value = String(index);
     },
@@ -502,7 +516,8 @@ export async function render(view, { params }) {
   }
 
   // Fin de lecture : suivant, sinon autoplay de la première suggestion
-  // (enqueue + next — sémantique mobile exacte).
+  // (enqueue + next — sémantique mobile exacte). Appelé une seule fois par
+  // média : le lecteur dédoublonne `ended` natif et PLAYBACK_ENDED de dash.js.
   async function onEnded() {
     if (live) return;
     if (queue.hasNext) {
@@ -523,14 +538,26 @@ export async function render(view, { params }) {
       queue.next();
     }
   }
-  videoEl.addEventListener("ended", onEnded);
 
+  let queueIndex = queue.index;
   const onQueueChange = () => {
     renderQueue();
     const cur = queue.current;
-    if (cur && (cur.video_id !== video.video_id || cur.platform !== video.platform)) {
+    const moved = queue.index !== queueIndex;
+    queueIndex = queue.index;
+    if (!cur) return;
+    if (cur.video_id !== video.video_id || cur.platform !== video.platform) {
       // Avance de la file : remplace l'entrée d'historique (pas de spam back).
       replace(watchPath(cur));
+    } else if (moved) {
+      // Même vidéo à une autre place (playlist qui répète un titre) : l'URL ne
+      // change pas, donc aucun re-rendu — il faut relancer le média ici, sinon
+      // la lecture reste bloquée sur la fin du doublon.
+      clearOverlay();
+      player.load(video).catch((err) => {
+        errorToast(err);
+        showOverlay(err.detail || "Lecture impossible");
+      });
     }
   };
   queue.addEventListener("change", onQueueChange);
@@ -555,7 +582,6 @@ export async function render(view, { params }) {
   return () => {
     stopChat();
     queue.removeEventListener("change", onQueueChange);
-    videoEl.removeEventListener("ended", onEnded);
     player.destroy();
     document.title = "ytui";
   };
