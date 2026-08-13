@@ -537,3 +537,145 @@ def test_related_videos_network_error(client):
     with patch.object(httpx, "AsyncClient", lambda **kw: fake_client):
         resp = client.get("/api/videos/vid000000001/related")
     assert resp.status_code == 502
+
+
+# ─── YouTube ~60 s delivery cap (see ytdlp._delivery_truncated) ───
+
+def _gv_url(itag: str, clen: int, tag: str) -> str:
+    return (
+        f"https://rr1---sn-x.googlevideo.com/videoplayback?expire=1&itag={itag}"
+        f"&clen={clen}&mime=video%2Fmp4&sig={tag}"
+    )
+
+
+def _gv_info(tag: str):
+    return _info(
+        [
+            {"format_id": "140", "url": _gv_url("140", 36_000_000, tag),
+             "ext": "m4a", "acodec": "mp4a.40.2", "vcodec": "none", "abr": 129,
+             "protocol": "https"},
+            {"format_id": "137", "url": _gv_url("137", 830_000_000, tag),
+             "ext": "mp4", "acodec": "none", "vcodec": "avc1.640028", "protocol": "https",
+             "height": 1080, "width": 1920, "tbr": 2957},
+        ]
+    )
+
+
+class SequenceYDL(FakeYDL):
+    """FakeYDL handing out one info per extraction, tracking the call count."""
+
+    def __init__(self, infos):
+        self._infos = list(infos)
+        self.calls = 0
+
+    def __call__(self, opts):
+        return self
+
+    def extract_info(self, url, download=False):
+        info = self._infos[min(self.calls, len(self._infos) - 1)]
+        self.calls += 1
+        return info
+
+
+def _patch_range_probe(capped_tags):
+    """Fake httpx.Client whose ranged GET 403s for URLs of a capped bucket."""
+    probed: list[tuple[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, headers=None):
+            probed.append((url, (headers or {}).get("Range", "")))
+            capped = any(f"sig={tag}" in url for tag in capped_tags)
+            return httpx.Response(403 if capped else 206)
+
+    return patch.object(ytdlp.httpx, "Client", FakeClient), probed
+
+
+def test_streams_reresolves_when_youtube_caps_delivery(client):
+    """A bucket that 403s past ~60 s is discarded: the next extraction is used."""
+    ydl = SequenceYDL([_gv_info("capped"), _gv_info("healthy")])
+    probe, probed = _patch_range_probe({"capped"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert "sig=healthy" in resp.json()["video_url"]
+    assert ydl.calls == 2
+    # The probe asks for the last byte only, on the smallest (audio) format.
+    assert probed[0][1] == "bytes=35999999-35999999"
+    assert "itag=140" in probed[0][0]
+
+
+def test_streams_keeps_first_resolution_when_delivery_is_whole(client):
+    ydl = SequenceYDL([_gv_info("healthy"), _gv_info("other")])
+    probe, probed = _patch_range_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert "sig=healthy" in resp.json()["video_url"]
+    assert ydl.calls == 1
+    assert len(probed) == 1
+
+
+def test_streams_gives_up_after_three_capped_resolutions(client):
+    """Never fail playback: a capped stream still beats no stream at all."""
+    ydl = SequenceYDL([_gv_info("capped")])
+    probe, _ = _patch_range_probe({"capped"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert ydl.calls == ytdlp._TRUNCATION_ATTEMPTS
+
+
+def test_streams_probe_failure_does_not_block_playback(client):
+    ydl = SequenceYDL([_gv_info("healthy")])
+
+    class BoomClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, headers=None):
+            raise httpx.ConnectError("probe down")
+
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), patch.object(
+        ytdlp.httpx, "Client", BoomClient
+    ):
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert ydl.calls == 1
+
+
+def test_non_googlevideo_streams_are_not_probed(client):
+    ydl = SequenceYDL([_info([BC_PROG], url=BC_URL)])
+    probe, probed = _patch_range_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert probed == []

@@ -114,6 +114,53 @@ def _fix_bitchute_formats(info: dict) -> None:
         fmt["url"] = fixed
 
 
+# YouTube enrols a share of anonymous playback sessions in an A/B bucket whose
+# stream URLs only serve the first ~60 s of media and answer 403 past that
+# point (that client is expected to carry a PO token, which we cannot mint).
+# Nothing in the URL is reliably distinguishable — the tell is an experiment id
+# in `fexp` that YouTube is free to renumber — so the bucket is detected by
+# asking for the last byte of the file. Re-extracting re-rolls the bucket.
+_TRUNCATION_PROBE_TIMEOUT = 8.0
+# Bucket assignment is random per extraction but clusters in time: ~1 resolution
+# in 3 comes back capped, so a couple of spare attempts are worth the seconds.
+_TRUNCATION_ATTEMPTS = 4
+_GOOGLEVIDEO_RE = re.compile(r"^https://[\w.-]*googlevideo\.com/videoplayback\b")
+
+
+def _truncation_probe_target(formats: list[dict]) -> tuple[int, str] | None:
+    """Smallest googlevideo format that advertises its length, as (clen, url)."""
+    best: tuple[int, str] | None = None
+    for fmt in formats:
+        url = fmt.get("url") or ""
+        if not _GOOGLEVIDEO_RE.match(url):
+            continue
+        clen = (parse_qs(urlparse(url).query).get("clen") or [""])[0]
+        if not clen.isdigit() or int(clen) < 2:
+            continue
+        if best is None or int(clen) < best[0]:
+            best = (int(clen), url)
+    return best
+
+
+def _delivery_truncated(info: dict) -> bool:
+    """True when the resolved URLs stop serving bytes partway through the file.
+
+    A single-byte range request at EOF costs nothing and is unambiguous: the
+    capped bucket answers 403 there while a healthy URL answers 206.
+    """
+    target = _truncation_probe_target(info.get("formats") or [])
+    if target is None:
+        return False
+    clen, url = target
+    try:
+        with httpx.Client(timeout=_TRUNCATION_PROBE_TIMEOUT) as client:
+            resp = client.get(url, headers={"Range": f"bytes={clen - 1}-{clen - 1}"})
+    except httpx.HTTPError as exc:  # network hiccup: assume the stream is fine
+        log.debug("truncation probe failed for %s: %s", url, exc)
+        return False
+    return resp.status_code == 403
+
+
 # TTL cache for full (non-flat) extract_info results. The web player hits
 # /streams then /mpd for the same video back to back; without this, each
 # request pays a full multi-second yt-dlp extraction.
@@ -136,8 +183,18 @@ def _extract_info_cached(url: str) -> dict:
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
     if bitchute:
         opts["check_formats"] = False  # see _bitchute_media_url
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info = {}
+    for attempt in range(1, _TRUNCATION_ATTEMPTS + 1):
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if attempt == _TRUNCATION_ATTEMPTS or not _delivery_truncated(info):
+            break
+        log.warning(
+            "youtube served ~60 s-capped stream URLs for %s, re-resolving (%d/%d)",
+            url,
+            attempt,
+            _TRUNCATION_ATTEMPTS,
+        )
     if bitchute:
         _fix_bitchute_formats(info)
     with _INFO_CACHE_LOCK:
