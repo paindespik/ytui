@@ -679,3 +679,99 @@ def test_non_googlevideo_streams_are_not_probed(client):
 
     assert resp.status_code == 200
     assert probed == []
+
+
+# ─── Same bucket, seen through a live's HLS playlist (no file to range-probe) ──
+
+def _hls_playlist_url(itag: str, tag: str) -> str:
+    return (
+        "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1"
+        f"/itag/{itag}/source/yt_live_broadcast/sig/{tag}/playlist/index.m3u8"
+    )
+
+
+def _live_info(tag: str):
+    """A YouTube live: HLS variants only, no `clen`, no duration."""
+    return _info(
+        [
+            {"format_id": "91", "url": _hls_playlist_url("91", tag), "ext": "mp4",
+             "protocol": "m3u8_native", "acodec": "mp4a.40.5", "vcodec": "avc1.4D400C",
+             "height": 144, "width": 256, "tbr": 269},
+            {"format_id": "96", "url": _hls_playlist_url("96", tag), "ext": "mp4",
+             "protocol": "m3u8_native", "acodec": "mp4a.40.2", "vcodec": "avc1.4D4028",
+             "height": 1080, "width": 1920, "tbr": 4561},
+        ]
+    )
+
+
+def _patch_hls_probe(capped_tags):
+    """Fake client serving media playlists whose segments 403 for a capped bucket."""
+    probed: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, headers=None):
+            probed.append(url)
+            capped = any(f"/sig/{tag}/" in url or f"sig={tag}" in url for tag in capped_tags)
+            if "/playlist/index.m3u8" in url:  # the media playlist itself is served
+                body = f"#EXTM3U\n#EXTINF:5.0,\nhttps://rr1---sn-x.googlevideo.com/seg?sig={_tag_of(url)}\n"
+                return httpx.Response(200, text=body)
+            return httpx.Response(403 if capped else 206)
+
+    return patch.object(ytdlp.httpx, "Client", FakeClient), probed
+
+
+def _tag_of(url: str) -> str:
+    return url.split("/sig/", 1)[1].split("/", 1)[0]
+
+
+def test_live_reresolves_when_hls_segments_are_forbidden(client):
+    """A live whose every segment 403s freezes the picture: re-roll the bucket."""
+    ydl = SequenceYDL([_live_info("capped"), _live_info("healthy")])
+    probe, probed = _patch_hls_probe({"capped"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert "healthy" in resp.json()["url"]
+    assert ydl.calls == 2
+    # Probed through the cheapest variant, then its first segment.
+    assert "/itag/91/" in probed[0]
+    assert probed[1].startswith("https://rr1---sn-x.googlevideo.com/seg")
+
+
+def test_live_keeps_first_resolution_when_segments_are_served(client):
+    ydl = SequenceYDL([_live_info("healthy"), _live_info("other")])
+    probe, probed = _patch_hls_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert "healthy" in resp.json()["url"]
+    assert ydl.calls == 1
+    assert len(probed) == 2  # playlist + one segment, nothing more
+
+
+def test_live_still_plays_when_every_bucket_is_capped(client):
+    """Never fail playback, even when all attempts come back poisoned."""
+    ydl = SequenceYDL([_live_info("capped")])
+    probe, _ = _patch_hls_probe({"capped"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.status_code == 200
+    assert ydl.calls == ytdlp._TRUNCATION_ATTEMPTS

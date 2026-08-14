@@ -125,6 +125,13 @@ _TRUNCATION_PROBE_TIMEOUT = 8.0
 # in 3 comes back capped, so a couple of spare attempts are worth the seconds.
 _TRUNCATION_ATTEMPTS = 4
 _GOOGLEVIDEO_RE = re.compile(r"^https://[\w.-]*googlevideo\.com/videoplayback\b")
+# A live has no `videoplayback` URL to range-probe: it is served as HLS, whose
+# per-variant media playlists live under manifest.googlevideo.com. The same
+# bucket poisons those too — every segment of every variant answers 403 — so
+# lives need their own probe or they slip through the guard entirely.
+_HLS_PLAYLIST_RE = re.compile(
+    r"^https://[\w.-]*googlevideo\.com/api/manifest/hls_playlist/"
+)
 
 
 def _truncation_probe_target(formats: list[dict]) -> tuple[int, str] | None:
@@ -142,18 +149,66 @@ def _truncation_probe_target(formats: list[dict]) -> tuple[int, str] | None:
     return best
 
 
+def _hls_probe_target(formats: list[dict]) -> str | None:
+    """Cheapest googlevideo HLS media playlist to sample a segment from.
+
+    Picking the lowest-bitrate variant keeps the probe cheap; the bucket poisons
+    every variant of an extraction alike, so any one of them is a valid tell.
+    """
+    best: tuple[float, str] | None = None
+    for fmt in formats:
+        url = fmt.get("url") or ""
+        if not _HLS_PLAYLIST_RE.match(url):
+            continue
+        weight = float(fmt.get("tbr") or fmt.get("height") or 0)
+        if best is None or weight < best[0]:
+            best = (weight, url)
+    return None if best is None else best[1]
+
+
+def _hls_segment_forbidden(client: httpx.Client, playlist_url: str) -> bool:
+    """True when the first segment of an HLS media playlist answers 403.
+
+    A live has no end of file to range-probe, so the tell is the segments
+    themselves: in the capped bucket every one of them is refused, which strands
+    the player on a frozen picture instead of failing outright.
+    """
+    resp = client.get(playlist_url)
+    if resp.status_code == 403:
+        return True
+    if resp.status_code >= 400:  # anything else: not our bucket to diagnose
+        return False
+    segment = next(
+        (
+            line.strip()
+            for line in resp.text.splitlines()
+            if line.strip() and not line.startswith("#")
+        ),
+        None,
+    )
+    if segment is None:
+        return False
+    return client.get(segment, headers={"Range": "bytes=0-1"}).status_code == 403
+
+
 def _delivery_truncated(info: dict) -> bool:
     """True when the resolved URLs stop serving bytes partway through the file.
 
     A single-byte range request at EOF costs nothing and is unambiguous: the
-    capped bucket answers 403 there while a healthy URL answers 206.
+    capped bucket answers 403 there while a healthy URL answers 206. Lives carry
+    no such file, so they are probed one level deeper, through their playlist.
     """
-    target = _truncation_probe_target(info.get("formats") or [])
-    if target is None:
+    formats = info.get("formats") or []
+    target = _truncation_probe_target(formats)
+    playlist = _hls_probe_target(formats) if target is None else None
+    url = target[1] if target is not None else playlist
+    if url is None:
         return False
-    clen, url = target
     try:
         with httpx.Client(timeout=_TRUNCATION_PROBE_TIMEOUT) as client:
+            if target is None:
+                return _hls_segment_forbidden(client, url)
+            clen = target[0]
             resp = client.get(url, headers={"Range": f"bytes={clen - 1}-{clen - 1}"})
     except httpx.HTTPError as exc:  # network hiccup: assume the stream is fine
         log.debug("truncation probe failed for %s: %s", url, exc)
