@@ -132,6 +132,100 @@ _GOOGLEVIDEO_RE = re.compile(r"^https://[\w.-]*googlevideo\.com/videoplayback\b"
 _HLS_PLAYLIST_RE = re.compile(
     r"^https://[\w.-]*googlevideo\.com/api/manifest/hls_playlist/"
 )
+# What a live's bucket can only be judged on: its behaviour a minute later. The
+# experiment ids in `fexp` are the one thing that identifies the bucket an
+# extraction landed in, and YouTube renumbers them at will — so nothing is
+# hardcoded. Instead, a live that is served gets re-probed once its bucket has
+# shown its hand; a signature caught refusing its own segments is quarantined,
+# and later extractions carrying it are thrown away and rolled again.
+_FEXP_RE = re.compile(r"(?:/fexp/|[?&]fexp=)([\d,]+)")
+_BUCKET_VERIFY_DELAY = 70.0  # measured: served at +26 s, refused from +51 s on
+_BUCKET_QUARANTINE_TTL = 3600.0
+_BUCKET_QUARANTINE_MAX = 32
+_capped_buckets: dict[str, float] = {}  # fexp signature -> monotonic expiry
+_bucket_checks_pending: set[str] = set()
+_BUCKET_LOCK = threading.Lock()
+
+
+def _fexp_signature(url: str) -> str | None:
+    """The experiment ids that identify the A/B bucket an extraction landed in."""
+    found = _FEXP_RE.search(url)
+    return found.group(1) if found else None
+
+
+def _live_bucket_signature(info: dict) -> str | None:
+    target = _hls_probe_target(info.get("formats") or [])
+    return _fexp_signature(target) if target else None
+
+
+def _bucket_quarantined(signature: str | None) -> bool:
+    if signature is None:
+        return False
+    with _BUCKET_LOCK:
+        expiry = _capped_buckets.get(signature)
+        if expiry is None:
+            return False
+        if time.monotonic() >= expiry:
+            del _capped_buckets[signature]
+            return False
+        return True
+
+
+def _quarantine_bucket(signature: str) -> None:
+    with _BUCKET_LOCK:
+        now = time.monotonic()
+        for key, expiry in list(_capped_buckets.items()):
+            if now >= expiry:
+                del _capped_buckets[key]
+        if (
+            signature not in _capped_buckets
+            and len(_capped_buckets) >= _BUCKET_QUARANTINE_MAX
+        ):
+            oldest = min(_capped_buckets, key=lambda key: _capped_buckets[key])
+            del _capped_buckets[oldest]
+        _capped_buckets[signature] = now + _BUCKET_QUARANTINE_TTL
+
+
+def _spawn_delayed(delay: float, func, *args) -> None:
+    """Run func(*args) later on a daemon thread (seam for the tests)."""
+    timer = threading.Timer(delay, func, args)
+    timer.daemon = True
+    timer.start()
+
+
+def _verify_bucket(signature: str, playlist_url: str) -> None:
+    """Quarantine a signature whose live segments have stopped being served."""
+    try:
+        with httpx.Client(timeout=_TRUNCATION_PROBE_TIMEOUT) as client:
+            dead = _hls_segment_forbidden(client, playlist_url)
+    except httpx.HTTPError as exc:  # a hiccup is not evidence of a bad bucket
+        log.debug("bucket check failed for %s: %s", signature, exc)
+        dead = False
+    finally:
+        with _BUCKET_LOCK:
+            _bucket_checks_pending.discard(signature)
+    if dead:
+        log.warning(
+            "youtube bucket %s stopped serving live segments, quarantining for %d min",
+            signature,
+            int(_BUCKET_QUARANTINE_TTL // 60),
+        )
+        _quarantine_bucket(signature)
+
+
+def _schedule_bucket_check(info: dict) -> None:
+    """Arrange for a served live to be re-probed once its bucket would have shown."""
+    if not info.get("is_live"):
+        return
+    playlist = _hls_probe_target(info.get("formats") or [])
+    signature = _fexp_signature(playlist) if playlist else None
+    if playlist is None or signature is None:
+        return
+    with _BUCKET_LOCK:
+        if signature in _bucket_checks_pending or signature in _capped_buckets:
+            return
+        _bucket_checks_pending.add(signature)
+    _spawn_delayed(_BUCKET_VERIFY_DELAY, _verify_bucket, signature, playlist)
 
 
 def _truncation_probe_target(formats: list[dict]) -> tuple[int, str] | None:
@@ -253,16 +347,22 @@ def _extract_info_cached(url: str) -> dict:
     for attempt in range(1, _TRUNCATION_ATTEMPTS + 1):
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        if attempt == _TRUNCATION_ATTEMPTS or not _delivery_truncated(info):
+        if attempt == _TRUNCATION_ATTEMPTS:
+            break  # a capped stream still beats no stream at all
+        quarantined = _bucket_quarantined(_live_bucket_signature(info))
+        if not quarantined and not _delivery_truncated(info):
             break
         log.warning(
-            "youtube served ~60 s-capped stream URLs for %s, re-resolving (%d/%d)",
+            "youtube served %s stream URLs for %s, re-resolving (%d/%d)",
+            "quarantined-bucket" if quarantined else "~60 s-capped",
             url,
             attempt,
             _TRUNCATION_ATTEMPTS,
         )
     if bitchute:
         _fix_bitchute_formats(info)
+    # Served now, judged later: a live's bucket only reveals itself a minute in.
+    _schedule_bucket_check(info)
     with _INFO_CACHE_LOCK:
         if url not in _INFO_CACHE and len(_INFO_CACHE) >= _INFO_CACHE_MAX:
             oldest = min(_INFO_CACHE, key=lambda k: _INFO_CACHE[k][0])

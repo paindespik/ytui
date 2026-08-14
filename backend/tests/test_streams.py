@@ -681,12 +681,36 @@ def test_non_googlevideo_streams_are_not_probed(client):
     assert probed == []
 
 
+@pytest.fixture(autouse=True)
+def _no_background_bucket_checks():
+    """Keep the delayed bucket probe off real timers, and buckets test-local."""
+    scheduled: list[tuple] = []
+    ytdlp._capped_buckets.clear()
+    ytdlp._bucket_checks_pending.clear()
+    with patch.object(
+        ytdlp, "_spawn_delayed",
+        lambda delay, func, *args: scheduled.append((delay, func, args)),
+    ):
+        yield scheduled
+    ytdlp._capped_buckets.clear()
+    ytdlp._bucket_checks_pending.clear()
+
+
 # ─── Same bucket, seen through a live's HLS playlist (no file to range-probe) ──
+
+# Each fake bucket carries its own experiment ids, the way a real one does.
+_BUCKET_IDS = {"capped": "51946838", "healthy": "51946837"}
+
+
+def _fexp_for(tag: str) -> str:
+    return _BUCKET_IDS.get(tag, f"519468{abs(hash(tag)) % 90 + 10}")
+
 
 def _hls_playlist_url(itag: str, tag: str) -> str:
     return (
         "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1"
-        f"/itag/{itag}/source/yt_live_broadcast/sig/{tag}/playlist/index.m3u8"
+        f"/itag/{itag}/source/yt_live_broadcast/fexp/{_fexp_for(tag)}"
+        f"/sig/{tag}/playlist/index.m3u8"
     )
 
 
@@ -837,3 +861,87 @@ def test_live_still_plays_when_every_bucket_is_capped(client):
 
     assert resp.status_code == 200
     assert ydl.calls == ytdlp._TRUNCATION_ATTEMPTS
+
+
+# ─── Self-calibrating bucket quarantine (nothing about fexp is hardcoded) ─────
+
+def _fexp_playlist(ids: str) -> str:
+    return (
+        "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1"
+        f"/itag/91/fexp/{ids}/sig/x/playlist/index.m3u8"
+    )
+
+
+def test_fexp_signature_is_read_from_path_and_query():
+    assert ytdlp._fexp_signature(_fexp_playlist("1,2,3")) == "1,2,3"
+    assert ytdlp._fexp_signature("https://x/videoplayback?a=1&fexp=9,8") == "9,8"
+    assert ytdlp._fexp_signature("https://x/none") is None
+
+
+def test_served_live_schedules_a_delayed_bucket_check(
+    client, _no_background_bucket_checks
+):
+    """The verdict cannot be taken now, so it is booked for a minute later."""
+    ydl = SequenceYDL([_live_info("healthy")])
+    probe, _ = _patch_hls_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        client.get("/api/videos/vid000000001/streams")
+
+    assert len(_no_background_bucket_checks) == 1
+    delay, func, _ = _no_background_bucket_checks[0]
+    assert delay == ytdlp._BUCKET_VERIFY_DELAY
+    assert func is ytdlp._verify_bucket
+
+
+def test_vod_schedules_no_bucket_check(client, _no_background_bucket_checks):
+    ydl = SequenceYDL([_gv_info("healthy")])
+    probe, _ = _patch_range_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        client.get("/api/videos/vid000000001/streams")
+
+    assert _no_background_bucket_checks == []
+
+
+def test_bucket_check_quarantines_a_signature_that_went_dead():
+    probe, _ = _patch_hls_probe({"capped"})
+    with probe:
+        ytdlp._verify_bucket("51946838", _fexp_playlist("51946838").replace(
+            "/sig/x/", "/sig/capped/"))
+
+    assert ytdlp._bucket_quarantined("51946838")
+    assert not ytdlp._bucket_quarantined("51946837")
+
+
+def test_bucket_check_leaves_a_healthy_signature_alone():
+    probe, _ = _patch_hls_probe(set())
+    with probe:
+        ytdlp._verify_bucket("51946837", _fexp_playlist("51946837"))
+
+    assert not ytdlp._bucket_quarantined("51946837")
+
+
+def test_quarantine_expires():
+    ytdlp._quarantine_bucket("stale")
+    assert ytdlp._bucket_quarantined("stale")
+    ytdlp._capped_buckets["stale"] -= ytdlp._BUCKET_QUARANTINE_TTL + 1
+    assert not ytdlp._bucket_quarantined("stale")
+
+
+def test_quarantined_bucket_is_rolled_again(client):
+    """An extraction landing in a known-dead bucket is thrown away, not served."""
+    ydl = SequenceYDL([_live_info("capped"), _live_info("healthy")])
+    probe, _ = _patch_hls_probe(set())  # both look fine right now — that is the point
+    import yt_dlp
+
+    # What a previous playback taught us: the bucket behind "capped" goes dead.
+    ytdlp._quarantine_bucket(_fexp_for("capped"))
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert "healthy" in resp.json()["url"]
+    assert ydl.calls == 2
