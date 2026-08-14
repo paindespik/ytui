@@ -149,6 +149,10 @@ class StreamInfo {
   final int? duration;
   final DateTime? expiresAt;
   final int? height;
+
+  /// A live: rolling window, no meaningful duration or resume point. A YouTube
+  /// live keeps a plain video id, so the server flag is the only reliable tell.
+  final bool isLive;
   final List<SubtitleTrackInfo> subtitles;
 
   const StreamInfo({
@@ -160,6 +164,7 @@ class StreamInfo {
     this.duration,
     this.expiresAt,
     this.height,
+    this.isLive = false,
     this.subtitles = const [],
   });
 
@@ -171,6 +176,7 @@ class StreamInfo {
         title: json['title'] as String? ?? '',
         duration: json['duration'] as int?,
         height: json['height'] as int?,
+        isLive: json['is_live'] as bool? ?? false,
         expiresAt: json['expires_at'] != null
             ? DateTime.tryParse(json['expires_at'] as String)
             : null,

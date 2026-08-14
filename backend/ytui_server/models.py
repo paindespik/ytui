@@ -158,6 +158,10 @@ class StreamInfo(BaseModel):
     expires_at: datetime | None = None
     # Height of the video track actually served (None: audio-only or unknown).
     height: int | None = None
+    # A live has no fixed length and only a rolling window of media: clients must
+    # not resume, seek or bookmark it. YouTube lives keep a plain video id, so
+    # this flag is the only thing that tells them apart from a VOD.
+    is_live: bool = False
     subtitles: list[SubtitleTrackOut] = []
 
 

@@ -222,7 +222,18 @@ def _delivery_truncated(info: dict) -> bool:
 _INFO_CACHE: dict[str, tuple[float, dict]] = {}
 _INFO_CACHE_LOCK = threading.Lock()
 _INFO_CACHE_TTL = 300.0  # seconds; stream URLs themselves last ~6 h
+# A live is the exception: in the capped bucket its segment URLs start answering
+# 403 about a minute after extraction (measured: 200 at +26 s, 403 from +51 s on).
+# Caching those for five minutes would hand the same dead URLs back to a client
+# that is retrying precisely because they died — re-extracting is the only way
+# out, and it re-rolls the bucket, so keep live entries barely long enough to
+# serve the /streams + /mpd burst of a single page load.
+_INFO_CACHE_TTL_LIVE = 20.0
 _INFO_CACHE_MAX = 32
+
+
+def _info_cache_ttl(info: dict) -> float:
+    return _INFO_CACHE_TTL_LIVE if info.get("is_live") else _INFO_CACHE_TTL
 
 
 def _extract_info_cached(url: str) -> dict:
@@ -230,7 +241,7 @@ def _extract_info_cached(url: str) -> dict:
     now = time.monotonic()
     with _INFO_CACHE_LOCK:
         cached = _INFO_CACHE.get(url)
-        if cached is not None and now - cached[0] < _INFO_CACHE_TTL:
+        if cached is not None and now - cached[0] < _info_cache_ttl(cached[1]):
             return cached[1]
     import yt_dlp
 
@@ -510,6 +521,7 @@ def _extract_streams(
             duration=duration,
             expires_at=_stream_expiry(url_),
             height=height,
+            is_live=bool(info.get("is_live")),
             subtitles=subtitles,
         )
 

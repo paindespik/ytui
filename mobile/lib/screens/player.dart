@@ -105,10 +105,27 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// `ref.read` is no longer allowed).
   Video? _playing;
   YtuiApi? _api;
+  /// Whether the media currently open is a live. Snapshotted from the resolved
+  /// [StreamInfo] because [_savePosition] runs from [dispose], where the
+  /// provider-backed [_isLivePlayback] is no longer readable.
+  bool _playingIsLive = false;
   bool _retried = false;
   bool _errorCheckPending = false;
   String? _error;
   Timer? _heartbeat;
+  /// Stall watchdog. A stream can stop delivering media without libmpv ever
+  /// raising an error: YouTube enrols part of its sessions in a bucket whose
+  /// live segment URLs start answering 403 about a minute in (measured: served
+  /// at +26 s, refused from +51 s on), and the demuxer then just skips segment
+  /// after segment. The picture freezes on the buffering spinner and nothing
+  /// ever recovers, because the URLs are dead for good — only re-resolving
+  /// helps, and it re-rolls the bucket. Expiring URLs and dropped networks fail
+  /// the same silent way, so the cure is the same: notice that the position
+  /// stopped moving while playing, and reload the stream.
+  Timer? _stallWatchdog;
+  Duration _lastPosition = Duration.zero;
+  DateTime _lastProgressAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastStallRecoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
   List<SponsorSegment> _segments = const [];
   DateTime _lastSkip = DateTime.fromMillisecondsSinceEpoch(0);
   double _rate = 1.0;
@@ -218,6 +235,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       );
     });
     _positionSub = player.stream.position.listen((position) {
+      if (position != _lastPosition) _noteProgress(position);
       // Playback reaching the resume target confirms it, whichever way it got
       // there (seek landed, or the stream simply started at the right place).
       _resume.confirm(position.inSeconds.toDouble());
@@ -232,6 +250,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
     });
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _savePosition());
+    _stallWatchdog =
+        Timer.periodic(const Duration(seconds: 5), (_) => _checkStall());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final video = ref.read(queueProvider).current;
       if (video != null) _load(video);
@@ -271,6 +291,35 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
   }
 
+  /// Playback moved: the stream is alive, restart the watchdog's clock.
+  void _noteProgress([Duration? position]) {
+    _lastPosition = position ?? player.state.position;
+    _lastProgressAt = DateTime.now();
+  }
+
+  /// Playing, but the position has not moved for [_kStallAfter]: reload.
+  ///
+  /// Paused playback is not a stall, and neither is a surfaced error (the user
+  /// is looking at it). [_kStallRetryGap] bounds the retry rate, so a stream
+  /// that is simply dead degrades into a slow reload loop instead of a storm.
+  static const _kStallAfter = Duration(seconds: 15);
+  static const _kStallRetryGap = Duration(seconds: 25);
+
+  void _checkStall() {
+    if (!mounted || _error != null || !player.state.playing) return;
+    final now = DateTime.now();
+    if (now.difference(_lastProgressAt) < _kStallAfter) return;
+    if (now.difference(_lastStallRecoveryAt) < _kStallRetryGap) return;
+    _lastStallRecoveryAt = now;
+    final video = ref.read(queueProvider).current;
+    if (video == null) return;
+    // A live restarts at its edge; a VOD picks up where the picture froze.
+    final at = _isLivePlayback(video) ? null : player.state.position;
+    _retried = false;  // a fresh stream deserves a fresh error budget
+    _noteProgress();
+    unawaited(_load(video, resume: false, startAt: at));
+  }
+
   /// Plays the first suggestion for the current video (autoplay at end of queue).
   Future<void> _autoplayNext() async {
     final video = ref.read(queueProvider).current;
@@ -299,7 +348,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final duration = player.state.duration.inSeconds.toDouble();
     final playing = _playing;
     if (api == null || duration <= 0) return;
-    if (playing == null || playing.videoId != videoId || _isLiveId(playing)) return;
+    if (playing == null || playing.videoId != videoId) return;
+    if (_isLiveId(playing) || _playingIsLive) return;
     unawaited(api
         .savePosition(videoId, duration, duration: duration)
         .catchError((_) {}));
@@ -309,6 +359,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       {bool resume = true, Duration? startAt}) async {
     _loadedVideoId = video.videoId;
     _completedFor = null;
+    _playingIsLive = _isLiveId(video);
+    _noteProgress();  // the watchdog must not fire on the load it is waiting for
     // Nothing to flush until the new media is actually open: a heartbeat firing
     // mid-load would otherwise store the outgoing media's position under this id.
     _playing = null;
@@ -343,6 +395,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       final streams = await api.videoStreams(video.videoId,
           platform: video.platform, maxHeight: ref.read(maxHeightProvider));
       if (!mounted || _loadedVideoId != video.videoId) return;
+      // Only now is a YouTube live recognisable: drop any resume point rather
+      // than seek into a window that is seconds long (that stalls the player).
+      _playingIsLive = _playingIsLive || streams.isLive;
+      if (_playingIsLive && start > 0) {
+        start = 0;
+        _resume.release();
+      }
       // The audio backend must be picked before playback starts.
       await _mpvConfigured;
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
@@ -534,7 +593,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// pending target while keys keep coming, then one seek is issued.
   void _seekBy(Duration offset) {
     final video = ref.read(queueProvider).current;
-    if (video == null || _isLiveId(video)) return;
+    if (video == null || _isLivePlayback(video)) return;
     final duration = player.state.duration;
     _resume.release(); // déplacement volontaire : sa position fait foi
     var target = (_seekTarget ?? player.state.position) + offset;
@@ -673,11 +732,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (mounted) _revealControls();
   }
 
-  /// Live for resume purposes: a composite Twitch/TikTok id, or a video the
-  /// server currently reports as live (a YouTube live keeps a plain id). Seeking
-  /// into a sliding live window stalls the player, so it restarts at the edge.
+  /// Live for resume purposes: a composite Twitch/TikTok id, a stream the server
+  /// resolved as live, or a video the lives feed currently lists. Seeking into a
+  /// sliding live window stalls the player, so it restarts at the edge.
+  ///
+  /// [StreamInfo.isLive] is what covers a YouTube live: it keeps a plain video
+  /// id, and the lives feed only carries the channels the user follows — one
+  /// opened from search or suggestions used to be resumed, seeked and
+  /// bookmarked like a VOD, on a rolling window a few seconds long.
   bool _isLivePlayback(Video video) =>
       _isLiveId(video) ||
+      (_streams?.isLive ?? false) ||
       (ref.read(livesProvider).valueOrNull ?? const <LiveItem>[])
           .any((l) => l.video.videoId == video.videoId);
 
@@ -766,7 +831,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Future<void> _savePosition([Video? video]) async {
     final target = video ?? _playing;
     final api = _api;
-    if (target == null || api == null || _isLiveId(target)) return;
+    if (target == null || api == null || _isLiveId(target) || _playingIsLive) {
+      return;  // a live's rolling window is not a position worth remembering
+    }
     final pos = player.state.position;
     final dur = player.state.duration;
     if (dur.inSeconds == 0) return;
@@ -785,6 +852,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void dispose() {
     _heartbeat?.cancel();
+    _stallWatchdog?.cancel();
     // Final flush: the 10 s heartbeat would otherwise drop the last seconds
     // watched before leaving the player.
     unawaited(_savePosition());

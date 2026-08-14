@@ -693,15 +693,77 @@ def _hls_playlist_url(itag: str, tag: str) -> str:
 def _live_info(tag: str):
     """A YouTube live: HLS variants only, no `clen`, no duration."""
     return _info(
-        [
+        is_live=True,
+        formats=[
             {"format_id": "91", "url": _hls_playlist_url("91", tag), "ext": "mp4",
              "protocol": "m3u8_native", "acodec": "mp4a.40.5", "vcodec": "avc1.4D400C",
              "height": 144, "width": 256, "tbr": 269},
             {"format_id": "96", "url": _hls_playlist_url("96", tag), "ext": "mp4",
              "protocol": "m3u8_native", "acodec": "mp4a.40.2", "vcodec": "avc1.4D4028",
              "height": 1080, "width": 1920, "tbr": 4561},
-        ]
+        ],
     )
+
+
+def test_live_stream_is_flagged_so_clients_skip_resume(client):
+    """A YouTube live keeps a plain id: `is_live` is all that tells it apart."""
+    ydl = SequenceYDL([_live_info("healthy")])
+    probe, _ = _patch_hls_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.json()["is_live"] is True
+
+
+def test_vod_stream_is_not_flagged_live(client):
+    ydl = SequenceYDL([_gv_info("healthy")])
+    probe, _ = _patch_range_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams")
+
+    assert resp.json()["is_live"] is False
+
+
+def _age_info_cache(seconds: float) -> None:
+    """Backdate every cache entry, without touching the process-wide clock."""
+    for key, (stamp, info) in list(ytdlp._INFO_CACHE.items()):
+        ytdlp._INFO_CACHE[key] = (stamp - seconds, info)
+
+
+def test_live_extraction_is_not_cached_past_its_url_lifetime(client):
+    """Live URLs die ~1 min in; a retry must re-extract, not get them back."""
+    ydl = SequenceYDL([_live_info("first"), _live_info("second")])
+    probe, _ = _patch_hls_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        first = client.get("/api/videos/vid000000001/streams").json()["url"]
+        # Aged past the live TTL, still well inside the VOD one.
+        _age_info_cache(ytdlp._INFO_CACHE_TTL_LIVE + 1)
+        second = client.get("/api/videos/vid000000001/streams").json()["url"]
+
+    assert "first" in first
+    assert "second" in second, "a live must not be served from a stale cache entry"
+    assert ydl.calls == 2
+
+
+def test_vod_extraction_is_still_cached(client):
+    """The same ageing must not evict a VOD: its URLs last hours."""
+    ydl = SequenceYDL([_gv_info("first"), _gv_info("second")])
+    probe, _ = _patch_range_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        client.get("/api/videos/vid000000001/streams")
+        _age_info_cache(ytdlp._INFO_CACHE_TTL_LIVE + 1)
+        again = client.get("/api/videos/vid000000001/streams").json()["video_url"]
+
+    assert "sig=first" in again
+    assert ydl.calls == 1
 
 
 def _patch_hls_probe(capped_tags):

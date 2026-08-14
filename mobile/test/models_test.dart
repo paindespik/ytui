@@ -112,6 +112,16 @@ void main() {
       expect(info.expiresAt, isNull);
       expect(info.height, isNull);
       expect(info.subtitles, isEmpty);
+      expect(info.isLive, isFalse);
+    });
+
+    test('carries the live flag', () {
+      // A YouTube live keeps a plain video id: this flag is the only thing
+      // that stops the player resuming, seeking and bookmarking a stream
+      // whose whole window is a few seconds long.
+      final info = StreamInfo.fromJson(
+          {'kind': 'hls', 'url': 'https://x/m.m3u8', 'is_live': true});
+      expect(info.isLive, isTrue);
     });
 
     test('parses subtitle tracks', () {
