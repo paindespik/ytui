@@ -542,6 +542,8 @@ class YtuiApp(App):
             channel_id = f"twitch:{channel_id}"
         elif channel_id and video.platform == "tiktok":
             channel_id = f"tiktok:{channel_id}"
+        elif channel_id and video.platform == "crowdbunker":
+            channel_id = f"crowdbunker:{channel_id}"
         if not channel_id:
             self.notify("No channel ID for this item.", severity="warning", timeout=5)
             return

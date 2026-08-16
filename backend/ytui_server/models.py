@@ -11,13 +11,19 @@ from pydantic import BaseModel, computed_field
 _YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
 _YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
 _BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
+_CROWDBUNKER_RE = re.compile(r"crowdbunker\.com/v/([^/?#]+)")
 _ODYSEE_RE = re.compile(r"odysee\.com/(?:@[^/?#]+/)?([^/?#@][^/?#]*:[0-9a-f]+)")
 _YT_LIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
 
 
 def video_id_from_url(url: str) -> str | None:
     """Extract a video id from a YouTube/BitChute/Odysee video URL, or None."""
-    match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url) or _BITCHUTE_RE.search(url)
+    match = (
+        _YT_WATCH_RE.search(url)
+        or _YT_SHORT_RE.search(url)
+        or _BITCHUTE_RE.search(url)
+        or _CROWDBUNKER_RE.search(url)
+    )
     if match:
         return match.group(1)
     match = _ODYSEE_RE.search(url)
@@ -43,7 +49,9 @@ def playlist_id_from_url(text: str) -> str:
 class Channel(BaseModel):
     channel_id: str
     title: str = ""
-    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
+    platform: Literal[
+        "youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"
+    ] = "youtube"
 
     @property
     def rss_url(self) -> str:
@@ -65,7 +73,9 @@ class Video(BaseModel):
     duration: int | None = None  # seconds
     thumbnail_url: str = ""
     kind: Literal["video", "playlist", "channel"] = "video"
-    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
+    platform: Literal[
+        "youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"
+    ] = "youtube"
     playlist_id: str = ""
 
     @computed_field  # type: ignore[prop-decorator]
@@ -90,6 +100,10 @@ class Video(BaseModel):
             if self.video_id.startswith("v") and self.video_id[1:].isdigit():
                 return f"https://www.twitch.tv/videos/{self.video_id[1:]}"
             return f"https://www.twitch.tv/{self.video_id}"
+        if self.platform == "crowdbunker":
+            if self.kind == "channel":
+                return f"https://crowdbunker.com/@{self.video_id}"
+            return f"https://crowdbunker.com/v/{self.video_id}"
         if self.platform == "tiktok":
             if self.kind == "channel":
                 return f"https://www.tiktok.com/@{self.video_id}"
@@ -169,7 +183,9 @@ class FollowedChannel(BaseModel):
     ref: str
     channel_id: str
     title: str = ""
-    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
+    platform: Literal[
+        "youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"
+    ] = "youtube"
 
 
 class ChannelIn(BaseModel):
@@ -229,7 +245,9 @@ class PlaylistImportIn(BaseModel):
     """
 
     source: str
-    platform: Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"] = "youtube"
+    platform: Literal[
+        "youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"
+    ] = "youtube"
     name: str = ""
     target_id: int | None = None
     limit: int = 500

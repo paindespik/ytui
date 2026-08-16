@@ -87,6 +87,8 @@ class SettingsScreen(Screen):
                 label = f"[#a970ff]Twitch[/] · {label}"
             elif channel.platform == "tiktok":
                 label = f"[#ff0050]TikTok[/] · {label}"
+            elif channel.platform == "crowdbunker":
+                label = f"[#e09b3d]CrowdBunker[/] · {label}"
             options.add_option(Option(label, id=channel.channel_id))
         if not self._channels:
             options.add_option(Option("(no channels followed)", disabled=True))
@@ -113,7 +115,7 @@ class SettingsScreen(Screen):
     def action_add_channel(self) -> None:
         prompt = (
             "Add channel (UC id, @handle, bitchute:<slug>, odysee:@name:claim, "
-            "twitch:<login> or tiktok:<user>):"
+            "twitch:<login>, tiktok:<user> or crowdbunker:<handle>):"
         )
 
         def on_entry(entry: str | None) -> None:

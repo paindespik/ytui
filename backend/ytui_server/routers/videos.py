@@ -27,14 +27,14 @@ from ..models import (
     Video,
     VideoDetails,
 )
-from ..services import dash, odysee, tiktok, twitch, ytdlp
+from ..services import crowdbunker, dash, odysee, tiktok, twitch, ytdlp
 from ..services.youtube import ApiError, AuthError
 
 router = APIRouter()
 
 log = logging.getLogger(__name__)
 
-Platform = Literal["youtube", "bitchute", "odysee", "twitch", "tiktok"]
+Platform = Literal["youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"]
 
 _ODYSEE_WRITE_DETAIL = "Odysee likes/comments require a LBRY wallet signature (not supported)"
 
@@ -51,7 +51,10 @@ def _video_url(video_id: str, platform: Platform) -> str:
 
 # No platform but YouTube and Odysee exposes an in-channel search upstream; for
 # the others the newest uploads are listed once and filtered on title locally.
+# Odysee shares the local fallback for short queries: Lighthouse 400s on terms
+# under 3 characters.
 _CHANNEL_SCAN_CAP = 200
+_MIN_ODYSEE_SEARCH_LEN = 3
 
 
 def _channel_url(channel_id: str, platform: Platform) -> str:
@@ -64,9 +67,18 @@ async def _search_channel(
     if platform == "youtube":
         url = _channel_url(channel_id, platform)
         return await ytdlp.channel_search(url, query, limit=limit, offset=offset)
-    if platform == "odysee":
+    if platform == "odysee" and len(query.strip()) >= _MIN_ODYSEE_SEARCH_LEN:
         return await odysee.search(query, limit=limit, offset=offset, channel_id=channel_id)
-    items = await ytdlp.channel_videos(_channel_url(channel_id, platform), limit=_CHANNEL_SCAN_CAP)
+    # Local title scan: short Odysee queries (Lighthouse 400s under 3 chars)
+    # and every platform without an upstream in-channel search.
+    if platform == "odysee":
+        items = await odysee.channel_videos(channel_id, limit=_CHANNEL_SCAN_CAP)
+    elif platform == "crowdbunker":
+        items = await crowdbunker.channel_videos(channel_id, limit=_CHANNEL_SCAN_CAP)
+    else:
+        items = await ytdlp.channel_videos(
+            _channel_url(channel_id, platform), limit=_CHANNEL_SCAN_CAP
+        )
     needle = query.casefold()
     matches = [item for item in items if needle in item.title.casefold()]
     return matches[offset : offset + limit]
@@ -88,11 +100,13 @@ async def channel_videos(
             items = await _search_channel(channel_id, platform, q, probe, offset)
         elif platform == "odysee":
             items = await odysee.channel_videos(channel_id, limit=probe, offset=offset)
+        elif platform == "crowdbunker":
+            items = await crowdbunker.channel_videos(channel_id, limit=probe, offset=offset)
         else:
             items = await ytdlp.channel_videos(
                 _channel_url(channel_id, platform), limit=probe, offset=offset
             )
-    except (ytdlp.UpstreamError, odysee.OdyseeError) as exc:
+    except (ytdlp.UpstreamError, odysee.OdyseeError, crowdbunker.CrowdBunkerError) as exc:
         raise HTTPException(status_code=502, detail=f"Channel listing failed: {exc}") from exc
     has_more = len(items) > limit
     items = items[:limit]

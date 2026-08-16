@@ -16,6 +16,7 @@ _PLATFORM_LABELS = {
     "odysee": "Odysee",
     "twitch": "Twitch",
     "tiktok": "TikTok",
+    "crowdbunker": "CrowdBunker",
 }
 _TWITCH_STYLE = "#a970ff"  # Twitch brand purple
 _TIKTOK_STYLE = "#ff0050"  # TikTok brand red-pink

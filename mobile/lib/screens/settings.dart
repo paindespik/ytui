@@ -24,6 +24,7 @@ const _platformLabels = <String, String>{
   'odysee': 'Odysee',
   'twitch': 'Twitch',
   'tiktok': 'TikTok',
+  'crowdbunker': 'CrowdBunker',
 };
 
 
@@ -415,7 +416,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'UC…, @handle, bitchute:slug or odysee:@name:claim',
+            hintText: 'UC…, @handle, bitchute:slug, odysee:@name or crowdbunker:handle',
           ),
         ),
         actions: [

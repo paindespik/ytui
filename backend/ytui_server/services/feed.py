@@ -17,7 +17,7 @@ import httpx
 
 from ..db import Database
 from ..models import FollowedChannel, Video
-from . import odysee, tiktok, twitch
+from . import crowdbunker, odysee, tiktok, twitch
 
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 HANDLE_URL = "https://www.youtube.com/{handle}"
@@ -28,7 +28,9 @@ ODYSEE_PREFIX = "odysee:"
 ODYSEE_RSS_URL = "https://odysee.com/$/rss/{channel_id}"
 TWITCH_PREFIX = "twitch:"
 TIKTOK_PREFIX = "tiktok:"
+CROWDBUNKER_PREFIX = "crowdbunker:"
 _ODYSEE_LINK_RE = re.compile(r"odysee\.com/(?:@[^/]+/)?([^/?#]+:[0-9a-f]+)")
+_CROWDBUNKER_URL_RE = re.compile(r"crowdbunker\.com/@([^/?#]+)")
 _ODYSEE_CHANNEL_URL_RE = re.compile(r"odysee\.com/(@[^/?#:]+:\w+)")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
 TIMEOUT = httpx.Timeout(5.0)
@@ -203,7 +205,27 @@ class FeedService:
 
     async def resolve_ref(self, ref: str, client: httpx.AsyncClient) -> FollowedChannel:
         """Resolve a channel ref: UC id, @handle, bitchute:/odysee:/twitch:/
-        tiktok: prefix, or a bare name (YouTube handle first, then Twitch login)."""
+        tiktok:/crowdbunker: prefix, or a bare name (YouTube handle first, then
+        Twitch login)."""
+        cb_ref = None
+        if ref.startswith(CROWDBUNKER_PREFIX):
+            cb_ref = ref[len(CROWDBUNKER_PREFIX):]
+        elif "crowdbunker.com/@" in ref:
+            m = _CROWDBUNKER_URL_RE.search(ref)
+            if not m:
+                raise ValueError(f"Could not parse CrowdBunker channel URL {ref!r}")
+            cb_ref = m.group(1)
+        if cb_ref is not None:
+            try:
+                channel_id, title = await crowdbunker.resolve_channel(cb_ref, client)
+            except crowdbunker.CrowdBunkerError as exc:
+                raise ValueError(str(exc)) from exc
+            return FollowedChannel(
+                ref=f"{CROWDBUNKER_PREFIX}{channel_id}",
+                channel_id=channel_id,
+                title=title,
+                platform="crowdbunker",
+            )
         if ref.startswith(BITCHUTE_PREFIX):
             slug = ref[len(BITCHUTE_PREFIX):]
             return FollowedChannel(
@@ -331,6 +353,8 @@ class FeedService:
                 return await self._fetch_bitchute(channel, client, force_refresh)
             if channel.platform == "odysee":
                 return await self._fetch_odysee(channel, client, force_refresh)
+            if channel.platform == "crowdbunker":
+                return await self._fetch_crowdbunker(channel, client, force_refresh)
             channel_id = channel.channel_id
             if not force_refresh:
                 cached = self.db.get_feed(channel_id)
@@ -393,6 +417,27 @@ class FeedService:
                 follow_redirects=True,
             )
             videos = parse_odysee_rss(resp.content, channel_id=channel.channel_id)
+            self.db.set_feed(cache_key, videos)
+            return videos, None
+        except Exception as exc:
+            log.warning("feed fetch failed for %s: %s", channel.ref, exc)
+            stale = self.db.get_feed(cache_key, allow_stale=True)
+            if stale is not None:
+                return stale, f"{channel.ref}: using cached data ({type(exc).__name__})"
+            return [], f"{channel.ref}: {exc}"
+
+    async def _fetch_crowdbunker(
+        self, channel: FollowedChannel, client: httpx.AsyncClient, force_refresh: bool
+    ) -> tuple[list[Video], str | None]:
+        """CrowdBunker home feed: first page of the posts API (no RSS)."""
+        cache_key = f"{CROWDBUNKER_PREFIX}{channel.channel_id}"
+        if not force_refresh:
+            cached = self.db.get_feed(cache_key)
+            if cached is not None:
+                return cached, None
+        try:
+            items, _ = await crowdbunker.fetch_posts_page(client, channel.channel_id)
+            videos = crowdbunker.posts_to_videos(items, channel.channel_id)
             self.db.set_feed(cache_key, videos)
             return videos, None
         except Exception as exc:

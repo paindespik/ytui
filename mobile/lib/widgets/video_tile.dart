@@ -383,6 +383,7 @@ class VideoTile extends ConsumerWidget {
                     final ref_ = switch (video.platform) {
                       'bitchute' => 'bitchute:${video.channelId}',
                       'odysee' => 'odysee:${video.channelId}',
+                      'crowdbunker' => 'crowdbunker:${video.channelId}',
                       _ => video.channelId,
                     };
                     try {

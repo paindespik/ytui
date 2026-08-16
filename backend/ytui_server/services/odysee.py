@@ -116,6 +116,12 @@ async def search(
     `channel_id` ('@name:claim' or a bare claim id) scopes the search to a single
     channel — claim_search has no usable full-text filter, Lighthouse does.
     """
+    if len(query.strip()) < 3:
+        # Lighthouse rejects queries shorter than 3 characters (400); there is
+        # no upstream alternative, so short global searches simply come back
+        # empty instead of failing. In-channel searches fall back to a local
+        # title scan (see the videos router) before reaching this path.
+        return []
     params: dict[str, Any] = {"s": query, "size": limit, "nsfw": "false"}
     if offset:
         params["from"] = offset

@@ -113,6 +113,7 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                     final ref_ = switch (widget.platform) {
                       'bitchute' => 'bitchute:${widget.channelId}',
                       'odysee' => 'odysee:${widget.channelId}',
+                      'crowdbunker' => 'crowdbunker:${widget.channelId}',
                       _ => widget.channelId,
                     };
                     try {

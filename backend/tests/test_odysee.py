@@ -236,6 +236,48 @@ def test_odysee_channel_videos_query_scopes_lighthouse(client):
     ]
 
 
+def test_odysee_channel_videos_short_query_local_scan(client):
+    """Lighthouse 400s on queries under 3 chars; fall back to a title scan."""
+    lighthouse_hits: list[dict] = []
+
+    async def fake_get(url, **kwargs):
+        # If Lighthouse were called with a short query it would 400: record and
+        # fail loudly instead.
+        lighthouse_hits.append(kwargs["params"])
+        return httpx.Response(
+            400, json={"success": False}, request=httpx.Request("GET", str(url))
+        )
+
+    async def fake_post(url, **kwargs):
+        return httpx.Response(
+            200, json=_rpc(CLAIM_SEARCH_RESULT), request=httpx.Request("POST", str(url))
+        )
+
+    with (
+        patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get)),
+        patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)),
+    ):
+        resp = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "q": "ch", "limit": 5},
+        )
+    assert lighthouse_hits == []  # short query never reaches Lighthouse
+    assert resp.status_code == 200
+    assert [i["video_id"] for i in resp.json()["items"]] == ["chan-video:dd44"]
+
+
+def test_odysee_search_short_query_empty(client):
+    """A short global Odysee search comes back empty, not a 502."""
+
+    async def boom_get(url, **kwargs):
+        raise AssertionError("Lighthouse must not be called for short queries")
+
+    with patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=boom_get)):
+        resp = client.get("/api/search", params={"q": "vs", "source": "odysee"})
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
 # ─── /api/videos/{id}/streams?platform=odysee ───
 
 
