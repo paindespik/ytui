@@ -122,21 +122,39 @@ async def search(
         # empty instead of failing. In-channel searches fall back to a local
         # title scan (see the videos router) before reaching this path.
         return []
-    params: dict[str, Any] = {"s": query, "size": limit, "nsfw": "false"}
-    if offset:
-        params["from"] = offset
-    if channel_id:
-        params["channel_id"] = claim_id_from_video_id(channel_id)
+    # Lighthouse caps `size` at 50 (400 above that), so bigger requests are
+    # walked in chunks of at most 50 using `from`.
+    hits: list[dict] = []
+    remaining = limit
+    pos = offset
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.get(
-                LIGHTHOUSE_URL,
-                params=params,
-                headers=_HEADERS,
-            )
-            resp.raise_for_status()
-            hits = resp.json()
-            if not isinstance(hits, list) or not hits:
+            while remaining > 0:
+                size = min(remaining, 50)
+                params: dict[str, Any] = {
+                    "s": query,
+                    "size": size,
+                    "nsfw": "false",
+                }
+                if pos:
+                    params["from"] = pos
+                if channel_id:
+                    params["channel_id"] = claim_id_from_video_id(channel_id)
+                resp = await client.get(
+                    LIGHTHOUSE_URL,
+                    params=params,
+                    headers=_HEADERS,
+                )
+                resp.raise_for_status()
+                chunk = resp.json()
+                if not isinstance(chunk, list) or not chunk:
+                    break
+                hits.extend(chunk)
+                pos += len(chunk)
+                remaining -= len(chunk)
+                if len(chunk) < size:
+                    break  # short page: no more results
+            if not hits:
                 return []
             urls = [
                 f"lbry://{h['name']}#{h['claimId']}"

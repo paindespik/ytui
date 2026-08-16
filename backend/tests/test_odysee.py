@@ -236,6 +236,39 @@ def test_odysee_channel_videos_query_scopes_lighthouse(client):
     ]
 
 
+def test_odysee_search_never_asks_lighthouse_for_more_than_50(client):
+    """Lighthouse 400s on `size` > 50; the channel probe (limit+1=51) must chunk."""
+    seen: list[dict] = []
+    pages = [
+        [{"name": f"v{i}", "claimId": f"c{i:02x}"} for i in range(50)],
+        [{"name": "last", "claimId": "ff00"}],
+    ]
+
+    async def fake_get(url, **kwargs):
+        seen.append(kwargs["params"])
+        return httpx.Response(
+            200, json=pages.pop(0), request=httpx.Request("GET", str(url))
+        )
+
+    async def fake_post(url, **kwargs):
+        return httpx.Response(
+            200, json=_rpc(RESOLVE_RESULT), request=httpx.Request("POST", str(url))
+        )
+
+    with (
+        patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get)),
+        patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)),
+    ):
+        resp = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "q": "linux", "limit": 50},
+        )
+    assert resp.status_code == 200
+    assert [p["size"] for p in seen] == [50, 1]
+    assert seen[1]["from"] == 50
+    assert seen[1]["channel_id"] == "cc33"
+
+
 def test_odysee_channel_videos_short_query_local_scan(client):
     """Lighthouse 400s on queries under 3 chars; fall back to a title scan."""
     lighthouse_hits: list[dict] = []
