@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         default="https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com",
         validation_alias="YTUI_TWITCH_PROXIES",
     )
+    # Extra domains (comma-separated, subdomains included) allowed through
+    # /api/proxy on top of the built-in media-CDN allowlist.
+    proxy_allowed_domains: str = Field(
+        default="", validation_alias="YTUI_PROXY_ALLOWED_DOMAINS"
+    )
     history_max_rows: int = Field(default=20000, validation_alias="YTUI_HISTORY_MAX_ROWS")
     log_level: str = Field(default="INFO", validation_alias="YTUI_LOG_LEVEL")
     sponsorblock_categories: str = Field(

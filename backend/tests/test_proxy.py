@@ -6,8 +6,20 @@ import urllib.parse
 
 import httpx
 import pytest
+from conftest import TEST_TOKEN
 
 from ytui_server.routers.proxy import rewrite_hls
+from ytui_server.settings import Settings
+
+
+@pytest.fixture()
+def settings(tmp_path):
+    """Test CDN hosts ride the operator-extendable proxy allowlist."""
+    return Settings(
+        YTUI_API_TOKEN=TEST_TOKEN,
+        YTUI_DATA_DIR=tmp_path / "data",
+        YTUI_PROXY_ALLOWED_DOMAINS="cdn.example,other.example",
+    )
 
 
 @pytest.fixture()
@@ -157,3 +169,53 @@ def test_rewrite_hls_media():
     assert lines[7] == f"/api/proxy?url={_enc('https://cdn.example/abs/seg-002.ts')}"
     assert lines[4] == "#EXTINF:6.0,"
     assert lines[8] == "#EXT-X-ENDLIST"
+
+
+# ─── destination allowlist ───
+
+
+def test_proxy_rejects_unlisted_domain(client):
+    resp = client.get("/api/proxy", params={"url": "https://evil.internal/x.mp4"})
+    assert resp.status_code == 403
+    resp = client.get("/api/proxy/hls", params={"url": "https://evil.internal/m.m3u8"})
+    assert resp.status_code == 403
+
+
+def test_proxy_allows_builtin_cdns(proxied):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x", headers={"Content-Type": "video/mp4"})
+
+    client = proxied(handler)
+    for url in (
+        "https://rr3---sn-abc.googlevideo.com/videoplayback?x=1",
+        "https://video-edge-abc.fra02.abs.hls.ttvnw.net/v1/seg.ts",
+        "https://pull-flv-l1.tiktokcdn.com/live/x.flv",
+        "https://player.odycdn.com/api/v4/streams/free/x/y/z.mp4",
+        "https://seed122.bitchute.com/x/video.mp4",
+        "https://vid.divulg.org/x/master.m3u8",
+    ):
+        assert client.get("/api/proxy", params={"url": url}).status_code == 200, url
+
+
+def test_proxy_allows_configured_twitch_proxies(proxied):
+    """Hosts of YTUI_TWITCH_PROXIES pass without being hardcoded."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"m3u8")
+
+    client = proxied(handler)
+    resp = client.get(
+        "/api/proxy", params={"url": "https://eu.luminous.dev/playlist/chan.m3u8"}
+    )
+    assert resp.status_code == 200
+
+
+def test_proxy_env_extension(proxied):
+    """cdn.example passes only because the fixture extends the allowlist."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x")
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy", params={"url": "https://sub.cdn.example/seg.ts"})
+    assert resp.status_code == 200

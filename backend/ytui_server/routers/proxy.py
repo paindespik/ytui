@@ -27,9 +27,60 @@ _URI_ATTR_RE = re.compile(r'URI="([^"]+)"')
 _BASE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
 
-def _check_url(url: str) -> None:
-    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+# Media CDNs of the supported platforms. A same-origin proxy without a
+# destination allowlist is an open relay: anything else answers 403.
+_ALLOWED_SUFFIXES = (
+    # YouTube: media, captions, thumbnails
+    ".googlevideo.com",
+    ".youtube.com",
+    ".ytimg.com",
+    ".ggpht.com",
+    # Twitch: usher playlists + edge CDN
+    ".ttvnw.net",
+    ".jtvnw.net",
+    # TikTok CDNs (regional variants)
+    ".tiktokcdn.com",
+    ".tiktokcdn-us.com",
+    ".tiktokcdn-eu.com",
+    ".tiktokv.com",
+    # Odysee
+    ".odycdn.com",
+    ".odysee.com",
+    ".lbryplayer.xyz",
+    # BitChute (seed*.bitchute.com)
+    ".bitchute.com",
+    # CrowdBunker
+    ".divulg.org",
+    ".crowdbunker.com",
+)
+
+
+def _extra_domains(settings) -> set[str]:
+    """Operator-extended domains plus the configured Twitch playlist proxies."""
+    extras = {
+        domain.strip().lower().lstrip(".")
+        for domain in settings.proxy_allowed_domains.split(",")
+        if domain.strip()
+    }
+    for proxy in settings.twitch_proxies.split(","):
+        proxy = proxy.strip()
+        if proxy:
+            host = urllib.parse.urlparse(proxy).netloc.rsplit("@", 1)[-1].split(":")[0]
+            if host:
+                extras.add(host.lower())
+    return extras
+
+
+def _check_url(url: str, settings) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=400, detail="Only http(s) URLs can be proxied")
+    host = (parsed.hostname or "").lower()
+    if any(host == suffix[1:] or host.endswith(suffix) for suffix in _ALLOWED_SUFFIXES):
+        return
+    if any(host == extra or host.endswith(f".{extra}") for extra in _extra_domains(settings)):
+        return
+    raise HTTPException(status_code=403, detail="Domain not allowed through the proxy")
 
 
 def _proxied(url: str, *, playlist: bool) -> str:
@@ -67,7 +118,7 @@ def rewrite_hls(text: str, base_url: str) -> str:
 @router.get("/proxy")
 async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
     """Stream upstream bytes as-is, forwarding Range for seekable media."""
-    _check_url(url)
+    _check_url(url, request.app.state.settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
     upstream_headers = {"Accept-Encoding": "identity"}
     range_header = request.headers.get("Range")
@@ -94,7 +145,7 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
 @router.get("/proxy/hls")
 async def proxy_hls(url: str, request: Request) -> Response:
     """Fetch an m3u8 playlist and rewrite its URIs through the proxy."""
-    _check_url(url)
+    _check_url(url, request.app.state.settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
     try:
         upstream = await client.get(url)
