@@ -4,6 +4,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ytui_mobile/widgets/screen_focus.dart';
 
@@ -92,6 +93,58 @@ void main() {
         reason: 'once the data lands, focus must move to the first widget');
   });
 
+  testWidgets('takes over the OS auto-focus when the feed is slow',
+      (tester) async {
+    // Device race seen on the projector: at launch the system auto-focuses
+    // the first focusable node (a tab / app bar button) before the feed's
+    // data lands; the initial focus must still end up on the first body
+    // widget once it exists — the auto-focus is not a user decision.
+    final gate = ValueNotifier<bool>(false);
+    final earlyNode = FocusNode();
+    late StateSetter setGate;
+
+    await tester.pumpWidget(_harness(
+      body: StatefulBuilder(
+        builder: (context, setState) {
+          setGate = setState;
+          return Column(
+            children: [
+              FilledButton(
+                focusNode: earlyNode,
+                onPressed: () {},
+                child: const Text('early button'),
+              ),
+              ScreenFocus(
+                child: gate.value
+                    ? FilledButton(
+                        onPressed: () {},
+                        child: const Text('data button'),
+                      )
+                    : const Center(child: CircularProgressIndicator()),
+              ),
+            ],
+          );
+        },
+      ),
+    ));
+    await _settle(tester);
+
+    // Simulate the system auto-focus landing on the sibling (an
+    // "app bar"-like) button above the body, without any key press.
+    earlyNode.requestFocus();
+    await tester.pump();
+
+    // The feed lands late: the retry must take the focus to the body.
+    gate.value = true;
+    setGate(() {});
+    await tester.pump();
+    await _settle(tester);
+
+    expect(_focusOn(tester, _focused(tester), find.text('data button')),
+        isTrue,
+        reason: 'a slow feed must not leave the OS auto-focus in place');
+  });
+
   testWidgets('does not steal focus the user already moved elsewhere',
       (tester) async {
     final gate = ValueNotifier<bool>(false);
@@ -130,6 +183,11 @@ void main() {
     ));
     // The user (or the OS) already moved focus to an AppBar action while the
     // body was still loading: the retry must not yank it back to the body.
+    // A key press is what marks "the user is in control" (the OS auto-focus
+    // on an AppBar button at launch is not: ScreenFocus may still take over
+    // until the body's data lands).
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
     appBarButton.requestFocus();
     await tester.pump();
 

@@ -10,6 +10,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class ScreenFocus extends StatefulWidget {
   /// The screen body (the feed list, the "Play all" button, ...). The AppBar
@@ -34,16 +35,38 @@ class _ScreenFocusState extends State<ScreenFocus> {
   Timer? _retry;
   int _attempts = 0;
 
+  /// The system auto-focuses the first focusable node (an AppBar button, a
+  /// tab…) before the body's data lands. That is not a user decision, so the
+  /// retries keep going until the user actually acts (a key press) or the
+  /// body has held focus once — in both cases the user owns the focus.
+  bool _userActed = false;
+  bool _enteredBody = false;
+
+  /// Observes key presses without handling them (returns false: the event
+  /// keeps propagating normally through the app).
+  bool _onKey(KeyEvent event) {
+    if (event is KeyDownEvent) _userActed = true;
+    return false;
+  }
+
+  void _onFocusChange() {
+    if (_bodyHasFocus) _enteredBody = true;
+  }
+
   @override
   void initState() {
     super.initState();
     _scope.skipTraversal = true; // the wrapper never takes the highlight ring
+    FocusManager.instance.addListener(_onFocusChange);
+    HardwareKeyboard.instance.addHandler(_onKey);
     _schedule(Duration.zero);
   }
 
   @override
   void dispose() {
     _retry?.cancel();
+    HardwareKeyboard.instance.removeHandler(_onKey);
+    FocusManager.instance.removeListener(_onFocusChange);
     _scope.dispose();
     super.dispose();
   }
@@ -66,16 +89,9 @@ class _ScreenFocusState extends State<ScreenFocus> {
   void _tryFocus() {
     if (!mounted || _scope.context == null) return;
     if (_bodyHasFocus) return;
-
-    // Never steal focus the user already moved: only take it when the
-    // primary focus sits at/above the screen root (freshly pushed route, or
-    // nothing focused at app launch).
-    final primary = FocusManager.instance.primaryFocus;
-    if (primary != null &&
-        !identical(primary, _scope) &&
-        !_scope.ancestors.any((a) => identical(a, primary))) {
-      return;
-    }
+    // The user took control (pressed a key) or the body already held focus
+    // and lost it: focus now belongs to the user, never yank it back.
+    if (_userActed || _enteredBody) return;
 
     FocusNode? target;
     for (final node in _scope.descendants) {
