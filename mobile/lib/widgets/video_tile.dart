@@ -88,15 +88,20 @@ class VideoTile extends ConsumerWidget {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        // Thumbnail or placeholder
+                        // Thumbnail or placeholder (live streams without a
+                        // thumbnail get a colored "EN DIRECT" block)
                         if (video.thumbnailUrl.isNotEmpty)
                           CachedNetworkImage(
                             imageUrl: video.thumbnailUrl,
                             fit: BoxFit.cover,
-                            errorWidget: (_, __, ___) => _placeholder(colors),
+                            errorWidget: (_, __, ___) => live
+                                ? _livePlaceholder(colors)
+                                : _placeholder(colors),
                           )
                         else
-                          _placeholder(colors),
+                          live
+                              ? _livePlaceholder(colors)
+                              : _placeholder(colors),
                         // LIVE pill top-left (driven by constructor flag only;
                         // Video model has no isLive field — LiveItem wrapper is
                         // used elsewhere but not available on Video itself)
@@ -226,6 +231,40 @@ class VideoTile extends ConsumerWidget {
     return _TvTileRow(
       tile: tile,
       onActions: () => _showActions(context, ref),
+    );
+  }
+
+  /// Live placeholder: platform-colored block with a centered "EN DIRECT",
+  /// so a live stream without a thumbnail reads as live at a glance
+  /// instead of a gray play icon.
+  Widget _livePlaceholder(ColorScheme colors) {
+    final color = switch (video.platform) {
+      'twitch' => kTwitchPurple,
+      'tiktok' => kTikTokRed,
+      _ => kBrandRed,
+    };
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            color.withValues(alpha: 0.85),
+            color.withValues(alpha: 0.55),
+          ],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          'EN DIRECT',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+            letterSpacing: 0.8,
+          ),
+        ),
+      ),
     );
   }
 

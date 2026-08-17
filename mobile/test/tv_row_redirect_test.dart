@@ -157,4 +157,31 @@ void main() {
     expect(_focusedRow(tester), -2,
         reason: 'no previous row: default edge behavior (tab bar), not row 0');
   });
+
+  testWidgets('a live tile without thumbnail shows an EN DIRECT block',
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          watchedIdsProvider.overrideWith(_NoWatched.new),
+          isTvProvider.overrideWithValue(true),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: VideoTile(
+              video: const Video(
+                videoId: 'live1',
+                title: 'Direct',
+                channelTitle: 'Chaîne live',
+                kind: 'video',
+              ),
+              live: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('EN DIRECT'), findsWidgets);
+  });
 }
