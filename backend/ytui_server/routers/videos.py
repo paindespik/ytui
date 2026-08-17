@@ -141,6 +141,9 @@ async def playlist_videos(
     if platform == "odysee":
         # odysee.com/$/playlist/{id} is a JS route with no yt-dlp extractor
         raise HTTPException(status_code=400, detail="Odysee playlists are not supported")
+    if platform == "twitch":
+        # Twitch collections have no stable public URL form nor yt-dlp support
+        raise HTTPException(status_code=400, detail="Twitch playlists are not supported")
     url = Video(video_id=playlist_id, title="", kind="playlist", platform=platform).url
     try:
         items, title = await ytdlp.playlist_videos(url, limit=limit)

@@ -51,6 +51,9 @@ async def import_playlist(body: PlaylistImportIn, request: Request) -> PlaylistI
     if body.platform == "odysee":
         # odysee.com/$/playlist/{id} is a JS route with no yt-dlp extractor
         raise HTTPException(status_code=400, detail="Odysee playlists are not supported")
+    if body.platform == "twitch":
+        # Twitch collections have no stable public URL form nor yt-dlp support
+        raise HTTPException(status_code=400, detail="Twitch playlists are not supported")
     limit = max(1, min(body.limit, 500))
     url = Video(video_id=source, title="", kind="playlist", platform=body.platform).url
     try:

@@ -209,3 +209,15 @@ def test_import_odysee_unsupported(client):
 
 def test_import_empty_source(client):
     assert client.post("/api/playlists/import", json={"source": "  "}).status_code == 422
+
+
+def test_import_twitch_unsupported(client):
+    resp = client.post("/api/playlists/import", json={"source": "PL", "platform": "twitch"})
+    assert resp.status_code == 400
+    assert "Twitch playlists" in resp.json()["detail"]
+
+
+def test_twitch_playlist_listing_unsupported(client):
+    resp = client.get("/api/ytplaylists/whatever/videos", params={"platform": "twitch"})
+    assert resp.status_code == 400
+    assert "Twitch playlists" in resp.json()["detail"]
