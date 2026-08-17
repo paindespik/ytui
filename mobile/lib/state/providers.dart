@@ -130,6 +130,23 @@ final relatedProvider = FutureProvider.autoDispose
     .family<List<Video>, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).related(arg.$1, platform: arg.$2));
 
+/// Channel id resolved on demand for videos that do not carry one (flat
+/// playlist extraction never fills it). Fails soft: a null result degrades
+/// the actions sheet to the no-channel variant instead of erroring.
+/// Plain (non-autoDispose) on purpose: it is a session-long in-memory cache
+/// — one short string per opened actions sheet.
+/// Family key: (platform, videoId).
+final resolvedChannelProvider = FutureProvider
+    .family<String?, (String, String)>((ref, arg) async {
+  try {
+    final details =
+        await ref.read(apiProvider).videoDetails(arg.$2, platform: arg.$1);
+    return details.channelId.isEmpty ? null : details.channelId;
+  } catch (_) {
+    return null;
+  }
+});
+
 final commentsProvider = FutureProvider.autoDispose
     .family<CommentsPage, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).videoComments(arg.$1, platform: arg.$2));

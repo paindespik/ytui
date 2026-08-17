@@ -287,7 +287,25 @@ class VideoTile extends ConsumerWidget {
     }
   }
 
-  void _showActions(BuildContext context, WidgetRef ref) {
+  Future<void> _showActions(BuildContext context, WidgetRef ref) async {
+    // Flat-extracted playlist videos carry no channel id on the server: ask
+    // the details endpoint for it so "Open/Follow channel" stay available
+    // (graceful fallback to the short sheet on error).
+    var channelId = video.channelId;
+    if (video.kind == 'video' &&
+        channelId.isEmpty &&
+        video.channelTitle.isNotEmpty) {
+      try {
+        final resolved = await ref
+            .read(resolvedChannelProvider(
+                    (video.platform, video.videoId))
+                .future);
+        if (resolved != null) channelId = resolved;
+      } catch (_) {
+        // Leave the channel items out of the sheet.
+      }
+    }
+    if (!context.mounted) return;
     // A bottom sheet does not take focus on its own: on TV the first entry
     // grabs it so the remote can act without a blind D-pad down.
     final tvFocus = ref.read(isTvProvider);
@@ -362,7 +380,7 @@ class VideoTile extends ConsumerWidget {
                     );
                   },
                 ),
-              if (video.kind != 'channel' && video.channelId.isNotEmpty)
+              if (video.kind != 'channel' && channelId.isNotEmpty)
                 _sheetTile(
                   sheetContext,
                   icon: Icons.account_circle,
@@ -370,12 +388,12 @@ class VideoTile extends ConsumerWidget {
                   onTap: () {
                     Navigator.pop(sheetContext);
                     context.push(
-                        '/channel/${Uri.encodeComponent(video.channelId)}'
+                        '/channel/${Uri.encodeComponent(channelId)}'
                         '?platform=${video.platform}'
                         '&title=${Uri.encodeComponent(video.channelTitle)}');
                   },
                 ),
-              if (video.channelId.isNotEmpty)
+              if (channelId.isNotEmpty)
                 _sheetTile(
                   sheetContext,
                   icon: Icons.person_add,
@@ -384,10 +402,10 @@ class VideoTile extends ConsumerWidget {
                     Navigator.pop(sheetContext);
                     final messenger = ScaffoldMessenger.of(context);
                     final ref_ = switch (video.platform) {
-                      'bitchute' => 'bitchute:${video.channelId}',
-                      'odysee' => 'odysee:${video.channelId}',
-                      'crowdbunker' => 'crowdbunker:${video.channelId}',
-                      _ => video.channelId,
+                      'bitchute' => 'bitchute:$channelId',
+                      'odysee' => 'odysee:$channelId',
+                      'crowdbunker' => 'crowdbunker:$channelId',
+                      _ => channelId,
                     };
                     try {
                       await ref.read(apiProvider).followChannel(ref_);
