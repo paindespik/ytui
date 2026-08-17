@@ -88,10 +88,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final health = await api.health();
       // /health is public: also check an authenticated endpoint.
       await api.watchedIds();
-      result = '✓ Connected (server ${health['version'] ?? '?'})';
+      result = '✓ Connecté (serveur ${health['version'] ?? '?'})';
     } on ApiException catch (e) {
       result = e.statusCode == 401
-          ? '✗ Server reachable but the token is wrong'
+          ? '✗ Serveur joignable mais jeton incorrect'
           : '✗ ${e.toString()}';
     } catch (e) {
       result = '✗ $e';
@@ -114,7 +114,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       setState(() {});
     } else if (mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Saved')));
+          .showSnackBar(const SnackBar(content: Text('Enregistré')));
     }
   }
 
@@ -126,7 +126,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: const Text('Réglages'),
         automaticallyImplyLeading: !widget.firstLaunch,
       ),
       body: ScreenFocus(
@@ -141,13 +141,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Server', style: Theme.of(context).textTheme.titleMedium),
+                    Text('Serveur',
+                        style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 12),
                     TextField(
                       controller: _urlController,
                       keyboardType: TextInputType.url,
                       decoration: const InputDecoration(
-                        labelText: 'Server URL',
+                        labelText: 'URL du serveur',
                         hintText: 'https://ytui.example.com',
                       ),
                     ),
@@ -156,7 +157,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       controller: _tokenController,
                       obscureText: true,
                       decoration: const InputDecoration(
-                        labelText: 'API token',
+                        labelText: 'Jeton API',
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -170,10 +171,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                   height: 16,
                                   child: CircularProgressIndicator(strokeWidth: 2),
                                 )
-                              : const Text('Test connection'),
+                              : const Text('Tester la connexion'),
                         ),
                         const SizedBox(width: 12),
-                        FilledButton(onPressed: _save, child: const Text('Save')),
+                        FilledButton(
+                            onPressed: _save, child: const Text('Enregistrer')),
                       ],
                     ),
                     if (_testResult != null) ...[
@@ -279,15 +281,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       const SizedBox(height: 8),
                       if (_ignoringBattery == false) ...[
                         Text(
-                          'Battery optimization delays background checks: '
-                          'notifications for new videos can arrive hours late '
-                          'when the app is closed.',
+                          'L’optimisation de la batterie retarde les '
+                          'vérifications en arrière-plan : les notifications '
+                          'de nouvelles vidéos peuvent arriver des heures plus '
+                          'tard quand l’appli est fermée.',
                           style: TextStyle(color: colorScheme.onSurfaceVariant),
                         ),
                         const SizedBox(height: 12),
                         OutlinedButton.icon(
                           icon: const Icon(Icons.battery_saver),
-                          label: const Text('Disable battery optimization'),
+                          label: const Text(
+                              'Désactiver l’optimisation de la batterie'),
                           onPressed: _requestBatteryExemption,
                         ),
                       ] else
@@ -299,9 +303,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             Expanded(
                               child: Text(
                                 _ignoringBattery == null
-                                    ? 'Checking battery optimization…'
-                                    : 'Battery optimization disabled — '
-                                        'background checks run on schedule.',
+                                    ? 'Vérification de l’optimisation de la '
+                                        'batterie…'
+                                    : 'Optimisation de la batterie désactivée — '
+                                        'les vérifications en arrière-plan se '
+                                        'déroulent normalement.',
                                 style: TextStyle(
                                     color: colorScheme.onSurfaceVariant),
                               ),
@@ -327,13 +333,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            'Followed channels',
+                            'Chaînes suivies',
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           IconButton(
                             icon: const Icon(Icons.add),
                             onPressed: _addChannel,
-                            tooltip: 'Follow a channel',
+                            tooltip: 'Suivre une chaîne',
                           ),
                         ],
                       ),
@@ -363,7 +369,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             ? Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 16),
                                 child: Text(
-                                  'No channels followed yet',
+                                  'Aucune chaîne suivie pour le moment',
                                   style: TextStyle(
                                     color: colorScheme.onSurfaceVariant,
                                   ),
@@ -376,7 +382,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                       contentPadding: EdgeInsets.zero,
                                       title:
                                           Text(c.title.isEmpty ? c.ref : c.title),
-                                      subtitle: Text('${_platformLabel(c.platform)} · ${c.ref}'),
+                                      subtitle: Text(
+                                          _platformLabel(c.platform)),
                                       onTap: () => context.push(
                                         '/channel/${Uri.encodeComponent(c.channelId)}'
                                         '?platform=${c.platform}'
@@ -384,7 +391,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                       ),
                                       trailing: IconButton(
                                         icon: const Icon(Icons.delete_outline),
-                                        tooltip: 'Unfollow',
+                                        tooltip: 'Ne plus suivre',
                                         onPressed: () async {
                                           await ref
                                               .read(apiProvider)
@@ -414,22 +421,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final refValue = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Follow a channel'),
+        title: const Text('Suivre une chaîne'),
         content: TextField(
           controller: controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: 'UC…, @handle, bitchute:slug, odysee:@name or crowdbunker:handle',
+            hintText:
+                'UC…, @handle, bitchute:slug, odysee:@name ou crowdbunker:handle',
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
+            child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('Follow'),
+            child: const Text('Suivre'),
           ),
         ],
       ),
@@ -443,9 +451,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(
           content: Text(e.statusCode == 409
-              ? 'Already followed'
+              ? 'Déjà suivie'
               : e.statusCode == 404
-                  ? 'Channel not found'
+                  ? 'Chaîne introuvable'
                   : e.toString())));
     }
   }

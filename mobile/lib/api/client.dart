@@ -13,7 +13,9 @@ class ApiException implements Exception {
 
   @override
   String toString() =>
-      statusCode == 0 ? 'Server unreachable: $detail' : 'API error $statusCode: $detail';
+      statusCode == 0
+          ? 'Serveur injoignable : $detail'
+          : 'Erreur API $statusCode : $detail';
 }
 
 /// Path-encode an id: Odysee ids contain ':' and '@' — encode everywhere for safety.

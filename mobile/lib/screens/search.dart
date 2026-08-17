@@ -49,7 +49,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             autofocus: true,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
-              hintText: 'Search ${_kSourceLabels[_source] ?? 'YouTube'}…',
+              hintText: 'Rechercher sur ${_kSourceLabels[_source] ?? 'YouTube'}…',
               prefixIcon: const Icon(Icons.search),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(vertical: 10),
@@ -96,7 +96,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             child: _query.isEmpty
                 ? const AppEmpty(
                     icon: Icons.search,
-                    message: 'Enter a search term to find videos',
+                    message: 'Saisissez un terme de recherche pour trouver des vidéos',
                   )
                 : ref.watch(searchProvider((_query, _source))).when(
                       loading: () => const AppLoading(),
@@ -106,7 +106,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       data: (items) => items.isEmpty
                           ? const AppEmpty(
                               icon: Icons.search_off,
-                              message: 'No results found',
+                              message: 'Aucun résultat',
                             )
                           : ResponsiveCenter(
                               child: ListView(

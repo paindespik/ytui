@@ -928,7 +928,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       return Scaffold(
         body: Center(
           child: Text(
-            'Nothing to play',
+            'Rien à lire',
             style: theme.textTheme.bodyLarge?.copyWith(
               color: colors.onSurfaceVariant,
             ),
@@ -1147,7 +1147,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                                 ? colors.onSurface
                                 : colors.onSurfaceVariant.withValues(alpha: 0.4),
                           ),
-                          tooltip: 'Previous',
+                          tooltip: 'Précédent',
                           onPressed: queue.hasPrevious
                               ? () => ref.read(queueProvider.notifier).previous()
                               : null,
@@ -1185,7 +1185,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                                 ? colors.onSurface
                                 : colors.onSurfaceVariant.withValues(alpha: 0.4),
                           ),
-                          tooltip: 'Next',
+                          tooltip: 'Suivant',
                           onPressed: queue.hasNext
                               ? () => ref.read(queueProvider.notifier).next()
                               : null,

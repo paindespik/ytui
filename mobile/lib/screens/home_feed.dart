@@ -111,7 +111,8 @@ class _SubscriptionsTab extends ConsumerWidget {
             ref.invalidate(livesProvider);
           },
           emptyIcon: Icons.subscriptions_outlined,
-          emptyMessage: 'No videos yet. Follow channels from Settings.',
+          emptyMessage:
+              'Aucune vidéo pour le moment. Suivez des chaînes depuis les Réglages.',
         );
       },
     );

@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../format.dart';
 import '../state/providers.dart';
 import '../state/settings.dart';
 import '../theme.dart';
@@ -25,23 +26,24 @@ Future<LocalPlaylist?> promptImportPlaylist(
   final source = await showDialog<String>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('Import a YouTube playlist'),
+      title: const Text('Importer une playlist YouTube'),
       content: TextField(
         controller: controller,
         autofocus: true,
         // A remote has no "validate" button: Enter on the IME submits.
         textInputAction: TextInputAction.done,
         onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
-        decoration: const InputDecoration(hintText: 'Playlist URL or id'),
+        decoration:
+            const InputDecoration(hintText: 'URL ou id de la playlist'),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('Cancel'),
+          child: const Text('Annuler'),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
-          child: const Text('Continue'),
+          child: const Text('Continuer'),
         ),
       ],
     ),
@@ -99,14 +101,14 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'Import playlist into…',
+                  'Importer la playlist dans…',
                   style: Theme.of(sheetContext).textTheme.titleSmall,
                 ),
               ),
             ),
             ListTile(
               leading: const Icon(Icons.playlist_add),
-              title: const Text('New playlist'),
+              title: const Text('Nouvelle playlist'),
               // TV bottom sheets do not take focus on their own.
               autofocus: isTv,
               onTap: () => Navigator.pop(sheetContext, 'new'),
@@ -114,7 +116,7 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
             ...playlists.map((p) => ListTile(
                   leading: const Icon(Icons.playlist_play),
                   title: Text(p.name),
-                  subtitle: Text('${p.count} items'),
+                  subtitle: Text(pluralize(p.count, 'élément')),
                   onTap: () => Navigator.pop(sheetContext, p),
                 )),
             const SizedBox(height: 8),
@@ -134,24 +136,25 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
     final picked = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('New playlist'),
+        title: const Text('Nouvelle playlist'),
         content: TextField(
           controller: controller,
           autofocus: !isTv,
           textInputAction: TextInputAction.done,
           onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
-          decoration: const InputDecoration(hintText: 'Playlist name'),
+          decoration:
+              const InputDecoration(hintText: 'Nom de la playlist'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
+            child: const Text('Annuler'),
           ),
           FilledButton(
             autofocus: isTv,
             onPressed: () =>
                 Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('Import'),
+            child: const Text('Importer'),
           ),
         ],
       ),
@@ -160,7 +163,8 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
     name = picked; // empty: the server names it after the upstream playlist
   }
 
-  messenger.showSnackBar(const SnackBar(content: Text('Importing playlist…')));
+  messenger.showSnackBar(
+      const SnackBar(content: Text('Import de la playlist…')));
   try {
     final result = await ref.read(apiProvider).importPlaylist(
           source,
@@ -170,20 +174,20 @@ Future<LocalPlaylist?> showImportPlaylistSheet(
         );
     ref.invalidate(playlistsProvider);
     if (targetId != null) ref.invalidate(playlistItemsProvider(targetId));
-    final skipped = result.skipped > 0 ? ', ${result.skipped} skipped' : '';
+    final skipped = result.skipped > 0 ? ', ${result.skipped} ignorées' : '';
     messenger.showSnackBar(SnackBar(
-      content: Text(
-          'Imported ${result.added} videos into "${result.playlist.name}"$skipped'),
+      content: Text('Import de ${result.added} vidéos dans « ${result.playlist.name} »$skipped'),
     ));
     return result.playlist;
   } on ApiException catch (e) {
     messenger.showSnackBar(SnackBar(
       content: Text(e.statusCode == 409
-          ? 'Name "$name" already taken'
-          : 'Import failed: ${e.detail}'),
+          ? 'Ce nom est déjà utilisé'
+          : 'Échec de l’import : ${e.detail}'),
     ));
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    messenger.showSnackBar(
+        SnackBar(content: Text('Échec de l’import : $e')));
   }
   return null;
 }

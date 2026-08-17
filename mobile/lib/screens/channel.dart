@@ -84,7 +84,7 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                   autofocus: true,
                   textInputAction: TextInputAction.search,
                   decoration: const InputDecoration(
-                    hintText: 'Search this channel…',
+                    hintText: 'Rechercher dans la chaîne…',
                     prefixIcon: Icon(Icons.search),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.symmetric(vertical: 10),
@@ -154,11 +154,11 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                     try {
                       await ref.read(apiProvider).followChannel(ref_);
                       messenger.showSnackBar(
-                          const SnackBar(content: Text('Channel followed')));
+                          const SnackBar(content: Text('Chaîne suivie')));
                     } on ApiException catch (e) {
                       messenger.showSnackBar(SnackBar(
                           content: Text(e.statusCode == 409
-                              ? 'Already followed'
+                              ? 'Déjà suivie'
                               : e.toString())));
                     }
                   },
@@ -211,11 +211,11 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
           if (videos.isEmpty) {
             return _query.isEmpty
                 ? const AppEmpty(
-                    message: 'This channel has no videos',
+                    message: 'Cette chaîne n’a aucune vidéo',
                     icon: Icons.videocam_off_outlined,
                   )
                 : AppEmpty(
-                    message: 'No videos matching "$_query"',
+                    message: 'Aucune vidéo pour « $_query »',
                     icon: Icons.search_off,
                   );
           }
@@ -251,8 +251,8 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                         },
                         icon: const Icon(Icons.play_arrow),
                         label: Text(_query.isEmpty
-                            ? 'Play all ${videos.length} videos'
-                            : 'Play ${videos.length} results'),
+                            ? 'Lire les ${videos.length} vidéos'
+                            : 'Lire les ${videos.length} résultats'),
                         style: FilledButton.styleFrom(
                           backgroundColor: colorScheme.primary,
                           foregroundColor: colorScheme.onPrimary,
@@ -307,7 +307,9 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
       child: OutlinedButton.icon(
         onPressed: _loadMore,
         icon: const Icon(Icons.expand_more),
-        label: Text(_query.isEmpty ? 'Load older videos' : 'Load more results'),
+        label: Text(_query.isEmpty
+            ? 'Charger des vidéos plus anciennes'
+            : 'Charger plus de résultats'),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
       ),
     );

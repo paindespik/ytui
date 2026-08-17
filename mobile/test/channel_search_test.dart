@@ -97,6 +97,6 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
 
-    expect(find.text('No videos matching "zzz"'), findsOneWidget);
+    expect(find.text('Aucune vidéo pour « zzz »'), findsOneWidget);
   });
 }

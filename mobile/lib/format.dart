@@ -44,3 +44,34 @@ String formatClock(Duration value) {
   }
   return '$minutes:$seconds';
 }
+
+const _kMonthsFr = [
+  'janvier',
+  'février',
+  'mars',
+  'avril',
+  'mai',
+  'juin',
+  'juillet',
+  'août',
+  'septembre',
+  'octobre',
+  'novembre',
+  'décembre',
+];
+
+/// Relative French date for an ISO-8601 upload date:
+/// `aujourd’hui`, `hier`, `il y a N j` under a month, then
+/// `d MMMM yyyy`. Unparseable input is returned unchanged.
+String formatDateFr(String iso, [DateTime? now]) {
+  final dt = DateTime.tryParse(iso);
+  if (dt == null) return iso;
+  final local = dt.toLocal();
+  final today = (now ?? DateTime.now()).toLocal();
+  DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
+  final days = day(today).difference(day(local)).inDays;
+  if (days == 0) return 'aujourd’hui';
+  if (days == 1) return 'hier';
+  if (days >= 2 && days < 31) return 'il y a $days j';
+  return '${local.day} ${_kMonthsFr[local.month - 1]} ${local.year}';
+}

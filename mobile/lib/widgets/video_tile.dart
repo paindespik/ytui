@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/models.dart';
+import '../format.dart';
 import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
@@ -189,7 +190,7 @@ class VideoTile extends ConsumerWidget {
                       if (watched) ...[
                         const SizedBox(width: 4),
                         Semantics(
-                          label: 'Already watched',
+                          label: 'Déjà vu',
                           child: Icon(
                             Icons.check,
                             size: 16,
@@ -336,7 +337,7 @@ class VideoTile extends ConsumerWidget {
                 _sheetTile(
                   sheetContext,
                   icon: Icons.queue,
-                  label: 'Add to queue',
+                  label: 'Ajouter à la file',
                   autofocus: tvFocus,
                   onTap: () {
                     ref.read(queueProvider.notifier).enqueue(video);
@@ -346,7 +347,7 @@ class VideoTile extends ConsumerWidget {
                 _sheetTile(
                   sheetContext,
                   icon: Icons.info_outline,
-                  label: 'Details',
+                  label: 'Détails',
                   onTap: () {
                     Navigator.pop(sheetContext);
                     context.push('/detail/${Uri.encodeComponent(video.videoId)}'
@@ -356,7 +357,7 @@ class VideoTile extends ConsumerWidget {
                 _sheetTile(
                   sheetContext,
                   icon: Icons.playlist_add,
-                  label: 'Save to playlist',
+                  label: 'Enregistrer dans une playlist',
                   onTap: () {
                     Navigator.pop(sheetContext);
                     _pickPlaylist(context, ref);
@@ -367,7 +368,7 @@ class VideoTile extends ConsumerWidget {
                 _sheetTile(
                   sheetContext,
                   icon: Icons.library_add,
-                  label: 'Import every video',
+                  label: 'Importer toutes les vidéos',
                   autofocus: tvFocus,
                   onTap: () {
                     Navigator.pop(sheetContext);
@@ -384,7 +385,7 @@ class VideoTile extends ConsumerWidget {
                 _sheetTile(
                   sheetContext,
                   icon: Icons.account_circle,
-                  label: 'Open channel',
+                  label: 'Ouvrir la chaîne',
                   onTap: () {
                     Navigator.pop(sheetContext);
                     context.push(
@@ -397,7 +398,7 @@ class VideoTile extends ConsumerWidget {
                 _sheetTile(
                   sheetContext,
                   icon: Icons.person_add,
-                  label: 'Follow channel',
+                  label: 'Suivre la chaîne',
                   onTap: () async {
                     Navigator.pop(sheetContext);
                     final messenger = ScaffoldMessenger.of(context);
@@ -410,7 +411,7 @@ class VideoTile extends ConsumerWidget {
                     try {
                       await ref.read(apiProvider).followChannel(ref_);
                       messenger.showSnackBar(
-                          SnackBar(content: Text('Following ${video.channelTitle}')));
+                          SnackBar(content: Text('Chaîne suivie : ${video.channelTitle}')));
                     } catch (e) {
                       messenger.showSnackBar(SnackBar(content: Text('$e')));
                     }
@@ -487,7 +488,7 @@ class VideoTile extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.all(kGutter),
                   child: Text(
-                    'No playlists — create one first',
+                    'Aucune playlist — créez-en une d’abord',
                     style: Theme.of(sheetContext).textTheme.bodyMedium?.copyWith(
                           color: sheetColors.onSurfaceVariant,
                         ),
@@ -497,15 +498,15 @@ class VideoTile extends ConsumerWidget {
                 ...playlists.map((p) => _sheetTile(
                       sheetContext,
                       icon: Icons.playlist_play,
-                      label: '${p.name} · ${p.count} items',
+                      label: '${p.name} · ${pluralize(p.count, 'élément')}',
                       onTap: () async {
                         Navigator.pop(sheetContext);
                         final added =
                             await ref.read(apiProvider).addPlaylistItem(p.id, video);
                         messenger.showSnackBar(SnackBar(
                             content: Text(added
-                                ? 'Saved to ${p.name}'
-                                : 'Already in ${p.name}')));
+                                ? 'Ajouté à ${p.name}'
+                                : 'Déjà dans ${p.name}')));
                       },
                     )),
               const SizedBox(height: 8),

@@ -33,14 +33,14 @@ class LocalPlaylistsScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.download),
-            tooltip: 'Import a YouTube playlist',
+            tooltip: 'Importer une playlist YouTube',
             onPressed: () => promptImportPlaylist(context, ref),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _createOrRename(context, ref),
-        tooltip: 'New playlist',
+        tooltip: 'Nouvelle playlist',
         child: const Icon(Icons.add),
       ),
       body: ScreenFocus(child: playlists.when(
@@ -50,7 +50,7 @@ class LocalPlaylistsScreen extends ConsumerWidget {
         data: (items) {
           if (items.isEmpty) {
             return const AppEmpty(
-              message: 'No playlists yet',
+              message: 'Aucune playlist pour le moment',
               icon: Icons.playlist_add,
             );
           }
@@ -95,14 +95,14 @@ class LocalPlaylistsScreen extends ConsumerWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            pluralize(p.count, 'item'),
+                            pluralize(p.count, 'élément'),
                             style: TextStyle(
                               color: colorScheme.onSurfaceVariant,
                               fontSize: 13,
                             ),
                           ),
                           PopupMenuButton<String>(
-                            tooltip: 'Show menu',
+                            tooltip: 'Menu',
                             onSelected: (action) async {
                               if (action == 'rename') {
                                 await _createOrRename(context, ref, playlist: p);
@@ -112,9 +112,11 @@ class LocalPlaylistsScreen extends ConsumerWidget {
                             },
                             itemBuilder: (_) => const [
                               PopupMenuItem(
-                                  value: 'rename', child: Text('Rename')),
+                                  value: 'rename',
+                                  child: Text('Renommer')),
                               PopupMenuItem(
-                                  value: 'delete', child: Text('Delete')),
+                                  value: 'delete',
+                                  child: Text('Supprimer')),
                             ],
                           ),
                         ],
@@ -138,23 +140,24 @@ class LocalPlaylistsScreen extends ConsumerWidget {
     final name = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(playlist == null ? 'New playlist' : 'Rename playlist'),
+        title: Text(
+            playlist == null ? 'Nouvelle playlist' : 'Renommer la playlist'),
         content: TextField(
           controller: controller,
           autofocus: true,
           decoration: InputDecoration(
-            hintText: playlist == null ? 'Playlist name' : null,
+            hintText: playlist == null ? 'Nom de la playlist' : null,
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
+            child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () =>
                 Navigator.pop(dialogContext, controller.text.trim()),
-            child: Text(playlist == null ? 'Create' : 'Rename'),
+            child: Text(playlist == null ? 'Créer' : 'Renommer'),
           ),
         ],
       ),
@@ -167,7 +170,7 @@ class LocalPlaylistsScreen extends ConsumerWidget {
         : await api.renamePlaylist(playlist.id, name);
     if (!ok) {
       messenger.showSnackBar(
-          SnackBar(content: Text('Name "$name" already taken')));
+          const SnackBar(content: Text('Ce nom est déjà utilisé')));
     }
     ref.invalidate(playlistsProvider);
   }
@@ -177,15 +180,15 @@ class LocalPlaylistsScreen extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Delete "${playlist.name}"?'),
+        title: Text('Supprimer « ${playlist.name} » ?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
+            child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Delete'),
+            child: const Text('Supprimer'),
           ),
         ],
       ),
@@ -222,7 +225,7 @@ class LocalPlaylistScreen extends ConsumerWidget {
         data: (entries) {
           if (entries.isEmpty) {
             return const AppEmpty(
-              message: 'This playlist is empty',
+              message: 'Cette playlist est vide',
               icon: Icons.playlist_remove,
             );
           }
@@ -248,7 +251,7 @@ class LocalPlaylistScreen extends ConsumerWidget {
                               context.push('/player');
                             },
                       icon: const Icon(Icons.play_arrow),
-                      label: Text('Play all ${videos.length} videos'),
+                      label: Text('Lire les ${videos.length} vidéos'),
                       style: FilledButton.styleFrom(
                         backgroundColor: colorScheme.primary,
                         foregroundColor: colorScheme.onPrimary,

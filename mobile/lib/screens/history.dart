@@ -24,7 +24,7 @@ class HistoryScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'History',
+          'Historique',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
@@ -42,7 +42,7 @@ class HistoryScreen extends ConsumerWidget {
         data: (entries) {
           if (entries.isEmpty) {
             return const AppEmpty(
-              message: 'No watch history yet',
+              message: 'Aucun historique de visionnage',
               icon: Icons.history,
             );
           }

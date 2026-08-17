@@ -64,4 +64,28 @@ void main() {
       expect(formatClock(const Duration(seconds: -10)), '0:00');
     });
   });
+
+  group('formatDateFr', () {
+    final now = DateTime(2026, 8, 17, 12);
+
+    String isoOf(DateTime d) =>
+        DateTime(d.year, d.month, d.day).toUtc().toIso8601String();
+
+    test('relative days: today, yesterday, il y a N j', () {
+      expect(formatDateFr(isoOf(now), now), 'aujourd’hui');
+      expect(formatDateFr(isoOf(DateTime(2026, 8, 16)), now), 'hier');
+      expect(formatDateFr(isoOf(DateTime(2026, 8, 10)), now), 'il y a 7 j');
+      expect(formatDateFr(isoOf(DateTime(2026, 7, 18)), now), 'il y a 30 j');
+    });
+
+    test('full French date after a month', () {
+      expect(formatDateFr(isoOf(DateTime(2026, 7, 17)), now), '17 juillet 2026');
+      expect(formatDateFr(isoOf(DateTime(2025, 1, 3)), now), '3 janvier 2025');
+      expect(formatDateFr(isoOf(DateTime(2024, 8, 14)), now), '14 août 2024');
+    });
+
+    test('unparseable input is returned unchanged', () {
+      expect(formatDateFr('pas une date', now), 'pas une date');
+    });
+  });
 }

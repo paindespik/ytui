@@ -101,8 +101,8 @@ Future<void> _ensureNewVideoChannel() async {
       ?.createNotificationChannel(
     AndroidNotificationChannel(
       _newVideoChannelId,
-      'New videos',
-      description: 'New videos from followed channels',
+      'Nouvelles vidéos',
+      description: 'Nouvelles vidéos des chaînes suivies',
       importance: Importance.high,
     ),
   );
@@ -118,8 +118,8 @@ Future<void> showNewVideoNotification(
     const NotificationDetails(
       android: AndroidNotificationDetails(
         _newVideoChannelId,
-        'New videos',
-        channelDescription: 'New videos from followed channels',
+        'Nouvelles vidéos',
+        channelDescription: 'Nouvelles vidéos des chaînes suivies',
         importance: Importance.high,
         priority: Priority.high,
       ),

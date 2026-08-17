@@ -37,8 +37,8 @@ class AppError extends StatelessWidget {
   static String messageFor(Object error) {
     if (error is ApiException) {
       return error.statusCode == 0
-          ? 'Server unreachable — check settings'
-          : 'API error ${error.statusCode}: ${error.detail}';
+          ? 'Serveur injoignable — vérifiez les réglages'
+          : 'Erreur API ${error.statusCode} : ${error.detail}';
     }
     return '$error';
   }
@@ -72,7 +72,7 @@ class AppError extends StatelessWidget {
               FilledButton.icon(
                 onPressed: onRetry,
                 icon: const Icon(Icons.refresh),
-                label: const Text('Retry'),
+                label: const Text('Réessayer'),
               ),
             ],
           ],

@@ -16,7 +16,7 @@ import '../widgets/screen_focus.dart';
 
 /// Shown when an account action returns 409: no OAuth token on the server.
 const kNotAuthenticated =
-    'Not authenticated — run `ytui auth push` from the desktop';
+    'Non authentifié — lancez `ytui auth push` depuis le bureau';
 
 class DetailScreen extends ConsumerWidget {
   final String videoId;
@@ -31,7 +31,7 @@ class DetailScreen extends ConsumerWidget {
     final colors = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Details')),
+      appBar: AppBar(title: const Text('Détails')),
       body: ScreenFocus(child: details.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
@@ -68,17 +68,17 @@ class DetailScreen extends ConsumerWidget {
                 if (d.viewCount != null)
                   _MetadataChip(
                     icon: Icons.visibility_outlined,
-                    label: '${compactCount(d.viewCount!)} views',
+                    label: '${compactCount(d.viewCount!)} vues',
                   ),
                 if (d.likeCount != null)
                   _MetadataChip(
                     icon: Icons.thumb_up_outlined,
-                    label: '${compactCount(d.likeCount!)} likes',
+                    label: '${compactCount(d.likeCount!)} j’aime',
                   ),
                 if (d.uploadDate.isNotEmpty)
                   _MetadataChip(
                     icon: Icons.calendar_today_outlined,
-                    label: d.uploadDate,
+                    label: formatDateFr(d.uploadDate),
                   ),
               ],
             ),
@@ -92,7 +92,7 @@ class DetailScreen extends ConsumerWidget {
                   const SizedBox(width: 12),
                   FilledButton.tonalIcon(
                     icon: const Icon(Icons.comment_outlined, size: 18),
-                    label: const Text('Comment'),
+                    label: const Text('Commentaire'),
                     onPressed: () => _comment(context, ref),
                   ),
                 ],
@@ -117,7 +117,7 @@ class DetailScreen extends ConsumerWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Odysee likes/comments are read-only',
+                          'Les likes/commentaires Odysee sont en lecture seule',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colors.onSurfaceVariant,
                           ),
@@ -166,7 +166,7 @@ class DetailScreen extends ConsumerWidget {
     final text = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Comment'),
+        title: const Text('Commentaire'),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -175,11 +175,11 @@ class DetailScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
+            child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
-            child: const Text('Post'),
+            child: const Text('Publier'),
           ),
         ],
       ),
@@ -188,7 +188,8 @@ class DetailScreen extends ConsumerWidget {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await ref.read(apiProvider).commentVideo(videoId, text, platform: platform);
-      messenger.showSnackBar(const SnackBar(content: Text('Comment posted')));
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Commentaire publié')));
     } on ApiException catch (e) {
       messenger.showSnackBar(SnackBar(
           content: Text(e.statusCode == 409 ? kNotAuthenticated : e.toString())));
@@ -237,7 +238,7 @@ class _LikeButtonState extends ConsumerState<_LikeButton> {
         _busy = false;
       });
       messenger.showSnackBar(SnackBar(
-        content: Text(next == 'like' ? 'Liked 👍' : 'Like removed'),
+        content: Text(next == 'like' ? 'J’aime 👍' : 'Like retiré'),
       ));
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -253,7 +254,7 @@ class _LikeButtonState extends ConsumerState<_LikeButton> {
     final liked = _rating == 'like';
     return FilledButton.icon(
       icon: Icon(liked ? Icons.thumb_up : Icons.thumb_up_outlined, size: 18),
-      label: Text(liked ? 'Liked' : 'Like'),
+      label: const Text('J’aime'),
       onPressed: _busy ? null : _toggle,
     );
   }
@@ -314,7 +315,7 @@ class _OdyseeComments extends ConsumerWidget {
         ),
       ),
       error: (e, _) => Text(
-        'Comments unavailable: $e',
+        'Commentaires indisponibles : $e',
         style: theme.textTheme.bodySmall?.copyWith(
           color: colors.onSurfaceVariant,
         ),
@@ -323,7 +324,7 @@ class _OdyseeComments extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Comments (${page.total})',
+            'Commentaires (${page.total})',
             style: theme.textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w600,
             ),
@@ -331,7 +332,7 @@ class _OdyseeComments extends ConsumerWidget {
           const SizedBox(height: 12),
           if (page.items.isEmpty)
             Text(
-              'No comments yet',
+              'Aucun commentaire pour le moment',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colors.onSurfaceVariant,
               ),

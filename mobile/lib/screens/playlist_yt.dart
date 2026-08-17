@@ -38,7 +38,7 @@ class YtPlaylistScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.playlist_add),
-            tooltip: 'Import into a ytui playlist',
+            tooltip: 'Importer dans une playlist ytui',
             onPressed: () async {
               final playlist = await showImportPlaylistSheet(
                 context,
@@ -63,7 +63,7 @@ class YtPlaylistScreen extends ConsumerWidget {
         data: (result) {
           if (result.$1.isEmpty) {
             return const AppEmpty(
-              message: 'No videos in this playlist',
+              message: 'Aucune vidéo dans cette playlist',
               icon: Icons.playlist_remove,
             );
           }
@@ -84,7 +84,7 @@ class YtPlaylistScreen extends ConsumerWidget {
                         context.push('/player');
                       },
                       icon: const Icon(Icons.play_arrow),
-                      label: Text('Play all ${videos.length} videos'),
+                      label: Text('Lire les ${videos.length} vidéos'),
                       style: FilledButton.styleFrom(
                         backgroundColor: colorScheme.primary,
                         foregroundColor: colorScheme.onPrimary,
