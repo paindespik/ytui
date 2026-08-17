@@ -1,18 +1,45 @@
 # ytui
 
-A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch and TikTok) viewing system. A shared FastAPI backend aggregates RSS feeds, resolves playable stream URLs via `yt-dlp`, and stores history, playlists, and channels server-side in SQLite. Four independent front-ends — a Textual-based terminal UI, a headless argparse CLI, a Flutter Android app, and a browser SPA served by the backend itself — all consume the same REST API, so state (watch history, resume position, followed channels, local playlists) stays in sync across every device.
+A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch, TikTok and CrowdBunker) viewing system. A shared FastAPI backend aggregates RSS feeds, resolves playable stream URLs via `yt-dlp`, and stores history, playlists, and channels server-side in SQLite. Four independent front-ends — a Textual-based terminal UI, a headless argparse CLI, a Flutter Android app, and a browser SPA served by the backend itself — all consume the same REST API, so state (watch history, resume position, followed channels, local playlists) stays in sync across every device.
 
 ## Features
 
-- **Unified feed** — merges YouTube, BitChute, and Odysee RSS feeds by publish date, with TTL-based caching (15 min) and stale-fallback on upstream failure.
+- **Unified feed** — merges YouTube, BitChute and Odysee RSS feeds plus the CrowdBunker posts API by publish date, with TTL-based caching (15 min) and stale-fallback on upstream failure.
 - **Playback** — resolves the best available stream (HLS/progressive/DASH up to 4320p) via `yt-dlp`; the TUI drives `mpv` over JSON IPC, the mobile app uses `media_kit`.
 - **Resolution cap** — one max height per client (360p…2160p, default 1440p), stored locally (TUI `config.toml`, mobile `SharedPreferences`, web `localStorage`) and changeable mid-playback from the player as well as from the settings screen. Honoured on all five platforms, VOD and live (a Twitch/YouTube master playlist is narrowed to a single variant, TikTok picks the best FLV quality under the cap); a source that only exists above the cap degrades to its lowest track instead of failing.
 - **Cross-device continuity** — watch history, resume position (10s heartbeat), local playlists, and followed channels all live on the server, not per-client config.
 - **Playlist import** — copy a whole upstream playlist (URL or id) into a local ytui playlist, either as a new playlist named after the upstream title or appended to an existing one (duplicates skipped). Available on every client: TUI (`S` on a playlist, `i` in local playlists), CLI (`ytui import`), mobile (playlist screen / long-press menu), web (playlist page and the Playlists tab).
 - **Live notifications** — the server polls followed channels' `/live` pages every 5 min; clients poll `/api/lives` and surface desktop/mobile notifications, pinning live videos in the feed.
 - **YouTube interactions** — an OAuth2 "token push" model: the desktop client completes OAuth consent and uploads the token to the server, which then acts for every client through the YouTube Data API v3 — like (a toggle, so it can be undone), read paginated comments, post one. In the mobile app and the browser SPA both live in the player: the comments panel takes over the queue/suggestions column without interrupting playback.
-- **Search** — YouTube and Odysee search via `yt-dlp`/the LBRY API, from any client.
+- **Search** — YouTube, Odysee and CrowdBunker search via `yt-dlp`/the LBRY API/the divulg.org search API, from any client.
 - **Four clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/import/auth`), a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling), and a zero-build browser SPA (vanilla ES modules; dash.js/hls.js/mpegts.js playback through a same-origin stream proxy, server-generated DASH manifests for >360p YouTube, session-cookie auth, TUI-style keyboard shortcuts).
+
+## Platform support
+
+| Feature | YouTube | BitChute | Odysee | Twitch | TikTok | CrowdBunker |
+|---|---|---|---|---|---|---|
+| Followed-channel feed | ✅ RSS | ✅ RSS | ✅ RSS | ✅ (lives) | ✅ (lives) | ✅ posts API (2 pages) |
+| Global search | ✅ yt-dlp | ❌ anti-bot | ✅ Lighthouse | ❌ | ❌ | ✅ search API |
+| Channel videos | ✅ | ✅ | ✅ | ✅ VODs | ❌ lives only | ✅ |
+| In-channel search | ✅ upstream | ✅ local scan | ✅ Lighthouse (≥3 chars) | ✅ local scan | — | ✅ local scan |
+| VOD playback | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Lives | ✅ | ❌ | ❌ no API | ✅ ad-free proxies | ✅ webcast | ❌ no API |
+| Live chat | ✅ | — | — | ✅ IRC | ❌ infeasible | — |
+| Up next / related | ✅ scrape | ✅ same channel | ✅ same channel | ✅ same channel | ❌ | ✅ same channel |
+| Comments | ✅ read+write (OAuth) | ❌ | ✅ read (Commentron) | ❌ | ❌ | ❌ |
+| Likes | ✅ OAuth | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Upstream playlist import | ✅ | ✅ | ❌ 400 | ❌ 400 | ❌ | ❌ |
+| SponsorBlock | ✅ | — | — | — | — | — |
+
+Documented non-support (investigated, not planned):
+
+- **BitChute search** sits behind a JavaScript anti-bot wall — not scrapable without a headless browser.
+- **TikTok channel video pages** need authenticated scraping; channels surface through the lives tab only.
+- **TikTok live chat** uses a signed WebSocket protocol — infeasible without official credentials.
+- **Odysee and CrowdBunker lives** expose no public API to detect them.
+- **Odysee likes/comments (write)** require an LBRY wallet signature.
+- **Odysee playlists** (`odysee.com/$/playlist/…`) are a JS route with no yt-dlp extractor; **Twitch collections** have no stable public URL form — both answer an explicit 400.
+- By design, **no authentication is added to non-YouTube providers**: everything above runs on public, no-auth endpoints.
 
 ## Architecture
 
