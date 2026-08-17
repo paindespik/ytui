@@ -709,16 +709,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           builder: (context, ref, _) {
             final current = ref.watch(maxHeightProvider);
             final served = _streams?.height;
+            // Selectable, not a caption: it is the only way back to "no cap"
+            // from the player, and it doubles as the autofocus target when
+            // [current] is 2160 or a legacy value outside the ladder, so
+            // exactly one item is always focused.
+            final maxIsCurrent =
+                !kQualityLadder.contains(current) || current == 2160;
             return ListView(
               shrinkWrap: true,
               children: [
                 ListTile(
+                  autofocus: maxIsCurrent,
                   title: const Text('Qualité maximale'),
                   subtitle: Text(served == null
                       ? 'La meilleure piste sous le plafond est choisie.'
                       : 'Actuellement servi : ${served}p'),
+                  trailing: current == 2160 ? const Icon(Icons.check) : null,
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    if (!maxIsCurrent && video != null) {
+                      unawaited(_setMaxHeight(2160, video));
+                    }
+                  },
                 ),
-                for (final height in kQualityLadder)
+                // 2160 lives in the "Qualité maximale" item above.
+                for (final height in kQualityLadder.where((h) => h < 2160))
                   ListTile(
                     autofocus: height == current,
                     title: Text('${height}p'),
@@ -1289,7 +1304,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           live: _isLiveId(video),
           rateLabel: _fmtRate(_rate),
           audioDelayLabel: _fmtAudioDelay(audioDelayMs),
-          qualityLabel: '${maxHeight}p',
+          // Served height when known — the cap alone lies: a 1440p cap can
+          // serve a 360p track when the source has nothing bigger.
+          qualityLabel: _streams?.height != null
+              ? '${_streams!.height}p'
+              : '${maxHeight}p',
+          qualityTooltip: 'Plafond : ${maxHeight}p',
           hasSubtitles: _streams?.subtitles.isNotEmpty ?? false,
           hasNext: hasNext,
           hasPrevious: hasPrevious,

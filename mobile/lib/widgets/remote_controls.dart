@@ -146,6 +146,7 @@ class RemotePlayerControls extends StatelessWidget {
     required this.rateLabel,
     required this.audioDelayLabel,
     required this.qualityLabel,
+    this.qualityTooltip = 'Qualité',
     required this.hasSubtitles,
     required this.hasNext,
     required this.hasPrevious,
@@ -171,6 +172,10 @@ class RemotePlayerControls extends StatelessWidget {
   final String rateLabel;
   final String audioDelayLabel;
   final String qualityLabel;
+
+  /// Tooltip of the quality chip: usually the height cap, since the label
+  /// shows the served height.
+  final String qualityTooltip;
   final bool hasSubtitles;
   final bool hasNext;
   final bool hasPrevious;
@@ -291,7 +296,7 @@ class RemotePlayerControls extends StatelessWidget {
                   ),
                   RemoteButton(
                     label: qualityLabel,
-                    tooltip: 'Qualité',
+                    tooltip: qualityTooltip,
                     onPressed: onQuality,
                   ),
                 ],
