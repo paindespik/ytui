@@ -34,21 +34,6 @@ LIVE_CHECK_SECONDS = 60
 POSITION_HEARTBEAT_SECONDS = 10.0
 
 
-def _platform_from_url(url: str) -> str:
-    """Platform of a playback URL (the mpv path carries it, the video id does not)."""
-    if "bitchute.com/" in url:
-        return "bitchute"
-    if "odysee.com/" in url:
-        return "odysee"
-    if "twitch.tv/" in url:
-        return "twitch"
-    if "tiktok.com/" in url:
-        return "tiktok"
-    if "crowdbunker.com/" in url:
-        return "crowdbunker"
-    return "youtube"
-
-
 class YtuiApp(App):
     TITLE = "ytui"
 
@@ -223,13 +208,13 @@ class YtuiApp(App):
         snap = await self.player.playback_snapshot()
         if snap:
             path, title, position, duration = snap
-            vid = video_id_from_url(path)
-            if vid:
-                platform = _platform_from_url(path)
+            ref = video_id_from_url(path)
+            if ref:
+                vid, platform = ref
                 qualified = f"{platform}:{vid}"
                 if qualified not in self.watched:
                     # mpv advanced to a queued video on its own: add it to history.
-                    self._record_watch(self._video_for_history(vid, title, path))
+                    self._record_watch(self._video_for_history(vid, title, platform))
                 if (
                     self.config.player.sponsorblock
                     and vid not in self._sponsor_segments
@@ -281,8 +266,7 @@ class YtuiApp(App):
         except YtuiApiError:
             pass  # best-effort heartbeat
 
-    def _video_for_history(self, video_id: str, title: str, path: str = "") -> Video:
-        platform = _platform_from_url(path)
+    def _video_for_history(self, video_id: str, title: str, platform: str = "youtube") -> Video:
         return Video(video_id=video_id, title=title or video_id, kind="video", platform=platform)
 
     def _notify_resume(self, start: float) -> None:

@@ -28,15 +28,10 @@ def _record_cli_watch(config: Config, url: str) -> None:
     from .api_client import YtuiApiError
     from .models import Video, video_id_from_url
 
-    video_id = video_id_from_url(url)
-    if video_id is None:
+    ref = video_id_from_url(url)
+    if ref is None:
         return  # playlists / unknown URLs: nothing to record
-    if "bitchute.com/" in url:
-        platform = "bitchute"
-    elif "odysee.com/" in url:
-        platform = "odysee"
-    else:
-        platform = "youtube"
+    video_id, platform = ref
     client = _client(config)
     if client is None:
         return

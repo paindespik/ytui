@@ -11,16 +11,37 @@ from pydantic import BaseModel
 _YT_WATCH_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
 _YT_SHORT_RE = re.compile(r"youtu\.be/([A-Za-z0-9_-]{6,})")
 _BITCHUTE_RE = re.compile(r"bitchute\.com/video/([^/?#]+)")
+_CROWDBUNKER_RE = re.compile(r"crowdbunker\.com/v/([^/?#]+)")
 _ODYSEE_RE = re.compile(r"odysee\.com/(?:@[^/?#]+/)?([^/?#@][^/?#]*:[0-9a-f]+)")
+_TWITCH_VOD_RE = re.compile(r"twitch\.tv/videos/(\d+)")
+_TIKTOK_VIDEO_RE = re.compile(r"tiktok\.com/@[^/?#]+/video/(\d+)")
 
 
-def video_id_from_url(url: str) -> str | None:
-    """Extract a video id from a YouTube/BitChute/Odysee video URL, or None."""
-    match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url) or _BITCHUTE_RE.search(url)
+def video_id_from_url(url: str) -> tuple[str, str] | None:
+    """(video_id, platform) extracted from a video URL, or None.
+
+    Twitch VODs map to the 'v{id}' convention used by Video.url; TikTok video
+    pages map to the bare numeric id.
+    """
+    match = _YT_WATCH_RE.search(url) or _YT_SHORT_RE.search(url)
     if match:
-        return match.group(1)
+        return match.group(1), "youtube"
+    match = _BITCHUTE_RE.search(url)
+    if match:
+        return match.group(1), "bitchute"
+    match = _CROWDBUNKER_RE.search(url)
+    if match:
+        return match.group(1), "crowdbunker"
+    match = _TWITCH_VOD_RE.search(url)
+    if match:
+        return f"v{match.group(1)}", "twitch"
+    match = _TIKTOK_VIDEO_RE.search(url)
+    if match:
+        return match.group(1), "tiktok"
     match = _ODYSEE_RE.search(url)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1), "odysee"
+    return None
 
 
 class Channel(BaseModel):

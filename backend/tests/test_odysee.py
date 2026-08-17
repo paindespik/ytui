@@ -511,11 +511,14 @@ def test_video_url_odysee():
 
 
 def test_video_id_from_url_odysee():
-    assert (
-        video_id_from_url("https://odysee.com/@chan:cc33/my-video:ab12")
-        == "my-video:ab12"
+    assert video_id_from_url("https://odysee.com/@chan:cc33/my-video:ab12") == (
+        "my-video:ab12",
+        "odysee",
     )
-    assert video_id_from_url("https://odysee.com/my-video:ab12") == "my-video:ab12"
+    assert video_id_from_url("https://odysee.com/my-video:ab12") == (
+        "my-video:ab12",
+        "odysee",
+    )
     # channel pages and arbitrary paths are not video URLs
     assert video_id_from_url("https://odysee.com/@chan:cc33") is None
     assert video_id_from_url("https://odysee.com/foo") is None

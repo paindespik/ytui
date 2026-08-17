@@ -139,7 +139,10 @@ def _mock_cb_http(pages: list[dict]):
 def test_video_url_and_id_roundtrip():
     video = Video(video_id="vid000001", title="t", platform="crowdbunker")
     assert video.url == "https://crowdbunker.com/v/vid000001"
-    assert video_id_from_url("https://crowdbunker.com/v/vid000001") == "vid000001"
+    assert video_id_from_url("https://crowdbunker.com/v/vid000001") == (
+        "vid000001",
+        "crowdbunker",
+    )
     channel = Video(video_id=ORG, title="", kind="channel", platform="crowdbunker")
     assert channel.url == f"https://crowdbunker.com/@{ORG}"
 

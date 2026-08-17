@@ -93,16 +93,45 @@ def test_video_platform_defaults_to_youtube():
 
 
 def test_video_id_from_url():
-    assert video_id_from_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
-    assert video_id_from_url("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
-    assert video_id_from_url("https://www.bitchute.com/video/AbC123xyz/") == "AbC123xyz"
+    assert video_id_from_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == (
+        "dQw4w9WgXcQ",
+        "youtube",
+    )
+    assert video_id_from_url("https://youtu.be/dQw4w9WgXcQ") == ("dQw4w9WgXcQ", "youtube")
+    assert video_id_from_url("https://www.bitchute.com/video/AbC123xyz/") == (
+        "AbC123xyz",
+        "bitchute",
+    )
     assert video_id_from_url("https://www.youtube.com/playlist?list=PL1") is None
 
 
+def test_video_id_from_url_other_platforms():
+    assert video_id_from_url("https://crowdbunker.com/v/0z4Kms8pi8I") == (
+        "0z4Kms8pi8I",
+        "crowdbunker",
+    )
+    # Twitch VODs map to the 'v{id}' convention used by Video.url.
+    assert video_id_from_url("https://www.twitch.tv/videos/123456789") == (
+        "v123456789",
+        "twitch",
+    )
+    assert video_id_from_url("https://www.tiktok.com/@someuser/video/7345678901234567890") == (
+        "7345678901234567890",
+        "tiktok",
+    )
+    # live/channel pages are not video URLs
+    assert video_id_from_url("https://www.twitch.tv/somechannel") is None
+    assert video_id_from_url("https://www.tiktok.com/@someuser/live") is None
+
+
 def test_video_id_from_url_odysee():
-    assert video_id_from_url("https://odysee.com/ma-video:abc123") == "ma-video:abc123"
-    assert (
-        video_id_from_url("https://odysee.com/@chan:1/ma-video:abc123") == "ma-video:abc123"
+    assert video_id_from_url("https://odysee.com/ma-video:abc123") == (
+        "ma-video:abc123",
+        "odysee",
+    )
+    assert video_id_from_url("https://odysee.com/@chan:1/ma-video:abc123") == (
+        "ma-video:abc123",
+        "odysee",
     )
     # channel pages and arbitrary paths are not video URLs
     assert video_id_from_url("https://odysee.com/@chan:1") is None
