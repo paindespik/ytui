@@ -526,8 +526,8 @@ def test_related_videos_rate_limited(client):
     assert "rate-limited" in resp.json()["detail"]
 
 
-def test_related_videos_non_youtube_returns_empty(client):
-    resp = client.get("/api/videos/vid000000001/related", params={"platform": "bitchute"})
+def test_related_videos_tiktok_returns_empty(client):
+    resp = client.get("/api/videos/user123:room1/related", params={"platform": "tiktok"})
     assert resp.status_code == 200
     assert resp.json()["items"] == []
 

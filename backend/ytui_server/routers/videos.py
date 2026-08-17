@@ -260,12 +260,44 @@ async def related_videos(
     platform: Platform = "youtube",
     limit: int = Query(default=20, ge=1, le=40),
 ) -> SearchResponse:
-    if platform != "youtube":
+    if platform == "youtube":
+        try:
+            items = await ytdlp.related_videos(video_id, limit=limit)
+        except ytdlp.UpstreamError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Related fetch failed: {exc}"
+            ) from exc
+        return SearchResponse(items=items)
+    if platform == "tiktok":
+        return SearchResponse(items=[])
+    # No upstream "up next" API: fall back to the newest uploads from the same
+    # channel. The channel id comes from the (TTL-cached) video details, and the
+    # current video is excluded from the listing.
+    try:
+        details = await ytdlp.video_details(_video_url(video_id, platform))
+    except ytdlp.UpstreamError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Related fetch failed: {exc}"
+        ) from exc
+    channel_id = details.channel_id
+    if not channel_id:
         return SearchResponse(items=[])
     try:
-        items = await ytdlp.related_videos(video_id, limit=limit)
-    except ytdlp.UpstreamError as exc:
+        if platform == "odysee":
+            items = await odysee.channel_videos(channel_id, limit=limit)
+        elif platform == "crowdbunker":
+            items = await crowdbunker.channel_videos(channel_id, limit=limit)
+        else:
+            items = await ytdlp.channel_videos(
+                _channel_url(channel_id, platform), limit=limit
+            )
+    except (
+        ytdlp.UpstreamError,
+        odysee.OdyseeError,
+        crowdbunker.CrowdBunkerError,
+    ) as exc:
         raise HTTPException(status_code=502, detail=f"Related fetch failed: {exc}") from exc
+    items = [item for item in items if item.video_id != video_id][:limit]
     return SearchResponse(items=items)
 
 
