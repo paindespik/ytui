@@ -9,6 +9,7 @@ from textual.containers import Horizontal
 from textual.widgets import Footer, Header
 
 from ...api_client import YtuiApiError
+from ...models import Video
 from ..widgets.detail_panel import DetailPanel
 from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
@@ -57,16 +58,16 @@ class HistoryScreen(BrowseScreen):
         video = self._highlighted()
         if video is None:
             return
-        self._remove_entry(video.video_id)
+        self._remove_entry(video)
 
     @work
-    async def _remove_entry(self, video_id: str) -> None:
+    async def _remove_entry(self, video: Video) -> None:
         try:
-            await self.app.client.remove_watch(video_id)
+            await self.app.client.remove_watch(video.video_id, video.platform)
         except YtuiApiError as exc:
             self.app.notify(f"Failed to remove: {exc.detail}", severity="error", timeout=8)
             return
-        self.app.watched.discard(video_id)
+        self.app.watched.discard(f"{video.platform}:{video.video_id}")
         self._reload()
         self.app._refresh_watched_markers()
 

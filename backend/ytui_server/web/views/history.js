@@ -87,7 +87,7 @@ function historyRow(entry, body) {
         onclick: async (e) => {
           e.stopPropagation();
           try {
-            await api.removeWatch(v.video_id);
+            await api.removeWatch(v.video_id, v.platform);
             row.remove(); // pas de confirmation — parité avec le swipe mobile
             if (!body.querySelector(".row")) {
               body.replaceChildren(emptyState("Historique vide"));

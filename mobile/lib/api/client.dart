@@ -275,13 +275,16 @@ class YtuiApi {
         .toSet();
   }
 
-  Future<void> savePosition(String videoId, double position, {double? duration}) =>
+  Future<void> savePosition(String videoId, double position,
+          {double? duration, String platform = 'youtube'}) =>
       _request('PUT', '/api/history/${_enc(videoId)}/position',
+          query: {'platform': platform},
           data: {'position': position, 'duration': duration});
 
-  Future<ResumeInfo?> resume(String videoId) async {
+  Future<ResumeInfo?> resume(String videoId, {String platform = 'youtube'}) async {
     try {
-      final r = await _request('GET', '/api/history/${_enc(videoId)}/resume');
+      final r = await _request('GET', '/api/history/${_enc(videoId)}/resume',
+          query: {'platform': platform});
       return ResumeInfo.fromJson(r.data as Map<String, dynamic>);
     } on ApiException catch (e) {
       if (e.statusCode == 404) return null;
@@ -289,8 +292,9 @@ class YtuiApi {
     }
   }
 
-  Future<void> removeWatch(String videoId) =>
-      _request('DELETE', '/api/history/${_enc(videoId)}');
+  Future<void> removeWatch(String videoId, {String platform = 'youtube'}) =>
+      _request('DELETE', '/api/history/${_enc(videoId)}',
+          query: {'platform': platform});
 
   // ─── Local playlists ───
 

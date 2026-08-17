@@ -80,8 +80,10 @@ Future<void> checkLivesAndNotify(SharedPreferences prefs) async {
   final seen = (prefs.getStringList(kSeenLiveIdsKey) ?? []).toSet();
   final currentIds = <String>{};
   for (final live in lives) {
-    currentIds.add(live.video.videoId);
-    if (!seen.contains(live.video.videoId)) {
+    // Platform-qualified keys: the same bare id can exist on two platforms.
+    final key = '${live.video.platform}:${live.video.videoId}';
+    currentIds.add(key);
+    if (!seen.contains(key)) {
       await showLiveNotification(live.video.videoId, live.video.title,
           live.video.channelTitle,
           platform: live.video.platform);
@@ -136,7 +138,9 @@ Future<void> checkNewVideosAndNotify(SharedPreferences prefs) async {
 
   final api = YtuiApi(baseUrl: url, token: token);
   final feed = await api.feed(refresh: true);
-  final allIds = feed.videos.map((v) => v.videoId).toList();
+  // Platform-qualified keys (one re-notification per video is acceptable
+  // right after this migration of the seen-set format).
+  final allIds = feed.videos.map((v) => '${v.platform}:${v.videoId}').toList();
 
   final seen = (prefs.getStringList(kSeenVideoIdsKey) ?? []).toSet();
   final seeded = prefs.getBool(kFirstFeedSeedKey) ?? false;
@@ -150,7 +154,7 @@ Future<void> checkNewVideosAndNotify(SharedPreferences prefs) async {
 
   // Notify for videos not in seen set.
   for (final v in feed.videos) {
-    if (!seen.contains(v.videoId)) {
+    if (!seen.contains('${v.platform}:${v.videoId}')) {
       await showNewVideoNotification(
           v.videoId, v.title, v.channelTitle);
     }

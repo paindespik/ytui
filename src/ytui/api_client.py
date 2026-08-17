@@ -258,26 +258,39 @@ class YtuiClient:
         return set(data["ids"])
 
     async def save_position(
-        self, video_id: str, position: float, duration: float | None
+        self,
+        video_id: str,
+        position: float,
+        duration: float | None,
+        platform: str = "youtube",
     ) -> None:
         await self._request(
             "PUT",
             f"/api/history/{_encode(video_id)}/position",
+            params={"platform": platform},
             json={"position": position, "duration": duration},
         )
 
-    async def resume(self, video_id: str) -> tuple[float, float | None, str] | None:
+    async def resume(
+        self, video_id: str, platform: str = "youtube"
+    ) -> tuple[float, float | None, str] | None:
         """(position, duration, playlist_id) for a watched video, or None."""
         try:
-            data = (await self._request("GET", f"/api/history/{_encode(video_id)}/resume")).json()
+            data = (
+                await self._request(
+                    "GET", f"/api/history/{_encode(video_id)}/resume", params={"platform": platform}
+                )
+            ).json()
         except YtuiApiError as exc:
             if exc.status_code == 404:
                 return None
             raise
         return (data["position"], data.get("duration"), data.get("playlist_id", ""))
 
-    async def remove_watch(self, video_id: str) -> None:
-        await self._request("DELETE", f"/api/history/{_encode(video_id)}")
+    async def remove_watch(self, video_id: str, platform: str = "youtube") -> None:
+        await self._request(
+            "DELETE", f"/api/history/{_encode(video_id)}", params={"platform": platform}
+        )
 
     # -- local playlists --
 

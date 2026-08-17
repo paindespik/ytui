@@ -79,6 +79,35 @@ _MIGRATIONS: list[str] = [
         segments_json TEXT NOT NULL
     );
     """,
+    # 3: watch history keyed by (platform, video_id): the same bare id can exist
+    # on several platforms (an 11-char CrowdBunker uid is shaped like a YouTube
+    # id), so a bare-id PK made histories and resume points collide. Rebuild the
+    # table; existing rows keep their stored platform.
+    """
+    CREATE TABLE watch_history_new (
+        video_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        channel_title TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL DEFAULT 'video',
+        platform TEXT NOT NULL DEFAULT 'youtube',
+        watched_at REAL NOT NULL,
+        position REAL NOT NULL DEFAULT 0,
+        duration REAL,
+        playlist_id TEXT NOT NULL DEFAULT '',
+        channel_id TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (platform, video_id)
+    );
+    INSERT INTO watch_history_new
+        (video_id, title, channel_title, kind, platform, watched_at, position,
+         duration, playlist_id, channel_id)
+        SELECT video_id, title, channel_title, kind, platform, watched_at, position,
+               duration, playlist_id, channel_id
+        FROM watch_history;
+    DROP TABLE watch_history;
+    ALTER TABLE watch_history_new RENAME TO watch_history;
+    CREATE INDEX idx_watch_history_watched_at
+        ON watch_history(watched_at DESC);
+    """,
 ]
 
 
@@ -302,11 +331,11 @@ class Database:
                 "(video_id, title, channel_title, kind, platform, watched_at, "
                 "playlist_id, channel_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(video_id) DO UPDATE SET "
+                "ON CONFLICT(platform, video_id) DO UPDATE SET "
                 "title = excluded.title, "
                 "channel_title = excluded.channel_title, "
+                "kind = excluded.kind, "
                 "watched_at = excluded.watched_at, "
-                "platform = excluded.platform, "
                 "playlist_id = CASE WHEN excluded.playlist_id != '' "
                 "THEN excluded.playlist_id ELSE playlist_id END, "
                 "channel_id = CASE WHEN excluded.channel_id != '' "
@@ -331,27 +360,35 @@ class Database:
                 )
             self._conn.commit()
 
-    def save_position(self, video_id: str, position: float, duration: float | None) -> bool:
+    def save_position(
+        self, platform: str, video_id: str, position: float, duration: float | None
+    ) -> bool:
         with self._lock:
             cur = self._conn.execute(
-                "UPDATE watch_history SET position = ?, duration = ? WHERE video_id = ?",
-                (position, duration, video_id),
+                "UPDATE watch_history SET position = ?, duration = ? "
+                "WHERE platform = ? AND video_id = ?",
+                (position, duration, platform, video_id),
             )
             self._conn.commit()
         return cur.rowcount > 0
 
-    def get_resume(self, video_id: str) -> tuple[float, float | None, str] | None:
+    def get_resume(
+        self, platform: str, video_id: str
+    ) -> tuple[float, float | None, str] | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT position, duration, playlist_id FROM watch_history WHERE video_id = ?",
-                (video_id,),
+                "SELECT position, duration, playlist_id FROM watch_history "
+                "WHERE platform = ? AND video_id = ?",
+                (platform, video_id),
             ).fetchone()
         return None if row is None else (row[0], row[1], row[2])
 
     def watched_ids(self) -> list[str]:
+        """Qualification: '{platform}:{video_id}' — the bare id collides across
+        platforms (e.g. CrowdBunker uids shaped like YouTube ids)."""
         with self._lock:
-            rows = self._conn.execute("SELECT video_id FROM watch_history").fetchall()
-        return [r[0] for r in rows]
+            rows = self._conn.execute("SELECT platform, video_id FROM watch_history").fetchall()
+        return [f"{platform}:{video_id}" for platform, video_id in rows]
 
     def watch_history(self, limit: int = 200) -> list[tuple[Video, float, float]]:
         """Most recent watches first, as (video, watched_at, position) tuples."""
@@ -386,10 +423,11 @@ class Database:
             )
         return out
 
-    def remove_watch(self, video_id: str) -> bool:
+    def remove_watch(self, platform: str, video_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM watch_history WHERE video_id = ?", (video_id,)
+                "DELETE FROM watch_history WHERE platform = ? AND video_id = ?",
+                (platform, video_id),
             )
             self._conn.commit()
         return cur.rowcount > 0

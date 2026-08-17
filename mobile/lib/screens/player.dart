@@ -351,7 +351,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (playing == null || playing.videoId != videoId) return;
     if (_isLiveId(playing) || _playingIsLive) return;
     unawaited(api
-        .savePosition(videoId, duration, duration: duration)
+        .savePosition(videoId, duration,
+            duration: duration, platform: playing.platform)
         .catchError((_) {}));
   }
 
@@ -376,7 +377,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     try {
       // Record the watch and fetch resume position + fresh stream URLs.
       unawaited(api.recordWatch(video).catchError((_) {}));
-      ref.read(watchedIdsProvider.notifier).markWatched(video.videoId);
+      ref
+          .read(watchedIdsProvider.notifier)
+          .markWatched('${video.platform}:${video.videoId}');
       // Keep playing when the screen turns off (foreground service + wakelock).
       unawaited(startPlaybackService(
         title: video.title,
@@ -384,7 +387,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       ).catchError((_) {}));
       double start = startAt?.inSeconds.toDouble() ?? 0;
       if (startAt == null && resume && !_isLiveId(video)) {
-        final info = await api.resume(video.videoId).catchError((_) => null);
+        final info = await api
+            .resume(video.videoId, platform: video.platform)
+            .catchError((_) => null);
         if (info != null) start = resumeStart(info.position, info.duration);
       }
       // A slower resume lookup for a video the user already left must not
@@ -478,8 +483,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void _markStaleBookmark(String videoId, double duration) {
     final api = _api;
     if (api == null || duration <= 0) return;
-    unawaited(
-        api.savePosition(videoId, 0, duration: duration).catchError((_) {}));
+    final platform = _playing?.platform ?? 'youtube';
+    unawaited(api
+        .savePosition(videoId, 0, duration: duration, platform: platform)
+        .catchError((_) {}));
   }
 
   Future<void> _fetchSegments(Video video) async {
@@ -845,6 +852,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         target.videoId,
         pos.inSeconds.toDouble(),
         duration: dur.inSeconds.toDouble(),
+        platform: target.platform,
       );
     } catch (_) {}
   }

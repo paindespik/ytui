@@ -61,7 +61,7 @@ class VideoList(DataTable):
         self.add_column("Source", key="source")
 
     def _add_video_row(self, video: Video, watched: set[str]) -> None:
-        seen = video.video_id in watched
+        seen = f"{video.platform}:{video.video_id}" in watched
         style = "dim" if seen else ""
         self.add_row(
             Text("✓" if seen else "", style=style),

@@ -22,8 +22,11 @@ class VideoTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final watched =
-        ref.watch(watchedIdsProvider).valueOrNull?.contains(video.videoId) ?? false;
+    final watched = ref
+            .watch(watchedIdsProvider)
+            .valueOrNull
+            ?.contains('${video.platform}:${video.videoId}') ??
+        false;
     final colors = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 

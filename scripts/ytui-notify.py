@@ -99,14 +99,17 @@ def fetch_new_videos(
     new: list[dict[str, str]] = []
     for v in data.get("videos", []):
         vid = v.get("video_id", "")
-        if vid and vid not in seen:
-            seen.add(vid)
+        key = f"{v.get('platform', 'youtube')}:{vid}"
+        # New ids are stored platform-qualified; the bare-id check keeps the
+        # pre-migration cache entries deduplicating (no notification flood).
+        if vid and key not in seen and vid not in seen:
+            seen.add(key)
             new.append(
                 {
                     "title": v.get("title", ""),
                     "channel": v.get("channel_title", ""),
                     "url": v.get("url", ""),
-                "platform": v.get("platform", "youtube"),
+                    "platform": v.get("platform", "youtube"),
                 }
             )
     return True, seen, new
@@ -135,7 +138,8 @@ def fetch_lives(base_url: str, token: str) -> tuple[bool, dict[str, dict[str, st
         v = entry.get("video", {})
         vid = v.get("video_id", "")
         if vid:
-            current[vid] = {
+            # Platform-qualified key: the same bare id can exist on two platforms.
+            current[f"{v.get('platform', 'youtube')}:{vid}"] = {
                 "title": v.get("title", ""),
                 "channel": v.get("channel_title", ""),
                 "url": v.get("url", ""),
@@ -346,7 +350,10 @@ def main() -> None:
         ok, current = fetch_lives(base_url, token)
         if ok:
             for vid, item in current.items():
-                if vid not in lives_seen:
+                # `vid` is qualified; the bare-id check covers cache entries
+                # written before the qualified-key migration.
+                bare = vid.split(":", 1)[1]
+                if vid not in lives_seen and bare not in lives_seen:
                     log.info("live: %s (%s)", item["title"], item["channel"])
                     platform = item.get("platform", "youtube")
                     icon = {"twitch": "🟣", "tiktok": "🎵"}.get(platform, "🔴")

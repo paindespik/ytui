@@ -41,7 +41,50 @@ def test_watched_ids(client):
     _record(client)
     _record(client, "other0000001")
     ids = client.get("/api/history/watched-ids").json()["ids"]
-    assert set(ids) == {"abc123def45", "other0000001"}
+    # Ids are platform-qualified: the same bare id can exist on two platforms.
+    assert set(ids) == {"youtube:abc123def45", "youtube:other0000001"}
+
+
+def test_position_and_resume_are_per_platform(client):
+    """Same bare id on two platforms: two history rows, two resume points."""
+    video = make_video("abc123def45")
+    cb = make_video("abc123def45", platform="crowdbunker", title="CB video")
+    client.post("/api/history", json={"video": video.model_dump(mode="json")})
+    client.post("/api/history", json={"video": cb.model_dump(mode="json")})
+    assert len(client.get("/api/history").json()) == 2
+
+    resp = client.put(
+        "/api/history/abc123def45/position",
+        params={"platform": "crowdbunker"},
+        json={"position": 55.0, "duration": 80.0},
+    )
+    assert resp.status_code == 204
+    resp = client.put(
+        "/api/history/abc123def45/position", json={"position": 10.0, "duration": 600.0}
+    )
+    assert resp.status_code == 204
+
+    cb_resume = client.get(
+        "/api/history/abc123def45/resume", params={"platform": "crowdbunker"}
+    ).json()
+    yt_resume = client.get("/api/history/abc123def45/resume").json()
+    assert cb_resume["position"] == 55.0
+    assert yt_resume["position"] == 10.0
+
+    # Deleting one platform's entry leaves the other intact.
+    assert (
+        client.delete(
+            "/api/history/abc123def45", params={"platform": "crowdbunker"}
+        ).status_code
+        == 204
+    )
+    assert (
+        client.get(
+            "/api/history/abc123def45/resume", params={"platform": "crowdbunker"}
+        ).status_code
+        == 404
+    )
+    assert client.get("/api/history/abc123def45/resume").status_code == 200
 
 
 def test_position_roundtrip(client):

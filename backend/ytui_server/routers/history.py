@@ -31,14 +31,22 @@ async def watched_ids(request: Request) -> WatchedIdsOut:
 
 
 @router.put("/history/{video_id}/position", status_code=204)
-async def save_position(video_id: str, body: PositionIn, request: Request) -> None:
-    if not request.app.state.db.save_position(video_id, body.position, body.duration):
+async def save_position(
+    video_id: str,
+    body: PositionIn,
+    request: Request,
+    platform: str = Query(default="youtube"),
+) -> None:
+    # `platform` is optional: bare-id callers (old clients) keep working.
+    if not request.app.state.db.save_position(platform, video_id, body.position, body.duration):
         raise HTTPException(status_code=404, detail="Video not in history")
 
 
 @router.get("/history/{video_id}/resume", response_model=ResumeOut)
-async def get_resume(video_id: str, request: Request) -> ResumeOut:
-    row = request.app.state.db.get_resume(video_id)
+async def get_resume(
+    video_id: str, request: Request, platform: str = Query(default="youtube")
+) -> ResumeOut:
+    row = request.app.state.db.get_resume(platform, video_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Video not in history")
     position, duration, playlist_id = row
@@ -46,6 +54,8 @@ async def get_resume(video_id: str, request: Request) -> ResumeOut:
 
 
 @router.delete("/history/{video_id}", status_code=204)
-async def remove_watch(video_id: str, request: Request) -> None:
-    if not request.app.state.db.remove_watch(video_id):
+async def remove_watch(
+    video_id: str, request: Request, platform: str = Query(default="youtube")
+) -> None:
+    if not request.app.state.db.remove_watch(platform, video_id):
         raise HTTPException(status_code=404, detail="Video not in history")

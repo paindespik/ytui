@@ -102,11 +102,11 @@ export class Player {
 
     // Historique immédiat + ✓ optimiste (fire and forget, parité mobile).
     api.recordWatch(video).catch(() => {});
-    watched.add(video.video_id);
+    watched.add(video);
 
     let start = 0;
     if (!this.live) {
-      const r = await api.resume(video.video_id).catch(() => null);
+      const r = await api.resume(video.video_id, video.platform).catch(() => null);
       if (this._stale(token)) return;
       if (r) start = resumeStart(r.position, r.duration);
     }
@@ -512,7 +512,7 @@ export class Player {
     // du flux, l'écrire effacerait le point de reprise qu'on vient de lire.
     if (!this._resumeSettled && position < this._resumeTarget - 5) return;
     const video = this.video;
-    api.savePosition(video.video_id, position, duration).catch(async (err) => {
+    api.savePosition(video.video_id, position, duration, video.platform).catch(async (err) => {
       // 404 : l'enregistrement dans l'historique (fire and forget) n'a pas
       // encore atterri, ou la ligne a été évincée. Réenregistrer puis réessayer
       // une fois, sinon les premières secondes d'une vidéo quittée vite sont
@@ -520,7 +520,7 @@ export class Player {
       if (!err || err.status !== 404) return;
       try {
         await api.recordWatch(video);
-        await api.savePosition(video.video_id, position, duration);
+        await api.savePosition(video.video_id, position, duration, video.platform);
       } catch {
         /* la prochaine pulsation réessaiera */
       }

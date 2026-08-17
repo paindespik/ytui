@@ -34,6 +34,21 @@ LIVE_CHECK_SECONDS = 60
 POSITION_HEARTBEAT_SECONDS = 10.0
 
 
+def _platform_from_url(url: str) -> str:
+    """Platform of a playback URL (the mpv path carries it, the video id does not)."""
+    if "bitchute.com/" in url:
+        return "bitchute"
+    if "odysee.com/" in url:
+        return "odysee"
+    if "twitch.tv/" in url:
+        return "twitch"
+    if "tiktok.com/" in url:
+        return "tiktok"
+    if "crowdbunker.com/" in url:
+        return "crowdbunker"
+    return "youtube"
+
+
 class YtuiApp(App):
     TITLE = "ytui"
 
@@ -210,7 +225,9 @@ class YtuiApp(App):
             path, title, position, duration = snap
             vid = video_id_from_url(path)
             if vid:
-                if vid not in self.watched:
+                platform = _platform_from_url(path)
+                qualified = f"{platform}:{vid}"
+                if qualified not in self.watched:
                     # mpv advanced to a queued video on its own: add it to history.
                     self._record_watch(self._video_for_history(vid, title, path))
                 if (
@@ -238,33 +255,34 @@ class YtuiApp(App):
                     # Growing duration = live stream (DVR window): resuming a live
                     # with --start stalls mpv, so never track its position.
                     self._live_vids.add(vid)
-                    self.run_worker(self._save_position_async(vid, 0.0, None), group="position")
+                    self.run_worker(
+                        self._save_position_async(vid, 0.0, None, platform), group="position"
+                    )
                 if vid not in self._live_vids:
                     now = time.monotonic()
                     if now - self._last_position_save >= POSITION_HEARTBEAT_SECONDS:
                         self._last_position_save = now
                         self.run_worker(
-                            self._save_position_async(vid, position, duration),
+                            self._save_position_async(vid, position, duration, platform),
                             group="position",
                         )
                 self._last_polled_vid = vid
                 self._last_polled_duration = duration
 
     async def _save_position_async(
-        self, video_id: str, position: float, duration: float | None
+        self,
+        video_id: str,
+        position: float,
+        duration: float | None,
+        platform: str = "youtube",
     ) -> None:
         try:
-            await self.client.save_position(video_id, position, duration)
+            await self.client.save_position(video_id, position, duration, platform=platform)
         except YtuiApiError:
             pass  # best-effort heartbeat
 
     def _video_for_history(self, video_id: str, title: str, path: str = "") -> Video:
-        if "bitchute.com/" in path:
-            platform = "bitchute"
-        elif "odysee.com/" in path:
-            platform = "odysee"
-        else:
-            platform = "youtube"
+        platform = _platform_from_url(path)
         return Video(video_id=video_id, title=title or video_id, kind="video", platform=platform)
 
     def _notify_resume(self, start: float) -> None:
@@ -276,7 +294,7 @@ class YtuiApp(App):
         if video.kind != "video":
             return 0.0
         try:
-            row = await self.client.resume(video.video_id)
+            row = await self.client.resume(video.video_id, video.platform)
         except YtuiApiError:
             return 0.0
         if row is None:
@@ -336,7 +354,7 @@ class YtuiApp(App):
         row = None
         if video.kind == "video":
             try:
-                row = await self.client.resume(video.video_id)
+                row = await self.client.resume(video.video_id, video.platform)
             except YtuiApiError:
                 row = None
         if row is None or not row[2]:
@@ -478,7 +496,7 @@ class YtuiApp(App):
     def _record_watch(self, video: Video) -> None:
         if video.kind == "channel":
             return
-        self.watched.add(video.video_id)
+        self.watched.add(f"{video.platform}:{video.video_id}")
         self._refresh_watched_markers()
         self.run_worker(self._record_watch_async(video), group="history")
         if (

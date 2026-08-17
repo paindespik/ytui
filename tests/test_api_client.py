@@ -244,6 +244,36 @@ async def test_save_position(client):
     )
     await client.save_position("xyz", 12.0, 60.0)
     assert route.called
+    assert route.calls[0].request.url.params["platform"] == "youtube"
+
+
+@respx.mock
+async def test_save_position_sends_platform(client):
+    route = respx.put(f"{BASE}/api/history/xyz/position").mock(
+        return_value=httpx.Response(204)
+    )
+    await client.save_position("xyz", 12.0, 60.0, platform="crowdbunker")
+    assert route.calls[0].request.url.params["platform"] == "crowdbunker"
+
+
+@respx.mock
+async def test_resume_sends_platform(client):
+    route = respx.get(f"{BASE}/api/history/xyz/resume").mock(
+        return_value=httpx.Response(
+            200, json={"position": 5.0, "duration": 60.0, "playlist_id": ""}
+        )
+    )
+    await client.resume("xyz", "odysee")
+    assert route.calls[0].request.url.params["platform"] == "odysee"
+
+
+@respx.mock
+async def test_remove_watch_sends_platform(client):
+    route = respx.delete(f"{BASE}/api/history/xyz").mock(
+        return_value=httpx.Response(204)
+    )
+    await client.remove_watch("xyz", "twitch")
+    assert route.calls[0].request.url.params["platform"] == "twitch"
 
 
 @respx.mock

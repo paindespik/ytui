@@ -61,7 +61,9 @@ class HistoryScreen extends ConsumerWidget {
                     child: Icon(Icons.delete, color: colorScheme.onError),
                   ),
                   onDismissed: (_) async {
-                    await ref.read(apiProvider).removeWatch(entry.video.videoId);
+                    await ref.read(apiProvider).removeWatch(
+                        entry.video.videoId,
+                        platform: entry.video.platform);
                     ref.invalidate(historyProvider);
                   },
                   child: VideoTile(

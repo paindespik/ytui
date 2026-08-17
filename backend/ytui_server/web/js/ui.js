@@ -127,7 +127,7 @@ export function videoCard(video, { live = false, onOpen } = {}) {
     !isLive && video.duration
       ? el("span", { class: "badge", text: fmtDuration(video.duration) })
       : null,
-    !isLive && isVideo && watched.has(video.video_id)
+    !isLive && isVideo && watched.has(video)
       ? el("span", { class: "badge watched", text: "✓" })
       : null,
   );

@@ -155,6 +155,7 @@ final livesProvider = FutureProvider.autoDispose<List<LiveItem>>((ref) async {
 });
 
 /// Watched ids for the ✓ markers, updated optimistically on play.
+/// Ids are platform-qualified: '{platform}:{videoId}'.
 final watchedIdsProvider =
     AsyncNotifierProvider<WatchedIdsNotifier, Set<String>>(WatchedIdsNotifier.new);
 
@@ -168,8 +169,8 @@ class WatchedIdsNotifier extends AsyncNotifier<Set<String>> {
     }
   }
 
-  void markWatched(String videoId) {
+  void markWatched(String qualifiedId) {
     final current = state.valueOrNull ?? {};
-    state = AsyncValue.data({...current, videoId});
+    state = AsyncValue.data({...current, qualifiedId});
   }
 }

@@ -42,6 +42,12 @@ export const prefs = {
   set gain(v) { set("gain", v); },
 };
 
+// Clé qualifiée '{platform}:{video_id}' : le même id nu peut exister sur
+// deux plateformes (uid CrowdBunker au format id YouTube).
+export function watchKey(video) {
+  return `${video.platform || "youtube"}:${video.video_id}`;
+}
+
 export const watched = {
   ids: new Set(),
   async load() {
@@ -52,6 +58,6 @@ export const watched = {
       /* non-blocking: the ✓ badges simply stay hidden */
     }
   },
-  has(videoId) { return this.ids.has(videoId); },
-  add(videoId) { this.ids.add(videoId); },
+  has(video) { return this.ids.has(watchKey(video)); },
+  add(video) { this.ids.add(watchKey(video)); },
 };

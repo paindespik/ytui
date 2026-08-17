@@ -92,21 +92,22 @@ class FakeClient:
         return list(self._history)
 
     async def record_watch(self, video: Video) -> None:
-        self._watched.add(video.video_id)
+        self._watched.add(f"{video.platform}:{video.video_id}")
         self._history.insert(0, video)
 
     async def watched_ids(self) -> set[str]:
+        # Qualified '{platform}:{video_id}' ids, like the real backend.
         return set(self._watched)
 
-    async def save_position(self, video_id, position, duration) -> None:
+    async def save_position(self, video_id, position, duration, platform="youtube") -> None:
         pass
 
-    async def resume(self, video_id):
+    async def resume(self, video_id, platform="youtube"):
         return None
 
-    async def remove_watch(self, video_id: str) -> None:
+    async def remove_watch(self, video_id: str, platform: str = "youtube") -> None:
         self._history = [v for v in self._history if v.video_id != video_id]
-        self._watched.discard(video_id)
+        self._watched.discard(f"{platform}:{video_id}")
 
     async def playlists(self) -> list[LocalPlaylist]:
         return [

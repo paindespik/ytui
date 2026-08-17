@@ -112,17 +112,23 @@ export const api = {
   history: (limit = 200) => request("GET", "/api/history", { query: { limit } }),
   recordWatch: (video) => request("POST", "/api/history", { body: { video } }),
   watchedIds: () => request("GET", "/api/history/watched-ids"),
-  savePosition: (videoId, position, duration) =>
-    request("PUT", `/api/history/${id(videoId)}/position`, { body: { position, duration } }),
-  resume: async (videoId) => {
+  savePosition: (videoId, position, duration, platform = "youtube") =>
+    request("PUT", `/api/history/${id(videoId)}/position`, {
+      query: { platform },
+      body: { position, duration },
+    }),
+  resume: async (videoId, platform = "youtube") => {
     try {
-      return await request("GET", `/api/history/${id(videoId)}/resume`);
+      return await request("GET", `/api/history/${id(videoId)}/resume`, {
+        query: { platform },
+      });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) return null;
       throw err;
     }
   },
-  removeWatch: (videoId) => request("DELETE", `/api/history/${id(videoId)}`),
+  removeWatch: (videoId, platform = "youtube") =>
+    request("DELETE", `/api/history/${id(videoId)}`, { query: { platform } }),
 
   // ─── local playlists ───
   playlists: () => request("GET", "/api/playlists"),
