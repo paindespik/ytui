@@ -12,7 +12,7 @@ channel_id = organization uid (the @handle, e.g. "PruneDePrune").
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -24,6 +24,10 @@ TIMEOUT = httpx.Timeout(10.0)
 HEADERS = {"accept": "application/json, text/plain, */*"}
 # The posts API returns at most 30 items per page.
 PAGE_SIZE = 30
+# The search API returns at most 15 hits per page, fixed by the server.
+SEARCH_PAGE_SIZE = 15
+# Safety cutoff: never scan more hits than this for one query.
+SEARCH_MAX_HITS = 300
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +134,75 @@ async def channel_videos(channel_id: str, limit: int = 50, offset: int = 0) -> l
         log.warning("crowdbunker channel listing failed for %s: %s", channel_id, exc)
         raise CrowdBunkerError(f"channel listing failed: {exc}") from exc
     return videos[offset : offset + limit]
+
+
+def _search_hit_to_video(item: dict[str, Any]) -> Video | None:
+    """Map a search hit to a Video, or None for non-video media types.
+
+    Search results mix channels, text posts and videos; only `video` entries
+    are playable through the regular ytdlp path.
+    """
+    if item.get("mediaType") != "video":
+        return None
+    uid = item.get("uid") or ""
+    title = item.get("title") or ""
+    if not uid or not title:
+        return None
+    published = None
+    stamp = item.get("publishedAtTimestamp")
+    if stamp:
+        try:
+            published = datetime.fromtimestamp(int(stamp), tz=timezone.utc)
+        except (ValueError, OSError, OverflowError):
+            published = None
+    duration = item.get("videoDuration") or (item.get("video") or {}).get("duration")
+    return Video(
+        video_id=uid,
+        title=title,
+        channel_title=item.get("channelName") or "",
+        channel_id=item.get("channelUid") or "",
+        published=published,
+        duration=int(duration) if duration else None,
+        thumbnail_url=item.get("thumbnailUrl") or "",
+        kind="video",
+        platform="crowdbunker",
+    )
+
+
+async def search(query: str, limit: int = 20) -> list[Video]:
+    """Global video search through the public posts search endpoint (no auth).
+
+    Pages of 15 mixed-type hits are walked until `limit` videos are collected
+    or the hit cutoff is reached.
+    """
+    videos: list[Video] = []
+    scanned = 0
+    page = 1
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            while len(videos) < limit and scanned < SEARCH_MAX_HITS:
+                try:
+                    resp = await client.get(
+                        f"{API_BASE}/search/posts",
+                        params={"q": query, "page": page},
+                        headers=HEADERS,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as exc:
+                    raise CrowdBunkerError(f"search failed: {exc}") from exc
+                items = data.get("items") or []
+                scanned += len(items)
+                for item in items:
+                    video = _search_hit_to_video(item)
+                    if video:
+                        videos.append(video)
+                if len(items) < SEARCH_PAGE_SIZE:
+                    break
+                page += 1
+    except CrowdBunkerError:
+        raise
+    return videos[:limit]
 
 
 async def resolve_channel(

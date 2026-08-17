@@ -41,7 +41,12 @@ class FakeMpv:
 
     async def stop(self):
         self._server.close()
-        await self._server.wait_closed()
+        # wait_closed() can hang when the finalizer runs on a different event
+        # loop than the one that accepted the connections: bound it.
+        try:
+            await asyncio.wait_for(self._server.wait_closed(), timeout=2.0)
+        except (asyncio.TimeoutError, RuntimeError):
+            pass
 
 
 @pytest.fixture

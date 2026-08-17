@@ -10,6 +10,12 @@ import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
 
+const _kSourceLabels = {
+  'youtube': 'YouTube',
+  'odysee': 'Odysee',
+  'crowdbunker': 'CrowdBunker',
+};
+
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
 
@@ -43,7 +49,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             autofocus: true,
             textInputAction: TextInputAction.search,
             decoration: InputDecoration(
-              hintText: 'Search ${_source == 'odysee' ? 'Odysee' : 'YouTube'}…',
+              hintText: 'Search ${_kSourceLabels[_source] ?? 'YouTube'}…',
               prefixIcon: const Icon(Icons.search),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(vertical: 10),
@@ -74,6 +80,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   value: 'odysee',
                   label: Text('Odysee'),
                   icon: Icon(Icons.explore_outlined),
+                ),
+                ButtonSegment(
+                  value: 'crowdbunker',
+                  label: Text('CrowdBunker'),
+                  icon: Icon(Icons.forum_outlined),
                 ),
               ],
               selected: {_source},

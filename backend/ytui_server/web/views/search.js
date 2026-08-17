@@ -7,6 +7,7 @@ import { el, spinner, emptyState, errorToast, videoGrid } from "../js/ui.js";
 const SOURCES = [
   ["youtube", "YouTube"],
   ["odysee", "Odysee"],
+  ["crowdbunker", "CrowdBunker"],
 ];
 
 export async function render(view, { query }) {

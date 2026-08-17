@@ -230,6 +230,10 @@ async def test_search_source_toggle(app):
         assert "Odysee" in screen.sub_title
         await pilot.press("ctrl+s")
         await pilot.pause()
+        assert screen.source == "crowdbunker"
+        assert "CrowdBunker" in screen.sub_title
+        await pilot.press("ctrl+s")
+        await pilot.pause()
         assert screen.source == "youtube"
 
 

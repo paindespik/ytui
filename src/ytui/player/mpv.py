@@ -131,6 +131,7 @@ class MpvController:
         if self._writer is not None:
             try:
                 self._writer.close()
+                await self._writer.wait_closed()
             except Exception:
                 pass
         self._reader = None

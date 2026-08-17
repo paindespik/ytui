@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import httpx
@@ -70,6 +71,52 @@ POSTS_PAGE_2 = {
             "publishedAt": "2025-12-01T00:00:00+01:00",
             "organization": {"uid": ORG, "name": ORG_NAME},
         },
+    ],
+}
+
+
+SEARCH_PAGE_1 = {
+    "items": [
+        {
+            "mediaType": "video",
+            "uid": "svid00001",
+            "title": "Found video one",
+            "channelName": ORG_NAME,
+            "channelUid": ORG,
+            "publishedAtTimestamp": 1743200000,
+            "videoDuration": 120,
+            "thumbnailUrl": "https://img.crowdbunker.com/s/1.jpg",
+        },
+        # Channel and text hits must be dropped
+        {"mediaType": "channel", "uid": "schan001", "title": "Some channel"},
+        {"mediaType": "text", "uid": "stext001", "title": "A text post"},
+        {
+            "mediaType": "video",
+            "uid": "svid00003",
+            "title": "Found video two",
+            "channelName": "Org B",
+            "channelUid": "OrgB",
+            "publishedAtTimestamp": None,
+            "videoDuration": None,
+        },
+        # Filler text hits: a full page carries 15 mixed-type items
+        *({"mediaType": "text", "uid": f"filler{i:02d}", "title": f"filler {i}"} for i in range(11)),
+    ],
+}
+
+SEARCH_PAGE_2 = {
+    "items": [
+        {
+            "mediaType": "video",
+            "uid": "svid00005",
+            "title": "Found video three",
+            "channelName": ORG_NAME,
+            "channelUid": ORG,
+            "publishedAtTimestamp": 1743100000,
+            "videoDuration": 30,
+            "thumbnailUrl": "",
+        },
+        {"mediaType": "text", "uid": "stext002", "title": "more text"},
     ],
 }
 
@@ -195,6 +242,65 @@ def test_add_unknown_crowdbunker_channel(client):
     with patch.object(httpx.AsyncClient, "get", side_effect=not_found):
         resp = client.post("/api/channels", json={"ref": "crowdbunker:NoSUCHchannel"})
     assert resp.status_code == 404
+
+
+# ─── global search ───
+
+
+def test_search_maps_video_hits_and_drops_others():
+
+    get_patch, _ = _mock_cb_http([SEARCH_PAGE_1, {"items": []}])
+    with get_patch:
+        videos = asyncio.run(crowdbunker.search("found", limit=20))
+    assert [v.video_id for v in videos] == ["svid00001", "svid00003"]
+    first = videos[0]
+    assert first.title == "Found video one"
+    assert first.channel_title == ORG_NAME
+    assert first.channel_id == ORG
+    assert first.duration == 120
+    assert first.thumbnail_url == "https://img.crowdbunker.com/s/1.jpg"
+    assert first.platform == "crowdbunker"
+    assert first.published is not None and first.published.utcoffset() is not None
+    assert videos[1].duration is None and videos[1].published is None
+
+
+def test_search_paginates_until_limit():
+
+    get_patch, calls = _mock_cb_http([SEARCH_PAGE_1, SEARCH_PAGE_2])
+    with get_patch:
+        videos = asyncio.run(crowdbunker.search("found", limit=3))
+    assert [v.video_id for v in videos] == ["svid00001", "svid00003", "svid00005"]
+    assert calls[0] == 2
+
+
+def test_search_stops_on_short_page():
+
+    get_patch, calls = _mock_cb_http([SEARCH_PAGE_1, SEARCH_PAGE_2])
+    with get_patch:
+        videos = asyncio.run(crowdbunker.search("found", limit=20))
+    assert len(videos) == 3  # 2 + 1 videos, then page 2 was short
+    assert calls[0] == 2
+
+
+def test_search_router_crowdbunker(client):
+    get_patch, _ = _mock_cb_http([SEARCH_PAGE_1, SEARCH_PAGE_2])
+    with get_patch:
+        resp = client.get("/api/search", params={"q": "found", "source": "crowdbunker"})
+    assert resp.status_code == 200
+    assert [i["video_id"] for i in resp.json()["items"]] == [
+        "svid00001",
+        "svid00003",
+        "svid00005",
+    ]
+
+
+def test_search_router_crowdbunker_error(client):
+    async def boom(url, **kwargs):
+        raise httpx.RequestError("down")
+
+    with patch.object(httpx.AsyncClient, "get", side_effect=boom):
+        resp = client.get("/api/search", params={"q": "found", "source": "crowdbunker"})
+    assert resp.status_code == 502
 
 
 # ─── home feed ───

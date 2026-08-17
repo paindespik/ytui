@@ -15,8 +15,8 @@ from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
 
-SOURCES = ("youtube", "odysee")
-SOURCE_LABELS = {"youtube": "YouTube", "odysee": "Odysee"}
+SOURCES = ("youtube", "odysee", "crowdbunker")
+SOURCE_LABELS = {"youtube": "YouTube", "odysee": "Odysee", "crowdbunker": "CrowdBunker"}
 
 
 class SearchScreen(BrowseScreen):
