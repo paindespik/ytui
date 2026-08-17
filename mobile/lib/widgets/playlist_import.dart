@@ -15,6 +15,46 @@ import '../state/providers.dart';
 import '../state/settings.dart';
 import '../theme.dart';
 
+/// Shared "new playlist" name dialog (TV-friendly autofocus).
+///
+/// Returns the trimmed name, or null when cancelled/empty. Used by the
+/// local playlists screen and the per-video "save to playlist" sheet.
+Future<String?> promptNewPlaylistName(
+  BuildContext context, {
+  String initial = '',
+}) async {
+  final isTv = ProviderScope.containerOf(context).read(isTvProvider);
+  final controller = TextEditingController(text: initial);
+  final name = await showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Nouvelle playlist'),
+      content: TextField(
+        controller: controller,
+        autofocus: !isTv,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
+        decoration: const InputDecoration(hintText: 'Nom de la playlist'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Annuler'),
+        ),
+        FilledButton(
+          autofocus: isTv,
+          onPressed: () =>
+              Navigator.pop(dialogContext, controller.text.trim()),
+          child: const Text('Créer'),
+        ),
+      ],
+    ),
+  );
+  if (name == null) return null;
+  final trimmed = name.trim();
+  return trimmed.isEmpty ? null : trimmed;
+}
+
 /// Ask for a playlist URL/id, then run the import flow. Returns the local
 /// playlist when something was imported.
 Future<LocalPlaylist?> promptImportPlaylist(

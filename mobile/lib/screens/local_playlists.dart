@@ -136,32 +136,11 @@ class LocalPlaylistsScreen extends ConsumerWidget {
 
   Future<void> _createOrRename(BuildContext context, WidgetRef ref,
       {LocalPlaylist? playlist}) async {
-    final controller = TextEditingController(text: playlist?.name ?? '');
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(
-            playlist == null ? 'Nouvelle playlist' : 'Renommer la playlist'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: playlist == null ? 'Nom de la playlist' : null,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Annuler'),
-          ),
-          FilledButton(
-            onPressed: () =>
-                Navigator.pop(dialogContext, controller.text.trim()),
-            child: Text(playlist == null ? 'Créer' : 'Renommer'),
-          ),
-        ],
-      ),
-    );
+    final name = playlist == null
+        // Shared helper: the same dialog is offered from the per-video
+        // "save to playlist" sheet (no circular import this way).
+        ? await promptNewPlaylistName(context)
+        : await _renameDialog(context, playlist);
     if (name == null || name.isEmpty || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final api = ref.read(apiProvider);
@@ -173,6 +152,28 @@ class LocalPlaylistsScreen extends ConsumerWidget {
           const SnackBar(content: Text('Ce nom est déjà utilisé')));
     }
     ref.invalidate(playlistsProvider);
+  }
+
+  Future<String?> _renameDialog(BuildContext context, LocalPlaylist playlist) {
+    final controller = TextEditingController(text: playlist.name);
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Renommer la playlist'),
+        content: TextField(controller: controller, autofocus: true),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Renommer'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _delete(

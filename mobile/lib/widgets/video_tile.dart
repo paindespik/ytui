@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../api/client.dart';
 import '../api/models.dart';
 import '../format.dart';
 import '../state/providers.dart';
@@ -222,19 +223,9 @@ class VideoTile extends ConsumerWidget {
     );
 
     if (!showActionsButton) return tile;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(child: tile),
-        Padding(
-          padding: const EdgeInsets.only(right: kGutter / 2, top: 8),
-          child: IconButton(
-            icon: const Icon(Icons.more_vert),
-            tooltip: 'Actions',
-            onPressed: () => _showActions(context, ref),
-          ),
-        ),
-      ],
+    return _TvTileRow(
+      tile: tile,
+      onActions: () => _showActions(context, ref),
     );
   }
 
@@ -509,11 +500,146 @@ class VideoTile extends ConsumerWidget {
                                 : 'Déjà dans ${p.name}')));
                       },
                     )),
+              _sheetTile(
+                sheetContext,
+                icon: Icons.playlist_add,
+                label: 'Nouvelle playlist…',
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  final name = await promptNewPlaylistName(context);
+                  if (name == null || !context.mounted) return;
+                  final api = ref.read(apiProvider);
+                  try {
+                    final created = await api.createPlaylist(name);
+                    if (created == null || !context.mounted) {
+                      messenger.showSnackBar(const SnackBar(
+                          content: Text('Ce nom est déjà utilisé')));
+                      return;
+                    }
+                    final added =
+                        await api.addPlaylistItem(created.id, video);
+                    ref.invalidate(playlistsProvider);
+                    messenger.showSnackBar(SnackBar(
+                        content: Text(added
+                            ? 'Ajouté à ${created.name}'
+                            : 'Playlist « ${created.name} » créée')));
+                  } on ApiException catch (e) {
+                    messenger.showSnackBar(SnackBar(
+                        content: Text('Échec de la création : ${e.detail}')));
+                  }
+                },
+              ),
               const SizedBox(height: 8),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// TV rows registered in list order so a row's ⋮ button can hand vertical
+/// D-pad focus to the neighbouring row's tile: the reading-order policy
+/// alone sticks to the ⋮ column (a DOWN pressed on a button focuses the
+/// next button, never the video content).
+final List<_TvTileRowState> _tvTileRows = <_TvTileRowState>[];
+
+/// Intercepts vertical [DirectionalFocusIntent]s issued from a row's ⋮
+/// button and moves focus to the tile of the previous/next row instead of
+/// the next ⋮ button.
+class _ButtonRowRedirectAction extends DirectionalFocusAction {
+  _ButtonRowRedirectAction({required this.moveUp, required this.moveDown});
+
+  final bool Function() moveUp;
+  final bool Function() moveDown;
+
+  @override
+  void invoke(DirectionalFocusIntent intent) {
+    if (intent.direction == TraversalDirection.down && moveDown()) return;
+    if (intent.direction == TraversalDirection.up && moveUp()) return;
+    super.invoke(intent);
+  }
+}
+
+/// TV layout for a [VideoTile]: the tile plus its ⋮ actions button, with
+/// D-pad vertical focus redirected from the button to the tile of the
+/// adjacent row.
+class _TvTileRow extends StatefulWidget {
+  const _TvTileRow({required this.tile, required this.onActions});
+
+  final Widget tile;
+  final VoidCallback onActions;
+
+  @override
+  State<_TvTileRow> createState() => _TvTileRowState();
+}
+
+class _TvTileRowState extends State<_TvTileRow> {
+  /// Non-focusable probe above the tile. The tile's real focus node stays
+  /// the InkWell's (unchanged visuals/activation); the probe only gives the
+  /// row a stable handle to find that node in the focus tree.
+  final FocusNode _tileProbe = FocusNode(canRequestFocus: false);
+
+  FocusNode? get _tileNode {
+    for (final d in _tileProbe.descendants) {
+      if (d.canRequestFocus) return d;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _tvTileRows.add(this);
+  }
+
+  @override
+  void dispose() {
+    _tvTileRows.remove(this);
+    _tileProbe.dispose();
+    super.dispose();
+  }
+
+  /// Focuses the tile of the next/previous visible row, if any.
+  bool _focusSiblingTile(TraversalDirection direction) {
+    final i = _tvTileRows.indexOf(this);
+    if (i < 0) return false;
+    final states = direction == TraversalDirection.down
+        ? _tvTileRows.skip(i + 1).toList()
+        : _tvTileRows.sublist(0, i).reversed.toList();
+    for (final s in states) {
+      final node = s._tileNode;
+      if (node != null) {
+        node.requestFocus();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: Focus(focusNode: _tileProbe, child: widget.tile)),
+        Padding(
+          padding: const EdgeInsets.only(right: kGutter / 2, top: 8),
+          child: Actions(
+            actions: {
+              DirectionalFocusIntent: _ButtonRowRedirectAction(
+                moveDown: () => _focusSiblingTile(TraversalDirection.down),
+                moveUp: () => _focusSiblingTile(TraversalDirection.up),
+              ),
+            },
+            child: IconButton(
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'Actions',
+              onPressed: widget.onActions,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
