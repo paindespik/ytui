@@ -307,12 +307,15 @@ def test_search_router_crowdbunker_error(client):
 
 
 def test_feed_includes_crowdbunker(client):
-    get_patch, _ = _mock_cb_http([POSTS_PAGE_1, POSTS_PAGE_1])
+    # Pages: 1) channel resolve, 2) feed page 1, 3) feed page 2 (cursor walk).
+    get_patch, _ = _mock_cb_http([POSTS_PAGE_1, POSTS_PAGE_1, POSTS_PAGE_2])
     with get_patch:
         client.post("/api/channels", json={"ref": f"crowdbunker:{ORG}"})
         resp = client.get("/api/feed", params={"refresh": True})
     assert resp.status_code == 200
     ids = [v["video_id"] for v in resp.json()["videos"]]
     assert "vid000001" in ids and "vid00003" in ids
+    # the second page is walked: the older video shows up
+    assert "vid00005" in ids
     # text and censored posts stay out of the feed
     assert "txt00002" not in ids and "vid00004" not in ids

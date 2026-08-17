@@ -429,15 +429,23 @@ class FeedService:
     async def _fetch_crowdbunker(
         self, channel: FollowedChannel, client: httpx.AsyncClient, force_refresh: bool
     ) -> tuple[list[Video], str | None]:
-        """CrowdBunker home feed: first page of the posts API (no RSS)."""
+        """CrowdBunker home feed: two pages of the posts API (no RSS)."""
         cache_key = f"{CROWDBUNKER_PREFIX}{channel.channel_id}"
         if not force_refresh:
             cached = self.db.get_feed(cache_key)
             if cached is not None:
                 return cached, None
         try:
-            items, _ = await crowdbunker.fetch_posts_page(client, channel.channel_id)
-            videos = crowdbunker.posts_to_videos(items, channel.channel_id)
+            items_all: list[dict] = []
+            after: str | None = None
+            for _ in range(2):
+                items, after = await crowdbunker.fetch_posts_page(
+                    client, channel.channel_id, after
+                )
+                items_all.extend(items)
+                if after is None:
+                    break
+            videos = crowdbunker.posts_to_videos(items_all, channel.channel_id)[:60]
             self.db.set_feed(cache_key, videos)
             return videos, None
         except Exception as exc:
