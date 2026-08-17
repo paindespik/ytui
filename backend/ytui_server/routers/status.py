@@ -28,4 +28,9 @@ async def status(request: Request) -> StatusOut:
         feed_newest_age_seconds=None if newest is None else now - newest,
         feed_oldest_age_seconds=None if oldest is None else now - oldest,
         lives_active=len(request.app.state.live_monitor.lives),
+        channels_by_platform=stats["channels_by_platform"],
+        feed_newest_age_seconds_by_platform={
+            platform: now - fetched_at
+            for platform, fetched_at in stats["feed_newest_by_platform"].items()
+        },
     )

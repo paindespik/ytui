@@ -350,6 +350,9 @@ class StatusOut(BaseModel):
     feed_newest_age_seconds: float | None = None
     feed_oldest_age_seconds: float | None = None
     lives_active: int
+    # Additive per-platform diagnostics (empty dicts on an empty database).
+    channels_by_platform: dict[str, int] = {}
+    feed_newest_age_seconds_by_platform: dict[str, float] = {}
 
 
 class SponsorSegment(BaseModel):

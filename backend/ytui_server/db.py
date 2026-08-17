@@ -156,6 +156,10 @@ class Database:
         with self._lock:
             self._conn.close()
 
+    _FEED_KEY_PLATFORMS = frozenset(
+        {"bitchute", "odysee", "twitch", "tiktok", "crowdbunker"}
+    )
+
     def stats(self) -> dict:
         """Row counts and feed-cache freshness for the status endpoint."""
         with self._lock:
@@ -163,15 +167,33 @@ class Database:
                 "SELECT COUNT(*) FROM watch_history"
             ).fetchone()[0]
             channels = self._conn.execute("SELECT COUNT(*) FROM channels").fetchone()[0]
+            channels_by_platform = dict(
+                self._conn.execute(
+                    "SELECT platform, COUNT(*) FROM channels GROUP BY platform"
+                ).fetchall()
+            )
             cached, newest, oldest = self._conn.execute(
                 "SELECT COUNT(*), MAX(fetched_at), MIN(fetched_at) FROM feed_items"
             ).fetchone()
+            feed_rows = self._conn.execute(
+                "SELECT channel_id, fetched_at FROM feed_items"
+            ).fetchall()
+        # Feed cache keys are '{platform}:{channel_id}' for non-YouTube
+        # platforms and the bare channel id for YouTube.
+        feed_newest_by_platform: dict[str, float] = {}
+        for key, fetched_at in feed_rows:
+            prefix = key.split(":", 1)[0]
+            platform = prefix if prefix in self._FEED_KEY_PLATFORMS else "youtube"
+            if fetched_at > feed_newest_by_platform.get(platform, 0.0):
+                feed_newest_by_platform[platform] = fetched_at
         return {
             "history_rows": history,
             "channels": channels,
+            "channels_by_platform": channels_by_platform,
             "feed_cached_channels": cached,
             "feed_newest_fetched_at": newest,
             "feed_oldest_fetched_at": oldest,
+            "feed_newest_by_platform": feed_newest_by_platform,
             "db_bytes": self._path.stat().st_size if self._path.exists() else 0,
         }
 
