@@ -26,6 +26,14 @@ export async function render(view, { params, query }) {
   // re-rend la vue depuis zéro, donc la pagination repart proprement.
   const q = (query.get("q") || "").trim();
   const title = el("h1", { text: channelName || "Chaîne" });
+  // Badge « en direct » : la chaîne apparaît dans /api/lives.
+  const liveBadge = el("span", {
+    class: `badge live${platform === "twitch" ? " twitch" : platform === "tiktok" ? " tiktok" : ""}`,
+    text: "● en direct",
+  });
+  liveBadge.style.display = "none";
+  liveBadge.style.marginLeft = "8px";
+  title.append(liveBadge);
   const followBtn = el("button", { class: "btn", text: "Suivre", disabled: true });
   const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
   const body = el("div");
@@ -58,11 +66,25 @@ export async function render(view, { params, query }) {
     } }) : null,
   );
 
-  view.append(
-    el("div", { class: "page-head" }, title, playAllBtn, followBtn),
-    searchForm,
-    body,
-  );
+  view.append(el("div", { class: "page-head" }, title, playAllBtn, followBtn));
+  if (platform === "tiktok") {
+    // Les pages de vidéos d'une chaîne TikTok ne sont pas listables sans
+    // auth : la chaîne ne se voit que via l'onglet Lives.
+    view.append(
+      el("div", { class: "channel-banner", text: "Chaîne en direct uniquement — voir l'onglet Lives" }),
+    );
+  }
+  view.append(searchForm, body);
+
+  // Non bloquant : le badge s'affiche si la chaîne est dans les lives.
+  api
+    .lives()
+    .then((lives) => {
+      if ((lives || []).some((l) => l.video && l.video.channel_id === id)) {
+        liveBadge.style.display = "inline-block";
+      }
+    })
+    .catch(() => {});
   body.append(spinner());
 
   // État de suivi (non bloquant si /channels échoue).

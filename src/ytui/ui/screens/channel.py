@@ -33,6 +33,7 @@ class ChannelScreen(BrowseScreen):
         self._has_more = False
         self._loading_page = False
         self._query: str | None = None
+        self._is_live = False
 
     @property
     def channel_ref(self) -> str:
@@ -54,6 +55,11 @@ class ChannelScreen(BrowseScreen):
 
     def on_mount(self) -> None:
         self.sub_title = self.channel.channel_title or self.channel.title or "Channel"
+        if self.channel.platform == "tiktok":
+            # TikTok video pages are not listable without auth: lives only.
+            self.app.notify(
+                "Chaîne en direct uniquement — voir l'onglet Lives", timeout=8
+            )
         self.load_videos()
 
     @work(exclusive=True, group="reload")
@@ -70,7 +76,15 @@ class ChannelScreen(BrowseScreen):
             return
         self._loaded = list(videos)
         self._has_more = has_more
+        self._is_live = await self._channel_is_live()
         self._show_videos(videos)
+
+    async def _channel_is_live(self) -> bool:
+        try:
+            lives = await self.app.client.lives()
+        except YtuiApiError:
+            return False
+        return any(v.channel_id == self.channel_ref for v in lives)
 
     def action_load_more(self) -> None:
         if self._loading_page:
@@ -124,6 +138,8 @@ class ChannelScreen(BrowseScreen):
 
     def _update_sub_title(self) -> None:
         name = self.channel.channel_title or self.channel.title or "Channel"
+        if self._is_live:
+            name = f"● LIVE — {name}"
         suffix = "" if self._has_more else " (end)"
         count = len(self._loaded)
         if self._query:

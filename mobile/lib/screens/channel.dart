@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/client.dart';
+import '../api/models.dart';
 import '../state/providers.dart';
 import '../state/queue.dart';
 import '../theme.dart';
@@ -62,6 +63,11 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
   Widget build(BuildContext context) {
     final data = ref.watch(channelVideosProvider(_arg));
     final colorScheme = Theme.of(context).colorScheme;
+    // Live badge: the channel appears in the lives endpoint (Twitch, TikTok…).
+    final isLive = (ref.watch(livesProvider).valueOrNull ?? const <LiveItem>[])
+        .any((l) => l.video.channelId == widget.channelId);
+    final isTikTok = widget.platform == 'tiktok';
+    final body = _buildBody(data, colorScheme);
 
     return Scaffold(
       appBar: AppBar(
@@ -85,11 +91,39 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                   onSubmitted: _submit,
                 ),
               )
-            : Text(
-                data.valueOrNull?.title.isNotEmpty == true
-                    ? data.valueOrNull!.title
-                    : widget.title,
-                style: const TextStyle(fontWeight: FontWeight.bold),
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      data.valueOrNull?.title.isNotEmpty == true
+                          ? data.valueOrNull!.title
+                          : widget.title,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (isLive)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(kRadiusSm),
+                        ),
+                        child: Text(
+                          '● en direct',
+                          style: TextStyle(
+                            color: colorScheme.onErrorContainer,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
         actions: _searching
             ? [
@@ -130,7 +164,44 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                 ),
               ],
       ),
-      body: data.when(
+      body: isTikTok
+          ? Column(
+              children: [
+                // TikTok channel video pages are not scrapable without auth:
+                // the channel only surfaces through the lives tab.
+                Padding(
+                  padding: const EdgeInsets.all(kGutter),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(kRadiusMd),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.live_tv,
+                            color: colorScheme.onErrorContainer),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            "Chaîne en direct uniquement — voir l'onglet Lives",
+                            style:
+                                TextStyle(color: colorScheme.onErrorContainer),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(child: body),
+              ],
+            )
+          : body,
+    );
+  }
+
+  Widget _buildBody(AsyncValue<ChannelVideos> data, ColorScheme colorScheme) {
+    return data.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
             onRetry: () => ref.invalidate(channelVideosProvider(_arg))),
@@ -209,9 +280,7 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
               ),
             ),
           );
-        },
-      ),
-    );
+        });
   }
 
   /// Fetches the next page; the notifier ignores redundant calls itself.

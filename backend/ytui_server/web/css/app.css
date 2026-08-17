@@ -206,6 +206,14 @@ img { display: block; }
 .badge.live.tiktok { background: var(--tiktok); }
 .badge.watched { left: 6px; right: auto; background: rgba(0,0,0,.8); color: var(--ok); }
 .badge.kind { left: 6px; right: auto; text-transform: uppercase; letter-spacing: .5px; }
+.channel-banner {
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--twitch) 25%, transparent);
+  border: 1px solid var(--twitch);
+  color: var(--text);
+}
 
 .card .meta { display: flex; gap: 8px; padding: 8px 2px 0; }
 .card .meta .txt { flex: 1; min-width: 0; }

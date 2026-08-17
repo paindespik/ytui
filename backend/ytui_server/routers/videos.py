@@ -93,6 +93,18 @@ async def channel_videos(
     platform: Platform = "youtube",
     q: str | None = Query(default=None, min_length=1),
 ) -> ChannelVideosResponse:
+    if platform == "tiktok":
+        # TikTok channel video pages are not scrapable without auth; channels
+        # surface through the lives endpoint only, so answer empty right away.
+        return ChannelVideosResponse(
+            items=[],
+            channel=Channel(
+                channel_id=channel_id,
+                title=request.app.state.db.get_channel_name(channel_id) or "",
+                platform=platform,
+            ),
+            has_more=False,
+        )
     # One extra item is fetched to tell "more available" from "exhausted".
     probe = limit + 1
     try:

@@ -421,3 +421,21 @@ def test_streams_tiktok_live_falls_back_to_ytdlp(client):
     assert resp.status_code == 200
     assert resp.json()["url"] == "https://direct/tt.m3u8"
     assert direct.call_args.args[0] == "https://www.tiktok.com/@weathernewslive/live"
+
+
+# ─── /api/channels/{id}/videos?platform=tiktok ───
+
+
+def test_tiktok_channel_videos_is_empty_without_scrape(client):
+    async def explode(*args, **kwargs):
+        raise AssertionError("yt-dlp channel scrape must not run for TikTok")
+
+    with patch.object(ytdlp, "channel_videos", new=AsyncMock(side_effect=explode)):
+        resp = client.get(
+            "/api/channels/someuser/videos", params={"platform": "tiktok"}
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["items"] == []
+    assert body["has_more"] is False
+    assert body["channel"]["platform"] == "tiktok"
