@@ -75,48 +75,68 @@ POSTS_PAGE_2 = {
 }
 
 
+def _hit(document: dict) -> dict:
+    """Wrap a post document in the Typesense hit envelope of the search API."""
+    return {"document": document, "highlights": [], "text_match": 1}
+
+
 SEARCH_PAGE_1 = {
-    "items": [
-        {
-            "mediaType": "video",
-            "uid": "svid00001",
-            "title": "Found video one",
-            "channelName": ORG_NAME,
-            "channelUid": ORG,
-            "publishedAtTimestamp": 1743200000,
-            "videoDuration": 120,
-            "thumbnailUrl": "https://img.crowdbunker.com/s/1.jpg",
-        },
+    "found": 17,
+    "page": 1,
+    "search_cutoff": False,
+    "hits": [
+        _hit(
+            {
+                "mediaType": "video",
+                "uid": "svid00001",
+                "title": "Found video one",
+                "channelName": ORG_NAME,
+                "channelUid": ORG,
+                "publishedAtTimestamp": 1743200000,
+                "videoDuration": 120,
+                "thumbnailUrl": "https://img.crowdbunker.com/s/1.jpg",
+            }
+        ),
         # Channel and text hits must be dropped
-        {"mediaType": "channel", "uid": "schan001", "title": "Some channel"},
-        {"mediaType": "text", "uid": "stext001", "title": "A text post"},
-        {
-            "mediaType": "video",
-            "uid": "svid00003",
-            "title": "Found video two",
-            "channelName": "Org B",
-            "channelUid": "OrgB",
-            "publishedAtTimestamp": None,
-            "videoDuration": None,
-        },
-        # Filler text hits: a full page carries 15 mixed-type items
-        *({"mediaType": "text", "uid": f"filler{i:02d}", "title": f"filler {i}"} for i in range(11)),
+        _hit({"mediaType": "channel", "uid": "schan001", "title": "Some channel"}),
+        _hit({"mediaType": "text", "uid": "stext001", "title": "A text post"}),
+        _hit(
+            {
+                "mediaType": "video",
+                "uid": "svid00003",
+                "title": "Found video two",
+                "channelName": "Org B",
+                "channelUid": "OrgB",
+                "publishedAtTimestamp": None,
+                "videoDuration": None,
+            }
+        ),
+        # Filler text hits: a full page carries 15 mixed-type hits
+        *(
+            _hit({"mediaType": "text", "uid": f"filler{i:02d}", "title": f"filler {i}"})
+            for i in range(11)
+        ),
     ],
 }
 
 SEARCH_PAGE_2 = {
-    "items": [
-        {
-            "mediaType": "video",
-            "uid": "svid00005",
-            "title": "Found video three",
-            "channelName": ORG_NAME,
-            "channelUid": ORG,
-            "publishedAtTimestamp": 1743100000,
-            "videoDuration": 30,
-            "thumbnailUrl": "",
-        },
-        {"mediaType": "text", "uid": "stext002", "title": "more text"},
+    "found": 17,
+    "page": 2,
+    "search_cutoff": False,
+    "hits": [
+        _hit(
+            {
+                "mediaType": "video",
+                "uid": "svid00005",
+                "title": "Found video three",
+                "channelName": ORG_NAME,
+                "channelUid": ORG,
+                "publishedAtTimestamp": 1743100000,
+                "videoDuration": 30,
+                "thumbnailUrl": "",
+            }
+        ),
+        _hit({"mediaType": "text", "uid": "stext002", "title": "more text"}),
     ],
 }
 
@@ -252,7 +272,7 @@ def test_add_unknown_crowdbunker_channel(client):
 
 def test_search_maps_video_hits_and_drops_others():
 
-    get_patch, _ = _mock_cb_http([SEARCH_PAGE_1, {"items": []}])
+    get_patch, _ = _mock_cb_http([SEARCH_PAGE_1, {"hits": []}])
     with get_patch:
         videos = asyncio.run(crowdbunker.search("found", limit=20))
     assert [v.video_id for v in videos] == ["svid00001", "svid00003"]
@@ -283,6 +303,16 @@ def test_search_stops_on_short_page():
         videos = asyncio.run(crowdbunker.search("found", limit=20))
     assert len(videos) == 3  # 2 + 1 videos, then page 2 was short
     assert calls[0] == 2
+
+
+def test_search_stops_on_server_cutoff():
+    # A full page flagged search_cutoff=True must not trigger another fetch.
+    page = dict(SEARCH_PAGE_1, search_cutoff=True)
+    get_patch, calls = _mock_cb_http([page, SEARCH_PAGE_2])
+    with get_patch:
+        videos = asyncio.run(crowdbunker.search("found", limit=20))
+    assert [v.video_id for v in videos] == ["svid00001", "svid00003"]
+    assert calls[0] == 1
 
 
 def test_search_router_crowdbunker(client):

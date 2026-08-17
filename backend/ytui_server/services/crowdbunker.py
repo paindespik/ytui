@@ -136,34 +136,34 @@ async def channel_videos(channel_id: str, limit: int = 50, offset: int = 0) -> l
     return videos[offset : offset + limit]
 
 
-def _search_hit_to_video(item: dict[str, Any]) -> Video | None:
-    """Map a search hit to a Video, or None for non-video media types.
+def _search_hit_to_video(document: dict[str, Any]) -> Video | None:
+    """Map a search hit document to a Video, or None for non-video media types.
 
     Search results mix channels, text posts and videos; only `video` entries
     are playable through the regular ytdlp path.
     """
-    if item.get("mediaType") != "video":
+    if document.get("mediaType") != "video":
         return None
-    uid = item.get("uid") or ""
-    title = item.get("title") or ""
+    uid = document.get("uid") or ""
+    title = document.get("title") or ""
     if not uid or not title:
         return None
     published = None
-    stamp = item.get("publishedAtTimestamp")
+    stamp = document.get("publishedAtTimestamp")
     if stamp:
         try:
             published = datetime.fromtimestamp(int(stamp), tz=timezone.utc)
         except (ValueError, OSError, OverflowError):
             published = None
-    duration = item.get("videoDuration") or (item.get("video") or {}).get("duration")
+    duration = document.get("videoDuration")
     return Video(
         video_id=uid,
         title=title,
-        channel_title=item.get("channelName") or "",
-        channel_id=item.get("channelUid") or "",
+        channel_title=document.get("channelName") or "",
+        channel_id=document.get("channelUid") or "",
         published=published,
         duration=int(duration) if duration else None,
-        thumbnail_url=item.get("thumbnailUrl") or "",
+        thumbnail_url=document.get("thumbnailUrl") or "",
         kind="video",
         platform="crowdbunker",
     )
@@ -172,8 +172,9 @@ def _search_hit_to_video(item: dict[str, Any]) -> Video | None:
 async def search(query: str, limit: int = 20) -> list[Video]:
     """Global video search through the public posts search endpoint (no auth).
 
-    Pages of 15 mixed-type hits are walked until `limit` videos are collected
-    or the hit cutoff is reached.
+    Typesense-shaped response: pages of 15 mixed-type hits (each with the
+    post under `document`) are walked until `limit` videos are collected,
+    the last page is reached, or the server reports `search_cutoff`.
     """
     videos: list[Video] = []
     scanned = 0
@@ -191,13 +192,13 @@ async def search(query: str, limit: int = 20) -> list[Video]:
                     data = resp.json()
                 except Exception as exc:
                     raise CrowdBunkerError(f"search failed: {exc}") from exc
-                items = data.get("items") or []
-                scanned += len(items)
-                for item in items:
-                    video = _search_hit_to_video(item)
+                hits = data.get("hits") or []
+                scanned += len(hits)
+                for hit in hits:
+                    video = _search_hit_to_video(hit.get("document") or {})
                     if video:
                         videos.append(video)
-                if len(items) < SEARCH_PAGE_SIZE:
+                if len(hits) < SEARCH_PAGE_SIZE or data.get("search_cutoff"):
                     break
                 page += 1
     except CrowdBunkerError:
