@@ -154,3 +154,89 @@ def test_migration3_preserves_history(tmp_path: Path) -> None:
         assert pk_by_name["video_id"] == 2
     finally:
         db.close()
+
+
+def test_thumbnail_roundtrip_history(tmp_path: Path) -> None:
+    from ytui_server.models import Video
+
+    db = Database(tmp_path / "meta.sqlite")
+    try:
+        db.record_watch(
+            Video(
+                video_id="name:claim1",
+                title="Odysee video",
+                platform="odysee",
+                thumbnail_url="https://thumbs.odycdn.com/abc.jpg",
+            )
+        )
+        video, _, _ = db.watch_history(limit=10)[0]
+        assert video.thumbnail_url == "https://thumbs.odycdn.com/abc.jpg"
+        # Re-watch without a thumbnail keeps the stored one.
+        db.record_watch(Video(video_id="name:claim1", title="t", platform="odysee"))
+        video, _, _ = db.watch_history(limit=10)[0]
+        assert video.thumbnail_url == "https://thumbs.odycdn.com/abc.jpg"
+        # Legacy fallback: youtube rows without a stored thumbnail derive one.
+        db.record_watch(make_video("ytvid000001"))
+        by_id = {v.video_id: v for v, _, _ in db.watch_history(limit=10)}
+        assert (
+            by_id["ytvid000001"].thumbnail_url
+            == "https://i.ytimg.com/vi/ytvid000001/mqdefault.jpg"
+        )
+    finally:
+        db.close()
+
+
+def test_thumbnail_roundtrip_playlist(tmp_path: Path) -> None:
+    from ytui_server.models import Video
+
+    db = Database(tmp_path / "meta.sqlite")
+    try:
+        pid = db.create_playlist("test")
+        assert pid is not None
+        db.add_playlist_item(
+            pid,
+            Video(
+                video_id="cbuid0001",
+                title="CB video",
+                platform="crowdbunker",
+                thumbnail_url="https://img.crowdbunker.com/x.jpg",
+            ),
+        )
+        db.add_playlist_items(
+            pid,
+            [
+                Video(
+                    video_id="name:claim2",
+                    title="Odysee",
+                    platform="odysee",
+                    thumbnail_url="https://thumbs.odycdn.com/y.jpg",
+                )
+            ],
+        )
+        items = db.playlist_items(pid)
+        thumbs = {video.video_id: video.thumbnail_url for _, video in items}
+        assert thumbs["cbuid0001"] == "https://img.crowdbunker.com/x.jpg"
+        assert thumbs["name:claim2"] == "https://thumbs.odycdn.com/y.jpg"
+    finally:
+        db.close()
+
+
+def test_migration4_adds_playlist_thumbnail_column(tmp_path: Path) -> None:
+    path = tmp_path / "meta.sqlite"
+    _make_legacy_db(path)
+    db = Database(path)
+    try:
+        cols = {
+            row[1]
+            for row in db._conn.execute(
+                "PRAGMA table_info(local_playlist_items)"
+            ).fetchall()
+        }
+        assert "thumbnail_url" in cols
+        cols = {
+            row[1]
+            for row in db._conn.execute("PRAGMA table_info(watch_history)").fetchall()
+        }
+        assert "thumbnail_url" in cols
+    finally:
+        db.close()

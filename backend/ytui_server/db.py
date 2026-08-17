@@ -95,6 +95,7 @@ _MIGRATIONS: list[str] = [
         duration REAL,
         playlist_id TEXT NOT NULL DEFAULT '',
         channel_id TEXT NOT NULL DEFAULT '',
+        thumbnail_url TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (platform, video_id)
     );
     INSERT INTO watch_history_new
@@ -107,6 +108,11 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE watch_history_new RENAME TO watch_history;
     CREATE INDEX idx_watch_history_watched_at
         ON watch_history(watched_at DESC);
+    """,
+    # 4: persisted thumbnails for local playlist items (non-YouTube platforms
+    # have no derivable thumbnail URL, so listings used to lose them).
+    """
+    ALTER TABLE local_playlist_items ADD COLUMN thumbnail_url TEXT NOT NULL DEFAULT '';
     """,
 ]
 
@@ -329,8 +335,8 @@ class Database:
             self._conn.execute(
                 "INSERT INTO watch_history "
                 "(video_id, title, channel_title, kind, platform, watched_at, "
-                "playlist_id, channel_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "playlist_id, channel_id, thumbnail_url) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(platform, video_id) DO UPDATE SET "
                 "title = excluded.title, "
                 "channel_title = excluded.channel_title, "
@@ -339,7 +345,9 @@ class Database:
                 "playlist_id = CASE WHEN excluded.playlist_id != '' "
                 "THEN excluded.playlist_id ELSE playlist_id END, "
                 "channel_id = CASE WHEN excluded.channel_id != '' "
-                "THEN excluded.channel_id ELSE channel_id END",
+                "THEN excluded.channel_id ELSE channel_id END, "
+                "thumbnail_url = CASE WHEN excluded.thumbnail_url != '' "
+                "THEN excluded.thumbnail_url ELSE thumbnail_url END",
                 (
                     video.video_id,
                     video.title,
@@ -349,6 +357,7 @@ class Database:
                     time.time(),
                     video.playlist_id,
                     video.channel_id,
+                    video.thumbnail_url,
                 ),
             )
             if self.history_max_rows > 0:
@@ -395,14 +404,14 @@ class Database:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT video_id, title, channel_title, kind, platform, watched_at, "
-                "position, duration, playlist_id, channel_id "
+                "position, duration, playlist_id, channel_id, thumbnail_url "
                 "FROM watch_history ORDER BY watched_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         out: list[tuple[Video, float, float]] = []
-        for vid, title, ch_title, kind, platform, watched_at, pos, dur, pl_id, ch_id in rows:
-            thumb = ""
-            if kind == "video" and platform == "youtube":
+        for vid, title, ch_title, kind, platform, watched_at, pos, dur, pl_id, ch_id, thumb in rows:
+            if not thumb and kind == "video" and platform == "youtube":
+                # Legacy rows recorded before thumbnails were persisted.
                 thumb = f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
             out.append(
                 (
@@ -502,8 +511,9 @@ class Database:
             ).fetchone()
             self._conn.execute(
                 "INSERT INTO local_playlist_items "
-                "(playlist_id, position, video_id, title, channel_title, url, kind, platform) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(playlist_id, position, video_id, title, channel_title, url, kind, "
+                "platform, thumbnail_url) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     playlist_id,
                     row[0],
@@ -513,6 +523,7 @@ class Database:
                     video.url,
                     video.kind,
                     video.platform,
+                    video.thumbnail_url,
                 ),
             )
             self._conn.commit()
@@ -545,8 +556,9 @@ class Database:
                 known.add(video.video_id)
                 self._conn.execute(
                     "INSERT INTO local_playlist_items "
-                    "(playlist_id, position, video_id, title, channel_title, url, kind, platform) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(playlist_id, position, video_id, title, channel_title, url, kind, "
+                    "platform, thumbnail_url) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         playlist_id,
                         position,
@@ -556,6 +568,7 @@ class Database:
                         video.url,
                         video.kind,
                         video.platform,
+                        video.thumbnail_url,
                     ),
                 )
                 position += 1
@@ -566,14 +579,15 @@ class Database:
     def playlist_items(self, playlist_id: int) -> list[tuple[int, Video]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT position, video_id, title, channel_title, kind, platform "
+                "SELECT position, video_id, title, channel_title, kind, platform, "
+                "thumbnail_url "
                 "FROM local_playlist_items WHERE playlist_id = ? ORDER BY position",
                 (playlist_id,),
             ).fetchall()
         items: list[tuple[int, Video]] = []
-        for position, video_id, title, channel_title, kind, platform in rows:
-            thumb = ""
-            if kind == "video" and platform == "youtube":
+        for position, video_id, title, channel_title, kind, platform, thumb in rows:
+            if not thumb and kind == "video" and platform == "youtube":
+                # Legacy rows added before thumbnails were persisted.
                 thumb = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
             items.append(
                 (
