@@ -12,6 +12,7 @@ import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
 class ChannelScreen extends ConsumerStatefulWidget {
@@ -164,7 +165,7 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                 ),
               ],
       ),
-      body: isTikTok
+      body: ScreenFocus(child: isTikTok
           ? Column(
               children: [
                 // TikTok channel video pages are not scrapable without auth:
@@ -196,7 +197,7 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                 Expanded(child: body),
               ],
             )
-          : body,
+          : body),
     );
   }
 

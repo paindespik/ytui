@@ -13,6 +13,7 @@ import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/playlist_import.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
 class LocalPlaylistsScreen extends ConsumerWidget {
@@ -42,7 +43,7 @@ class LocalPlaylistsScreen extends ConsumerWidget {
         tooltip: 'New playlist',
         child: const Icon(Icons.add),
       ),
-      body: playlists.when(
+      body: ScreenFocus(child: playlists.when(
         loading: () => const AppLoading(),
         error: (e, _) =>
             AppError.from(e, onRetry: () => ref.invalidate(playlistsProvider)),
@@ -127,7 +128,7 @@ class LocalPlaylistsScreen extends ConsumerWidget {
             ),
           );
         },
-      ),
+      )),
     );
   }
 
@@ -214,7 +215,7 @@ class LocalPlaylistScreen extends ConsumerWidget {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
       ),
-      body: items.when(
+      body: ScreenFocus(child: items.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
             onRetry: () => ref.invalidate(playlistItemsProvider(playlistId))),
@@ -282,7 +283,7 @@ class LocalPlaylistScreen extends ConsumerWidget {
             ),
           );
         },
-      ),
+      )),
     );
   }
 }

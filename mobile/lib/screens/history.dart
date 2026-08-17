@@ -10,6 +10,7 @@ import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
 class HistoryScreen extends ConsumerWidget {
@@ -34,7 +35,7 @@ class HistoryScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: history.when(
+      body: ScreenFocus(child: history.when(
         loading: () => const AppLoading(),
         error: (e, _) =>
             AppError.from(e, onRetry: () => ref.invalidate(historyProvider)),
@@ -78,7 +79,7 @@ class HistoryScreen extends ConsumerWidget {
             ),
           );
         },
-      ),
+      )),
     );
   }
 }

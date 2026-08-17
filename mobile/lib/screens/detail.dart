@@ -12,6 +12,7 @@ import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/comment_card.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 
 /// Shown when an account action returns 409: no OAuth token on the server.
 const kNotAuthenticated =
@@ -31,7 +32,7 @@ class DetailScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Details')),
-      body: details.when(
+      body: ScreenFocus(child: details.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
             onRetry: () =>
@@ -156,7 +157,7 @@ class DetailScreen extends ConsumerWidget {
           ],
           ),
         ),
-      ),
+      )),
     );
   }
 

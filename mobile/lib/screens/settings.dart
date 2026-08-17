@@ -11,6 +11,7 @@ import '../state/providers.dart';
 import '../state/settings.dart';
 import '../theme.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 
 /// Success feedback color (green) — distinct from the brand-red primary.
 const _kSuccessBg = Color(0xFF1B5E20);
@@ -128,10 +129,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         title: const Text('Settings'),
         automaticallyImplyLeading: !widget.firstLaunch,
       ),
-      body: ResponsiveCenter(
-        child: ListView(
-          padding: const EdgeInsets.all(kGutter),
-          children: [
+      body: ScreenFocus(
+        child: ResponsiveCenter(
+          child: ListView(
+            padding: const EdgeInsets.all(kGutter),
+            children: [
             // ─────────────────────── Server Section ───────────────────────
             Card(
               child: Padding(
@@ -403,6 +405,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 

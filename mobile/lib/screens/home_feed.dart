@@ -11,6 +11,7 @@ import '../state/providers.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
 class HomeFeedScreen extends ConsumerWidget {
@@ -68,11 +69,14 @@ class HomeFeedScreen extends ConsumerWidget {
             ],
           ),
         ),
-        body: const TabBarView(
-          children: [
-            _SubscriptionsTab(),
-            _SuggestionsTab(),
-          ],
+        // Initial D-pad focus lands on the first feed tile, not the app bar.
+        body: const ScreenFocus(
+          child: TabBarView(
+            children: [
+              _SubscriptionsTab(),
+              _SuggestionsTab(),
+            ],
+          ),
         ),
       ),
     );

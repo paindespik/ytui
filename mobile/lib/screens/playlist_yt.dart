@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/playlist_import.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
 class YtPlaylistScreen extends ConsumerWidget {
@@ -54,7 +55,7 @@ class YtPlaylistScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: data.when(
+      body: ScreenFocus(child: data.when(
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
             onRetry: () =>
@@ -109,7 +110,7 @@ class YtPlaylistScreen extends ConsumerWidget {
             ),
           );
         },
-      ),
+      )),
     );
   }
 }
