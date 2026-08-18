@@ -781,8 +781,18 @@ def _extract_streams(
     best_prog = (
         max(progressive, key=lambda f: f.get("height") or 0) if progressive else None
     )
+    # À hauteur égale, un fichier direct (https) bat une playlist m3u8 vidéo
+    # seule (visionos en expose aux tbr plus élevés) : seek par Range, expiry
+    # parsable, et même chemin de lecture qu'historiquement pour le split.
     bv = (
-        max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
+        max(
+            videos,
+            key=lambda f: (
+                f.get("height") or 0,
+                not (f.get("protocol") or "").startswith("m3u8"),
+                f.get("tbr") or 0,
+            ),
+        )
         if videos
         else None
     )

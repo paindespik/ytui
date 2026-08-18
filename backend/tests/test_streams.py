@@ -1068,3 +1068,16 @@ def test_healthy_muxed_format_still_wins_its_tier(client):
     body = resp.json()
     assert body["kind"] == "progressive"
     assert "goodmux" in body["url"]
+
+
+def test_split_prefers_direct_file_over_m3u8_at_equal_height(client):
+    """visionos expose des variantes m3u8 vidéo seule au tbr plus élevé que le
+    fichier https de même hauteur : le split doit servir le fichier direct."""
+    vhls = {"format_id": "270", "url": "https://x/1080-vonly.m3u8",
+            "protocol": "m3u8_native", "vcodec": "avc1.640028", "acodec": "none",
+            "height": 1080, "tbr": 4911}
+    with _patch_ydl(_info([vhls, VONLY, AONLY])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["video_url"] == "https://x/video.mp4"
