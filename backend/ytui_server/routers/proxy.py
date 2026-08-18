@@ -16,6 +16,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.background import BackgroundTask
 
+from ..services import ytdlp
+
 router = APIRouter()
 
 PROXY_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
@@ -129,6 +131,11 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
         upstream = await client.send(req, stream=True)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Proxy fetch failed: {exc}") from exc
+    if upstream.status_code == 403:
+        # A URL that was served then starts answering 403 is dead for good
+        # (PO-token bucket, expiry): drop the cached extraction so the
+        # player's retry re-resolves instead of replaying the same corpse.
+        ytdlp.forget_dead_stream(url)
     headers = dict(_BASE_HEADERS)
     for name in _PASSTHROUGH_HEADERS:
         value = upstream.headers.get(name)
@@ -152,6 +159,8 @@ async def proxy_hls(url: str, request: Request) -> Response:
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Proxy fetch failed: {exc}") from exc
     if upstream.status_code >= 400:
+        if upstream.status_code == 403:
+            ytdlp.forget_dead_stream(url)
         raise HTTPException(
             status_code=upstream.status_code, detail="Upstream playlist error"
         )

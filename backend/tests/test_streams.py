@@ -945,3 +945,56 @@ def test_quarantined_bucket_is_rolled_again(client):
 
     assert "healthy" in resp.json()["url"]
     assert ydl.calls == 2
+
+
+# ─── forget_dead_stream : éviction du cache sur 403 observé en lecture ───
+
+
+def _cache_entry(watch_url: str, media_url: str) -> None:
+    import time
+
+    ytdlp._INFO_CACHE[watch_url] = (time.monotonic(), {"formats": [{"url": media_url}]})
+
+
+def test_forget_dead_stream_evicts_only_the_matching_extraction():
+    _cache_entry(
+        "https://www.youtube.com/watch?v=dead",
+        "https://rr1---sn-x.googlevideo.com/videoplayback?expire=1&id=o-dead&itag=137",
+    )
+    _cache_entry(
+        "https://www.youtube.com/watch?v=alive",
+        "https://rr1---sn-x.googlevideo.com/videoplayback?expire=1&id=o-alive&itag=137",
+    )
+
+    # Un autre itag/host de la même extraction partage le même id.
+    assert ytdlp.forget_dead_stream(
+        "https://rr2---sn-y.googlevideo.com/videoplayback?expire=1&id=o-dead&itag=140"
+    )
+
+    assert "https://www.youtube.com/watch?v=dead" not in ytdlp._INFO_CACHE
+    assert "https://www.youtube.com/watch?v=alive" in ytdlp._INFO_CACHE
+
+
+def test_forget_dead_stream_matches_live_path_style_ids():
+    _cache_entry(
+        "https://www.youtube.com/watch?v=live1",
+        "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1"
+        "/id/live1.2~xyz/itag/96/playlist/index.m3u8",
+    )
+
+    # Les segments d'un live portent le même id, en style chemin.
+    assert ytdlp.forget_dead_stream(
+        "https://rr3---sn-z.googlevideo.com/videoplayback/id/live1.2~xyz/itag/96/sq/42"
+    )
+
+    assert not ytdlp._INFO_CACHE
+
+
+def test_forget_dead_stream_ignores_foreign_hosts():
+    _cache_entry(
+        "https://www.youtube.com/watch?v=x",
+        "https://rr1---sn-x.googlevideo.com/videoplayback?id=o-x&itag=137",
+    )
+
+    assert not ytdlp.forget_dead_stream("https://cdn.example/videoplayback?id=o-x")
+    assert ytdlp._INFO_CACHE

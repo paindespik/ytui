@@ -219,3 +219,26 @@ def test_proxy_env_extension(proxied):
     client = proxied(handler)
     resp = client.get("/api/proxy", params={"url": "https://sub.cdn.example/seg.ts"})
     assert resp.status_code == 200
+
+
+def test_proxy_upstream_403_evicts_dead_extraction(proxied):
+    """Un 403 googlevideo vu en lecture purge l'extraction en cache : le retry
+    du lecteur re-résout au lieu de recevoir les mêmes URLs mortes."""
+    import time
+
+    from ytui_server.services import ytdlp
+
+    dead = "https://rr1---sn-x.googlevideo.com/videoplayback?expire=1&id=o-dead&itag=137"
+    ytdlp._INFO_CACHE["https://www.youtube.com/watch?v=dead"] = (
+        time.monotonic(),
+        {"formats": [{"url": dead}]},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, content=b"")
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy", params={"url": dead})
+
+    assert resp.status_code == 403
+    assert not ytdlp._INFO_CACHE

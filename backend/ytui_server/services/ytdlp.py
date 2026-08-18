@@ -330,6 +330,52 @@ def _info_cache_ttl(info: dict) -> float:
     return _INFO_CACHE_TTL_LIVE if info.get("is_live") else _INFO_CACHE_TTL
 
 
+def _media_stream_id(url: str) -> str | None:
+    """The per-extraction `id` of a googlevideo media URL (query or path form).
+
+    VOD `videoplayback` URLs carry `?id=o-…` shared by every format of one
+    extraction; live playlists and segments carry the same value path-style
+    (`/id/<video>.<n>/`). Non-googlevideo URLs have no such identity: None.
+    """
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not (host == "googlevideo.com" or host.endswith(".googlevideo.com")):
+        return None
+    qs_id = (parse_qs(parsed.query).get("id") or [None])[0]
+    if qs_id:
+        return qs_id
+    found = re.search(r"/id/([^/]+)", parsed.path)
+    return found.group(1) if found else None
+
+
+def forget_dead_stream(media_url: str) -> bool:
+    """Evict cached extractions that handed out this now-dead googlevideo URL.
+
+    The proxy is the one place that observes a stream URL actually dying
+    (upstream 403 mid-playback: PO-token buckets, expiry, IP churn). Without
+    this, a client that re-requests /streams or /mpd precisely because its
+    stream died gets the very same dead URLs back from the info cache for up
+    to five minutes; with it, the single client-side retry re-extracts.
+    """
+    stream_id = _media_stream_id(media_url)
+    if stream_id is None:
+        return False
+    evicted = False
+    with _INFO_CACHE_LOCK:
+        for key, (_, info) in list(_INFO_CACHE.items()):
+            urls = [info.get("url"), info.get("manifest_url")]
+            urls.extend(f.get("url") for f in info.get("formats") or [])
+            if any(u and _media_stream_id(u) == stream_id for u in urls):
+                del _INFO_CACHE[key]
+                evicted = True
+    if evicted:
+        log.warning(
+            "stream %s died mid-play (upstream 403), evicted cached extraction",
+            stream_id,
+        )
+    return evicted
+
+
 def _extract_info_cached(url: str) -> dict:
     """extract_info with a small module-level TTL cache (thread-safe)."""
     now = time.monotonic()
