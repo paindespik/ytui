@@ -310,6 +310,43 @@ def _delivery_truncated(info: dict) -> bool:
     return resp.status_code == 403
 
 
+def _drop_dead_muxed_formats(info: dict) -> None:
+    """Remove muxed googlevideo formats whose URL refuses its very first byte.
+
+    PO-token enforcement reached android_vr (2026-08): its muxed 360p (itag 18)
+    answers 403 from byte 0 while the visionos adaptive formats stay healthy.
+    Selection prefers a muxed file on a height tie, so one dead muxed format
+    would silently break every ≤360p request. Re-extracting cannot help — the
+    client is dead, not the bucket — so the format is dropped instead, at the
+    cost of one cheap ranged GET per (cached) extraction.
+    """
+    formats = info.get("formats") or []
+    muxed = [
+        f
+        for f in formats
+        if _GOOGLEVIDEO_RE.match(f.get("url") or "")
+        and f.get("vcodec") not in (None, "none")
+        and f.get("acodec") not in (None, "none")
+    ]
+    if not muxed:
+        return
+    dead: set[str] = set()
+    try:
+        with httpx.Client(timeout=_TRUNCATION_PROBE_TIMEOUT) as client:
+            for fmt in muxed:
+                resp = client.get(fmt["url"], headers={"Range": "bytes=0-1"})
+                if resp.status_code == 403:
+                    dead.add(fmt["url"])
+    except httpx.HTTPError as exc:  # network hiccup: keep the formats
+        log.debug("muxed format probe failed: %s", exc)
+        return
+    if dead:
+        log.warning(
+            "dropping %d muxed format(s) refusing their first byte (403)", len(dead)
+        )
+        info["formats"] = [f for f in formats if f.get("url") not in dead]
+
+
 # TTL cache for full (non-flat) extract_info results. The web player hits
 # /streams then /mpd for the same video back to back; without this, each
 # request pays a full multi-second yt-dlp extraction.
@@ -407,6 +444,7 @@ def _extract_info_cached(url: str) -> dict:
         )
     if bitchute:
         _fix_bitchute_formats(info)
+    _drop_dead_muxed_formats(info)
     # Served now, judged later: a live's bucket only reveals itself a minute in.
     _schedule_bucket_check(info)
     with _INFO_CACHE_LOCK:
@@ -682,12 +720,18 @@ def _extract_streams(
             return make("progressive", best["url"])
         # fall through: use whatever combined format exists
 
-    # 1. HLS manifest (adaptive; best for mobile players)
+    # 1. HLS manifest (adaptive; best for mobile players).
+    # acodec == "none" is a video-only variant: its audio lives in separate
+    # renditions only reachable through a master manifest — which YouTube VODs
+    # (visionos client) do not expose. Serving such a playlist alone plays a
+    # silent video, so those never qualify; the split path covers them.
+    # acodec None (unknown, e.g. Twitch masters) stays eligible.
     hls_all = [
         f
         for f in formats
         if f.get("protocol", "").startswith("m3u8")
         and f.get("vcodec") not in (None, "none")
+        and f.get("acodec") != "none"
     ]
     if hls_all:
         hls = _capped(hls_all, max_height)

@@ -998,3 +998,73 @@ def test_forget_dead_stream_ignores_foreign_hosts():
 
     assert not ytdlp.forget_dead_stream("https://cdn.example/videoplayback?id=o-x")
     assert ytdlp._INFO_CACHE
+
+
+# ─── HLS vidéo seule (VOD visionos) et formats muxés morts (itag 18) ───
+
+
+def test_streams_video_only_hls_never_served_alone(client):
+    """Les variantes HLS des VOD YouTube (visionos) sont vidéo seule : les
+    servir seules donne une vidéo muette — le chemin split doit gagner."""
+    vhls = {"format_id": "270", "url": "https://x/1080-vonly.m3u8",
+            "protocol": "m3u8_native", "vcodec": "avc1.640028", "acodec": "none",
+            "height": 1080}
+    ahls = {"format_id": "234", "url": "https://x/audio.m3u8",
+            "protocol": "m3u8_native", "vcodec": "none", "acodec": None}
+    with _patch_ydl(_info([vhls, ahls, VONLY, AONLY])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["video_url"] == "https://x/video.mp4"
+
+
+def test_streams_hls_with_unknown_audio_codec_still_served(client):
+    """Twitch et consorts : acodec None (inconnu) n'est pas « pas d'audio »."""
+    unk = dict(HLS, acodec=None)
+    with _patch_ydl(_info([unk], manifest_url="https://x/master.m3u8")):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.json()["kind"] == "hls"
+
+
+def _mux_url(tag: str) -> str:
+    # Comme le vrai itag 18 : pas de clen → hors de portée de la sonde EOF.
+    return f"https://rr1---sn-x.googlevideo.com/videoplayback?expire=1&itag=18&sig={tag}"
+
+
+def _gv_info_with_muxed(tag: str, mux_tag: str):
+    info = _gv_info(tag)
+    info["formats"].append(
+        {"format_id": "18", "url": _mux_url(mux_tag), "ext": "mp4",
+         "acodec": "mp4a.40.2", "vcodec": "avc1.42001E", "protocol": "https",
+         "height": 360, "width": 640}
+    )
+    return info
+
+
+def test_dead_muxed_format_is_dropped(client):
+    """itag 18 (android_vr) mort dès l'octet 0 : purgé, le 360p sert le split
+    au lieu d'une URL morte — re-résoudre n'y changerait rien."""
+    ydl = SequenceYDL([_gv_info_with_muxed("healthy", "deadmux")])
+    probe, _ = _patch_range_probe({"deadmux"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams?max_height=360")
+
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert "deadmux" not in body["video_url"]
+    assert ydl.calls == 1, "un client mort ne doit pas déclencher de re-roll"
+
+
+def test_healthy_muxed_format_still_wins_its_tier(client):
+    ydl = SequenceYDL([_gv_info_with_muxed("healthy", "goodmux")])
+    probe, _ = _patch_range_probe(set())
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
+        resp = client.get("/api/videos/vid000000001/streams?max_height=360")
+
+    body = resp.json()
+    assert body["kind"] == "progressive"
+    assert "goodmux" in body["url"]
