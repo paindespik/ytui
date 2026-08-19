@@ -128,6 +128,17 @@ def rewrite_hls(text: str, base_url: str) -> str:
 _YT_WATCH = "https://www.youtube.com/watch?v="
 
 
+def _m3u8(text: str) -> Response:
+    return Response(
+        content=text,
+        media_type="application/vnd.apple.mpegurl",
+        headers=dict(_BASE_HEADERS),
+    )
+
+
+_LIVE_ERRORS = (httpx.HTTPError, livehls.LiveHlsError, ytdlp.UpstreamError)
+
+
 @router.get("/live/{video_id}/playlist.m3u8")
 async def live_playlist(
     video_id: str,
@@ -137,24 +148,32 @@ async def live_playlist(
     session = livehls.get_session(f"{_YT_WATCH}{video_id}", max_height)
     client: httpx.AsyncClient = request.app.state.proxy_client
     try:
-        text = await session.playlist(client)
-    except (httpx.HTTPError, livehls.LiveHlsError, ytdlp.UpstreamError) as exc:
+        return _m3u8(await session.entry_playlist(client))
+    except _LIVE_ERRORS as exc:
         raise HTTPException(status_code=502, detail=f"Live resolve failed: {exc}") from exc
-    return Response(
-        content=text,
-        media_type="application/vnd.apple.mpegurl",
-        headers=dict(_BASE_HEADERS),
-    )
 
 
-@router.get("/live/{video_id}/seg/{sq}")
-async def live_segment(video_id: str, sq: int, request: Request) -> StreamingResponse:
+@router.get("/live/{video_id}/media/{itag}.m3u8")
+async def live_media_playlist(video_id: str, itag: int, request: Request) -> Response:
+    session = livehls.get_session(f"{_YT_WATCH}{video_id}")
+    client: httpx.AsyncClient = request.app.state.proxy_client
+    try:
+        return _m3u8(await session.media_playlist(client, itag))
+    except _LIVE_ERRORS as exc:
+        raise HTTPException(status_code=502, detail=f"Live playlist failed: {exc}") from exc
+
+
+@router.get("/live/{video_id}/media/{itag}/{sq}")
+async def live_segment(
+    video_id: str, itag: int, sq: int, request: Request
+) -> StreamingResponse:
     session = livehls.get_session(f"{_YT_WATCH}{video_id}")
     client: httpx.AsyncClient = request.app.state.proxy_client
     # Two passes: serve from the current map, and on upstream 403 re-extract
     # once and retry with the remapped URL. The player just sees the bytes.
     for attempt in range(2):
-        url = await session.segment_upstream(client, sq)
+        generation = session.generation
+        url = await session.segment_upstream(client, itag, sq)
         if url is None:
             raise HTTPException(status_code=404, detail="Unknown live segment")
         req = client.build_request("GET", url, headers={"Accept-Encoding": "identity"})
@@ -164,15 +183,14 @@ async def live_segment(video_id: str, sq: int, request: Request) -> StreamingRes
             raise HTTPException(status_code=502, detail=f"Segment fetch failed: {exc}") from exc
         if upstream.status_code == 403 and attempt == 0:
             await upstream.aclose()
-            generation = session.generation
             try:
                 await session._reresolve(client, generation)
-            except (httpx.HTTPError, livehls.LiveHlsError, ytdlp.UpstreamError) as exc:
+            except _LIVE_ERRORS as exc:
                 raise HTTPException(
                     status_code=502, detail=f"Live re-resolve failed: {exc}"
                 ) from exc
             continue
-        session._refresh_soon(client)
+        session.refresh_soon(client)
         headers = dict(_BASE_HEADERS)
         for name in _PASSTHROUGH_HEADERS:
             value = upstream.headers.get(name)

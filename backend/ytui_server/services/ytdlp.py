@@ -244,20 +244,29 @@ def _truncation_probe_target(formats: list[dict]) -> tuple[int, str] | None:
 
 
 def _hls_probe_target(formats: list[dict]) -> str | None:
-    """Cheapest googlevideo HLS media playlist to sample a segment from.
+    """Cheapest googlevideo *video* HLS media playlist to sample a segment from.
 
-    Picking the lowest-bitrate variant keeps the probe cheap; the bucket poisons
-    every variant of an extraction alike, so any one of them is a valid tell.
+    Picking the lowest-bitrate variant keeps the probe cheap. It must carry
+    video: the bucket poisons every video variant of an extraction alike, but
+    the audio-only rendition keeps being served (measured 2026-08-19: audio
+    itag 233 answered 200 at +70 s while every video itag was refused from
+    +26 s on) — probing it declared capped extractions healthy for weeks.
     """
     best: tuple[float, str] | None = None
+    audio_best: tuple[float, str] | None = None
     for fmt in formats:
         url = fmt.get("url") or ""
         if not _HLS_PLAYLIST_RE.match(url):
             continue
         weight = float(fmt.get("tbr") or fmt.get("height") or 0)
+        if fmt.get("vcodec") in (None, "none"):
+            if audio_best is None or weight < audio_best[0]:
+                audio_best = (weight, url)
+            continue
         if best is None or weight < best[0]:
             best = (weight, url)
-    return None if best is None else best[1]
+    chosen = best or audio_best
+    return None if chosen is None else chosen[1]
 
 
 def _hls_segment_forbidden(client: httpx.Client, playlist_url: str) -> bool:
@@ -755,6 +764,24 @@ def _extract_streams(
             return make("hls", best["url"], height=height)
         manifest = info.get("manifest_url") or ""
         return make("hls", manifest or best["url"], height=height)
+
+    # 1b. Live with split HLS tracks (yt-dlp >= 2026.08 reports YouTube lives
+    # as video-only variants + separate audio renditions): a bare variant
+    # plays silent, but every format carries the master manifest URL, whose
+    # EXT-X-MEDIA audio renditions the player resolves itself. The cap is
+    # advisory here (the master lists every variant); the live-HLS proxy
+    # (services/livehls.py) enforces it for clients that play through it.
+    if info.get("is_live"):
+        live_video = [
+            f
+            for f in formats
+            if f.get("protocol", "").startswith("m3u8")
+            and f.get("vcodec") not in (None, "none")
+            and f.get("manifest_url")
+        ]
+        if live_video:
+            best = max(_capped(live_video, max_height), key=lambda f: f.get("height") or 0)
+            return make("hls", best["manifest_url"], height=best.get("height") or None)
 
     # 2/3. Progressive (one muxed file) vs split DASH (video-only + audio-only).
     # Order must not decide: YouTube only muxes up to 360p, so taking the first
