@@ -270,7 +270,30 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final platform = player.platform;
     if (platform is! NativePlayer) return;
     await platform.setProperty('ao', 'audiotrack,opensles');
+    // Deep demuxer cache: mobile networks hiccup, and a live played with
+    // mpv's default ~2 s of readahead freezes on every blip. 30 s of media
+    // (bounded at 64 MiB) absorbs them; `cache-pause-wait` makes a rebuffer
+    // gather 3 s before resuming instead of stutter-resuming frame by frame.
+    await platform.setProperty('cache', 'yes');
+    await platform.setProperty('cache-secs', '30');
+    await platform.setProperty('demuxer-readahead-secs', '30');
+    await platform.setProperty('demuxer-max-bytes', '64MiB');
+    await platform.setProperty('cache-pause-wait', '3');
     await _applyAudioDelay(ref.read(audioDelayProvider));
+  }
+
+  /// A live HLS playlist only exposes a handful of segments behind the live
+  /// edge; starting at ffmpeg's default (3rd from the edge) leaves ~15 s of
+  /// media to buffer from, not enough to ride out a network blip. Starting 6
+  /// segments back doubles the cushion — the ~30 s of extra latency behind
+  /// the live edge is the price of smooth playback.
+  Future<void> _tuneLiveEdge(bool live) async {
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
+    await platform.setProperty(
+      'demuxer-lavf-o',
+      live ? 'live_start_index=-6' : '',
+    );
   }
 
   /// Pushes the user's audio offset to libmpv: positive delays the sound,
@@ -304,12 +327,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// that is simply dead degrades into a slow reload loop instead of a storm.
   static const _kStallAfter = Duration(seconds: 15);
   static const _kStallRetryGap = Duration(seconds: 25);
+  // A live has no position to lose and reloads at its edge with fresh URLs
+  // (the backend caches live extractions for only 20 s), so recover faster:
+  // every second frozen is a second the user stares at a spinner.
+  static const _kStallAfterLive = Duration(seconds: 10);
+  static const _kStallRetryGapLive = Duration(seconds: 15);
 
   void _checkStall() {
     if (!mounted || _error != null || !player.state.playing) return;
     final now = DateTime.now();
-    if (now.difference(_lastProgressAt) < _kStallAfter) return;
-    if (now.difference(_lastStallRecoveryAt) < _kStallRetryGap) return;
+    final stallAfter = _playingIsLive ? _kStallAfterLive : _kStallAfter;
+    final retryGap = _playingIsLive ? _kStallRetryGapLive : _kStallRetryGap;
+    if (now.difference(_lastProgressAt) < stallAfter) return;
+    if (now.difference(_lastStallRecoveryAt) < retryGap) return;
     _lastStallRecoveryAt = now;
     final video = ref.read(queueProvider).current;
     if (video == null) return;
@@ -409,6 +439,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
       // The audio backend must be picked before playback starts.
       await _mpvConfigured;
+      await _tuneLiveEdge(_playingIsLive);
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
       final media =
           Media(isSplit ? (streams.videoUrl ?? streams.url) : streams.url);
