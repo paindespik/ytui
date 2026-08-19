@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.background import BackgroundTask
 
-from ..services import ytdlp
+from ..services import livehls, ytdlp
 
 router = APIRouter()
 
@@ -115,6 +115,76 @@ def rewrite_hls(text: str, base_url: str) -> str:
         else:
             out.append(line)
     return "\n".join(out) + "\n"
+
+
+# -- self-healing YouTube live proxy ---------------------------------------
+#
+# A YouTube live's direct segment URLs die ~26 s after extraction (capped
+# anonymous bucket, measured 2026-08-19) while the playlist stays alive: no
+# client can play them smoothly. These routes serve a stable playlist whose
+# session re-extracts and remaps segments (by their /sq/N/ number) underneath
+# the player. See services/livehls.py.
+
+_YT_WATCH = "https://www.youtube.com/watch?v="
+
+
+@router.get("/live/{video_id}/playlist.m3u8")
+async def live_playlist(
+    video_id: str,
+    request: Request,
+    max_height: int = 1440,
+) -> Response:
+    session = livehls.get_session(f"{_YT_WATCH}{video_id}", max_height)
+    client: httpx.AsyncClient = request.app.state.proxy_client
+    try:
+        text = await session.playlist(client)
+    except (httpx.HTTPError, livehls.LiveHlsError, ytdlp.UpstreamError) as exc:
+        raise HTTPException(status_code=502, detail=f"Live resolve failed: {exc}") from exc
+    return Response(
+        content=text,
+        media_type="application/vnd.apple.mpegurl",
+        headers=dict(_BASE_HEADERS),
+    )
+
+
+@router.get("/live/{video_id}/seg/{sq}")
+async def live_segment(video_id: str, sq: int, request: Request) -> StreamingResponse:
+    session = livehls.get_session(f"{_YT_WATCH}{video_id}")
+    client: httpx.AsyncClient = request.app.state.proxy_client
+    # Two passes: serve from the current map, and on upstream 403 re-extract
+    # once and retry with the remapped URL. The player just sees the bytes.
+    for attempt in range(2):
+        url = await session.segment_upstream(client, sq)
+        if url is None:
+            raise HTTPException(status_code=404, detail="Unknown live segment")
+        req = client.build_request("GET", url, headers={"Accept-Encoding": "identity"})
+        try:
+            upstream = await client.send(req, stream=True)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"Segment fetch failed: {exc}") from exc
+        if upstream.status_code == 403 and attempt == 0:
+            await upstream.aclose()
+            generation = session.generation
+            try:
+                await session._reresolve(client, generation)
+            except (httpx.HTTPError, livehls.LiveHlsError, ytdlp.UpstreamError) as exc:
+                raise HTTPException(
+                    status_code=502, detail=f"Live re-resolve failed: {exc}"
+                ) from exc
+            continue
+        session._refresh_soon(client)
+        headers = dict(_BASE_HEADERS)
+        for name in _PASSTHROUGH_HEADERS:
+            value = upstream.headers.get(name)
+            if value:
+                headers[name] = value
+        return StreamingResponse(
+            upstream.aiter_bytes(),
+            status_code=upstream.status_code,
+            headers=headers,
+            background=BackgroundTask(upstream.aclose),
+        )
+    raise HTTPException(status_code=502, detail="Live segment kept answering 403")
 
 
 @router.get("/proxy")

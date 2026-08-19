@@ -191,6 +191,12 @@ class StreamInfo(BaseModel):
     # not resume, seek or bookmark it. YouTube lives keep a plain video id, so
     # this flag is the only thing that tells them apart from a VOD.
     is_live: bool = False
+    # Server-relative path of the self-healing live-HLS proxy for this stream
+    # (YouTube lives only). Clients that can send an Authorization header on
+    # media requests should play this instead of `url`: direct segment URLs
+    # die ~26 s after extraction in YouTube's capped anonymous bucket, while
+    # the proxy re-extracts and remaps segments underneath the player.
+    proxy_path: str | None = None
     subtitles: list[SubtitleTrackOut] = []
 
 

@@ -385,6 +385,17 @@ def _media_stream_id(url: str) -> str | None:
     return found.group(1) if found else None
 
 
+def evict_cached_info(url: str) -> None:
+    """Drop the cached extraction for a watch URL so the next call is fresh.
+
+    The live-HLS proxy re-extracts on its own schedule (segment URLs die
+    ~26 s after extraction in the capped bucket); the shared info cache must
+    not hand it back the extraction it is trying to replace.
+    """
+    with _INFO_CACHE_LOCK:
+        _INFO_CACHE.pop(url, None)
+
+
 def forget_dead_stream(media_url: str) -> bool:
     """Evict cached extractions that handed out this now-dead googlevideo URL.
 

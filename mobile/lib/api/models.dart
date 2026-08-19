@@ -153,6 +153,12 @@ class StreamInfo {
   /// A live: rolling window, no meaningful duration or resume point. A YouTube
   /// live keeps a plain video id, so the server flag is the only reliable tell.
   final bool isLive;
+
+  /// Server-relative path of the self-healing live-HLS proxy (YouTube lives
+  /// only): direct segment URLs die ~26 s after extraction in YouTube's capped
+  /// anonymous bucket, while the proxy re-extracts and remaps segments
+  /// underneath the player. Play `serverUrl + proxyPath` with the auth header.
+  final String? proxyPath;
   final List<SubtitleTrackInfo> subtitles;
 
   const StreamInfo({
@@ -165,6 +171,7 @@ class StreamInfo {
     this.expiresAt,
     this.height,
     this.isLive = false,
+    this.proxyPath,
     this.subtitles = const [],
   });
 
@@ -177,6 +184,7 @@ class StreamInfo {
         duration: json['duration'] as int?,
         height: json['height'] as int?,
         isLive: json['is_live'] as bool? ?? false,
+        proxyPath: json['proxy_path'] as String?,
         expiresAt: json['expires_at'] != null
             ? DateTime.tryParse(json['expires_at'] as String)
             : null,

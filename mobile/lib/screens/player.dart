@@ -441,8 +441,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       await _mpvConfigured;
       await _tuneLiveEdge(_playingIsLive);
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
-      final media =
-          Media(isSplit ? (streams.videoUrl ?? streams.url) : streams.url);
+      var openUrl = isSplit ? (streams.videoUrl ?? streams.url) : streams.url;
+      Map<String, String>? httpHeaders;
+      if (streams.proxyPath != null) {
+        // YouTube live: play through the backend's self-healing HLS proxy —
+        // direct segment URLs die ~26 s after extraction (capped bucket), the
+        // proxy re-extracts and remaps them underneath the player.
+        final server = ref.read(settingsProvider);
+        openUrl = '${server.url}${streams.proxyPath}';
+        httpHeaders = {'Authorization': 'Bearer ${server.token}'};
+      }
+      final media = Media(openUrl, httpHeaders: httpHeaders);
       await player.open(media);
 
       if (isSplit) {

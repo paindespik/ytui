@@ -229,12 +229,19 @@ async def video_streams(
             url, title, height = resolved
             return StreamInfo(kind="hls", url=url, title=title, height=height)
     try:
-        return await ytdlp.resolve_streams(
+        info = await ytdlp.resolve_streams(
             _video_url(video_id, platform),
             max_height=max_height,
             audio_only=audio_only,
             sub_langs=sub_langs,
         )
+        if platform == "youtube" and info.is_live and info.kind == "hls":
+            # Direct segment URLs die ~26 s in on this server's bucket: point
+            # capable clients at the self-healing proxy (see routers/proxy.py).
+            info.proxy_path = (
+                f"/api/live/{video_id}/playlist.m3u8?max_height={max_height}"
+            )
+        return info
     except ytdlp.UpstreamError as exc:
         await _reject_unplayable_odysee(video_id, platform)
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
