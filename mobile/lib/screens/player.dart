@@ -295,6 +295,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // mpv's default ~2 s of readahead freezes on every blip. 30 s of media
     // (bounded at 64 MiB) absorbs them; `cache-pause-wait` makes a rebuffer
     // gather 3 s before resuming instead of stutter-resuming frame by frame.
+    // Cellular carriers put phones behind NAT64 (64:ff9b::/96): the gateway
+    // silently reaps long-lived paced connections it considers idle, and a
+    // read on such a blackholed socket blocks for ~45 s (no RST) — measured
+    // wedging every resume-seek. Bound every stream I/O and let ffmpeg
+    // reconnect with a Range at the current offset instead of hanging.
+    // rw_timeout is in microseconds; 8 s stays under the stall watchdog.
+    await platform.setProperty(
+      'stream-lavf-o',
+      'reconnect=1,reconnect_streamed=1,reconnect_delay_max=3,rw_timeout=8000000',
+    );
     await platform.setProperty('cache', 'yes');
     await platform.setProperty('cache-secs', '30');
     await platform.setProperty('demuxer-readahead-secs', '30');
