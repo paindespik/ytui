@@ -127,6 +127,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Duration _lastPosition = Duration.zero;
   DateTime _lastProgressAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _loadStartedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  // Consecutive stall recoveries without real playback in between, and the
+  // distinct position updates seen since the current load. A resume-seek that
+  // wedges the demuxer (measured: m4a external track stuck `seeking=yes`)
+  // would otherwise reload into the same wedge forever — after enough
+  // fruitless strikes the bookmark is dropped and playback restarts from 0,
+  // which needs no seek at all.
+  int _stallStrikes = 0;
+  int _progressEvents = 0;
   DateTime _lastStallRecoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
   List<SponsorSegment> _segments = const [];
   DateTime _lastSkip = DateTime.fromMillisecondsSinceEpoch(0);
@@ -242,7 +250,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       );
     });
     _positionSub = player.stream.position.listen((position) {
-      if (position != _lastPosition) _noteProgress(position);
+      if (position != _lastPosition) {
+        _noteProgress(position);
+        // A settle only moves the position a few discrete times (0, then the
+        // seek target): a stream of distinct updates means real playback —
+        // the stall-recovery strike budget starts over.
+        if (++_progressEvents > 8) _stallStrikes = 0;
+      }
       // Playback reaching the resume target confirms it, whichever way it got
       // there (seek landed, or the stream simply started at the right place).
       _resume.confirm(position.inSeconds.toDouble());
@@ -360,8 +374,14 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _lastStallRecoveryAt = now;
     final video = ref.read(queueProvider).current;
     if (video == null) return;
-    // A live restarts at its edge; a VOD picks up where the picture froze.
-    final at = _isLivePlayback(video) ? null : player.state.position;
+    _stallStrikes++;
+    // A live restarts at its edge; a VOD picks up where the picture froze —
+    // unless every recovery wedged again before playing: then the resume
+    // point itself is the poison (a seek the demuxer cannot serve) and the
+    // only way out is to start over from the beginning.
+    final at = _isLivePlayback(video) || _stallStrikes >= 3
+        ? null
+        : player.state.position;
     _retried = false;  // a fresh stream deserves a fresh error budget
     _noteProgress();
     unawaited(_load(video, resume: false, startAt: at));
@@ -405,6 +425,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Future<void> _load(Video video,
       {bool resume = true, Duration? startAt}) async {
+    if (_loadedVideoId != video.videoId) _stallStrikes = 0; // fresh video
+    _progressEvents = 0;
     _loadedVideoId = video.videoId;
     _completedFor = null;
     _playingIsLive = _isLiveId(video);

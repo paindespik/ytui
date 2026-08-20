@@ -840,7 +840,7 @@ def _extract_streams(
     split_height = (bv.get("height") or 0) if bv else -1
 
     if bv is not None and split_height > prog_height:
-        ba = max(audios, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+        ba = max(audios, key=_audio_rank)
         return make(
             "split",
             bv["url"],
@@ -857,6 +857,25 @@ def _extract_streams(
     if info.get("url"):
         return make("progressive", info["url"])
     raise UpstreamError("No playable stream found")
+
+
+def _audio_rank(f: dict) -> tuple:
+    """Order audio-only formats for the split path, best last.
+
+    YouTube lists auto-dubbed renditions (format_note "… dubbed-auto") next
+    to the original soundtrack at comparable bitrates: a plain bitrate max()
+    used to hand a French video its English auto-dub. The original always
+    wins; formats without dub metadata (other platforms) count as original.
+    Opus/WebM then beats AAC/m4a — same bitrates, and the m4a rendition is
+    what the mobile player's demuxer failed to resume-seek through the proxy
+    (stuck `seeking=yes`, empty audio-pts) while Opus seeked fine.
+    """
+    note = (f.get("format_note") or "").lower()
+    return (
+        "dub" not in note,
+        (f.get("acodec") or "").startswith("opus"),
+        f.get("abr") or f.get("tbr") or 0,
+    )
 
 
 async def resolve_streams(

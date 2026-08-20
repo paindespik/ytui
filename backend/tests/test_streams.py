@@ -250,6 +250,32 @@ def test_streams_split_dash(client):
     assert body["audio_url"] == "https://x/audio.m4a"
 
 
+def test_streams_split_audio_prefers_original_over_dub(client):
+    # YouTube lists auto-dubbed renditions next to the original soundtrack:
+    # a bare bitrate max() used to hand a French video its English auto-dub.
+    dub = {**AONLY, "format_id": "140-1", "url": "https://x/audio-dub.m4a",
+           "format_note": "English (United States) dubbed-auto", "abr": 192}
+    orig = {**AONLY, "format_id": "140-0", "url": "https://x/audio-orig.m4a",
+            "format_note": "French (France) original (default)", "abr": 128}
+    with _patch_ydl(_info([VONLY, dub, orig])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["audio_url"] == "https://x/audio-orig.m4a"
+
+
+def test_streams_split_audio_prefers_opus_over_m4a(client):
+    # Same soundtrack in both codecs: Opus/WebM seeks reliably through the
+    # byte proxy where the m4a rendition wedged the mobile demuxer.
+    opus = {**AONLY, "format_id": "251", "url": "https://x/audio.webm",
+            "acodec": "opus", "abr": 118}
+    with _patch_ydl(_info([VONLY, AONLY, opus])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["audio_url"] == "https://x/audio.webm"
+
+
 def test_streams_audio_only(client):
     with _patch_ydl(_info([PROG, AONLY])):
         resp = client.get(
