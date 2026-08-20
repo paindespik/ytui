@@ -126,6 +126,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Timer? _stallWatchdog;
   Duration _lastPosition = Duration.zero;
   DateTime _lastProgressAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _loadStartedAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastStallRecoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
   List<SponsorSegment> _segments = const [];
   DateTime _lastSkip = DateTime.fromMillisecondsSinceEpoch(0);
@@ -338,12 +339,22 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   // every second frozen is a second the user stares at a spinner.
   static const _kStallAfterLive = Duration(seconds: 10);
   static const _kStallRetryGapLive = Duration(seconds: 15);
+  // A cold open + resume-seek on a slow cellular link legitimately holds the
+  // position at the seek target for longer than [_kStallAfter] while the
+  // demuxer refills: reloading during that window restarts the whole dance
+  // from scratch and the player loops on the spinner forever (measured over
+  // the cellular proxy). A VOD load gets this long to settle before the
+  // watchdog may reload it; lives keep their fast recovery.
+  static const _kInitialSettle = Duration(seconds: 45);
 
   void _checkStall() {
     if (!mounted || _error != null || !player.state.playing) return;
     final now = DateTime.now();
     final stallAfter = _playingIsLive ? _kStallAfterLive : _kStallAfter;
     final retryGap = _playingIsLive ? _kStallRetryGapLive : _kStallRetryGap;
+    if (!_playingIsLive && now.difference(_loadStartedAt) < _kInitialSettle) {
+      return;
+    }
     if (now.difference(_lastProgressAt) < stallAfter) return;
     if (now.difference(_lastStallRecoveryAt) < retryGap) return;
     _lastStallRecoveryAt = now;
@@ -397,6 +408,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _loadedVideoId = video.videoId;
     _completedFor = null;
     _playingIsLive = _isLiveId(video);
+    _loadStartedAt = DateTime.now();
     _noteProgress();  // the watchdog must not fire on the load it is waiting for
     // Nothing to flush until the new media is actually open: a heartbeat firing
     // mid-load would otherwise store the outgoing media's position under this id.

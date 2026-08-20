@@ -221,6 +221,159 @@ def test_proxy_env_extension(proxied):
     assert resp.status_code == 200
 
 
+# ─── self-healing byte relay ───
+#
+# googlevideo kills a paced connection whose reader pauses (full readahead
+# cache): the relay must resume upstream at the exact byte instead of handing
+# the player a clean-looking truncation ("partial file", frozen playback).
+
+
+def test_proxy_resumes_truncated_upstream(proxied):
+    calls: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("Range"))
+        if len(calls) == 1:
+            # Promises bytes 0-99 but the body stops after 40: mid-stream death.
+            return httpx.Response(
+                206,
+                content=b"a" * 40,
+                headers={
+                    "Content-Type": "video/mp4",
+                    "Content-Range": "bytes 0-99/100",
+                    "Content-Length": "100",
+                },
+            )
+        return httpx.Response(
+            206,
+            content=b"b" * 60,
+            headers={
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 40-99/100",
+            },
+        )
+
+    client = proxied(handler)
+    resp = client.get(
+        "/api/proxy",
+        params={"url": "https://cdn.example/seg.mp4"},
+        headers={"Range": "bytes=0-99"},
+    )
+    assert resp.status_code == 206
+    assert resp.content == b"a" * 40 + b"b" * 60
+    assert calls == ["bytes=0-99", "bytes=40-99"]
+
+
+def test_proxy_resume_keeps_absolute_offsets(proxied):
+    """A ranged request not starting at 0 resumes at first+sent, not at sent."""
+    calls: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("Range"))
+        if len(calls) == 1:
+            return httpx.Response(
+                206,
+                content=b"a" * 10,
+                headers={"Content-Range": "bytes 50-99/200"},
+            )
+        return httpx.Response(
+            206,
+            content=b"b" * 40,
+            headers={"Content-Range": "bytes 60-99/200"},
+        )
+
+    client = proxied(handler)
+    resp = client.get(
+        "/api/proxy",
+        params={"url": "https://cdn.example/seg.mp4"},
+        headers={"Range": "bytes=50-99"},
+    )
+    assert resp.content == b"a" * 10 + b"b" * 40
+    assert calls == ["bytes=50-99", "bytes=60-99"]
+
+
+def test_proxy_resume_gives_up_without_progress(proxied):
+    """Zero-progress reopens are bounded: no infinite loop on a dead URL."""
+    calls: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("Range"))
+        if len(calls) == 1:
+            return httpx.Response(
+                206,
+                content=b"a" * 10,
+                headers={"Content-Range": "bytes 0-99/100"},
+            )
+        # Every resume attempt promises the range but delivers nothing.
+        return httpx.Response(
+            206, content=b"", headers={"Content-Range": "bytes 10-99/100"}
+        )
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy", params={"url": "https://cdn.example/seg.mp4"})
+    assert resp.content == b"a" * 10
+    from ytui_server.routers.proxy import _RESUME_ATTEMPTS
+
+    assert len(calls) == 1 + _RESUME_ATTEMPTS
+
+
+def test_proxy_resume_stops_on_non_206(proxied):
+    """A resume answered 403 ends the relay (and cannot corrupt offsets)."""
+    calls: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get("Range"))
+        if len(calls) == 1:
+            return httpx.Response(
+                206,
+                content=b"a" * 10,
+                headers={"Content-Range": "bytes 0-99/100"},
+            )
+        return httpx.Response(403, content=b"denied")
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy", params={"url": "https://cdn.example/seg.mp4"})
+    assert resp.content == b"a" * 10
+    assert len(calls) == 2
+
+
+def test_proxy_unknown_length_not_resumed(proxied):
+    """Chunked live bodies (FLV…) have no window: served as-is, one fetch."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+
+        # An async-iterable body streams without Content-Length (chunked).
+        async def body():
+            yield b"flv-bytes"
+
+        return httpx.Response(200, content=body())
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy", params={"url": "https://cdn.example/live.flv"})
+    assert resp.content == b"flv-bytes"
+    assert len(calls) == 1
+
+
+def test_proxy_complete_response_single_fetch(proxied):
+    """A body matching its Content-Range is not re-fetched."""
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(
+            206,
+            content=b"x" * 100,
+            headers={"Content-Range": "bytes 0-99/100"},
+        )
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy", params={"url": "https://cdn.example/seg.mp4"})
+    assert resp.content == b"x" * 100
+    assert len(calls) == 1
+
+
 def test_proxy_upstream_403_evicts_dead_extraction(proxied):
     """Un 403 googlevideo vu en lecture purge l'extraction en cache : le retry
     du lecteur re-résout au lieu de recevoir les mêmes URLs mortes."""
