@@ -205,94 +205,9 @@ async def live_segment(
     raise HTTPException(status_code=502, detail="Live segment kept answering 403")
 
 
-# Consecutive zero-progress reopens before a byte relay gives up. Progress
-# resets the budget, so a long VOD may heal any number of drops over its
-# lifetime — only a URL that keeps dying at the same byte is abandoned.
-_RESUME_ATTEMPTS = 4
-
-_CONTENT_RANGE_RE = re.compile(r"bytes (\d+)-(\d+)/(?:\d+|\*)")
-
-
-def _resume_window(upstream: httpx.Response) -> tuple[int, int] | None:
-    """Absolute (first, last) byte offsets this response promised, or None.
-
-    None means the length is unknown (chunked live FLV…): such a stream has
-    no defined end to heal towards and is relayed as-is.
-    """
-    content_range = upstream.headers.get("content-range")
-    if content_range:
-        match = _CONTENT_RANGE_RE.match(content_range)
-        return (int(match.group(1)), int(match.group(2))) if match else None
-    length = upstream.headers.get("content-length")
-    if upstream.status_code == 200 and length and length.isdigit():
-        return (0, int(length) - 1)
-    return None
-
-
-async def _relay_bytes(client: httpx.AsyncClient, url: str, upstream: httpx.Response):
-    """Yield the upstream body, reopening it mid-file if it dies early.
-
-    googlevideo kills a paced connection whose reader pauses — and a player
-    with a full readahead cache stops draining for tens of seconds. Relayed
-    as-is, that death reaches the player as a clean end-of-body and its
-    demuxer declares the file over ("partial file"), freezing playback for
-    good; measured on cellular where every VOD rides this proxy. Instead,
-    resume the upstream with a Range at the exact byte where it stopped: the
-    player never notices.
-    """
-    window = _resume_window(upstream)
-    sent = 0
-    failures = 0
-    try:
-        while True:
-            progressed = False
-            try:
-                async for chunk in upstream.aiter_bytes():
-                    if not chunk:
-                        continue
-                    yield chunk
-                    sent += len(chunk)
-                    progressed = True
-            except httpx.HTTPError:
-                pass  # died mid-read: fall through to the resume logic
-            if window is None:
-                return
-            next_offset = window[0] + sent
-            if next_offset > window[1]:
-                return  # everything this response promised was delivered
-            failures = 0 if progressed else failures + 1
-            if failures >= _RESUME_ATTEMPTS:
-                return
-            await upstream.aclose()
-            req = client.build_request(
-                "GET",
-                url,
-                headers={
-                    "Accept-Encoding": "identity",
-                    "Range": f"bytes={next_offset}-{window[1]}",
-                },
-            )
-            try:
-                upstream = await client.send(req, stream=True)
-            except httpx.HTTPError:
-                return
-            if upstream.status_code != 206:
-                # 403: the URL is dead for good (bucket, expiry) — evict the
-                # cached extraction so the player's retry re-resolves. Any
-                # other status cannot be spliced at a byte offset safely.
-                if upstream.status_code == 403:
-                    ytdlp.forget_dead_stream(url)
-                return
-    finally:
-        await upstream.aclose()
-
-
 @router.get("/proxy")
 async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
-    """Stream upstream bytes as-is, forwarding Range for seekable media.
-
-    Mid-stream upstream deaths are healed transparently — see [_relay_bytes].
-    """
+    """Stream upstream bytes as-is, forwarding Range for seekable media."""
     _check_url(url, request.app.state.settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
     upstream_headers = {"Accept-Encoding": "identity"}
@@ -315,9 +230,10 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
         if value:
             headers[name] = value
     return StreamingResponse(
-        _relay_bytes(client, url, upstream),
+        upstream.aiter_bytes(),
         status_code=upstream.status_code,
         headers=headers,
+        background=BackgroundTask(upstream.aclose),
     )
 
 
