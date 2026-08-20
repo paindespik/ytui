@@ -259,6 +259,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               : ref.read(maxHeightProvider.notifier).setHeight(h),
                         ),
                       ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Qualité en données mobiles'),
+                        subtitle: const Text(
+                            'Plafond appliqué quand le téléphone est en cellulaire — la lecture passe alors par le serveur'),
+                        trailing: DropdownButton<int>(
+                          value: ref.watch(cellularMaxHeightProvider),
+                          items: [
+                            for (final h in kQualityLadder)
+                              DropdownMenuItem(value: h, child: Text('${h}p')),
+                          ],
+                          onChanged: (h) => h == null
+                              ? null
+                              : ref
+                                  .read(cellularMaxHeightProvider.notifier)
+                                  .setHeight(h),
+                        ),
+                      ),
                     ],
                   ),
                 ),

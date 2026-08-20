@@ -15,6 +15,7 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 import '../api/client.dart';
 import '../api/models.dart';
 import '../services/background_playback.dart';
+import '../services/network.dart';
 import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
@@ -131,6 +132,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   double _rate = 1.0;
   StreamInfo? _streams;
   String? _subUrl;
+
+  /// Active network was cellular when the stream was resolved: the cellular
+  /// quality cap applied and bytes go through the backend proxy. Snapshotted
+  /// per load — the quality controls edit whichever ceiling is in force.
+  bool _onCellular = false;
   StreamSubscription<void>? _completedSub;
   StreamSubscription<String>? _errorSub;
   StreamSubscription<bool>? _playingSub;
@@ -427,8 +433,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (!mounted || _loadedVideoId != video.videoId) return;
       // Armed before open(): every position write is now checked against it.
       _resume.arm(start);
+      // Mobile data gets its own, lower ceiling: a weak cellular link cannot
+      // carry what the Wi-Fi cap picks (measured: 480p ≈39 KB/s fits, 720p+
+      // 60-160 KB/s saturates the link into constant stutter).
+      final cellular = await isCellularNow();
+      if (!mounted || _loadedVideoId != video.videoId) return;
+      _onCellular = cellular;
       final streams = await api.videoStreams(video.videoId,
-          platform: video.platform, maxHeight: ref.read(maxHeightProvider));
+          platform: video.platform,
+          maxHeight: cellular
+              ? ref.read(cellularMaxHeightProvider)
+              : ref.read(maxHeightProvider));
       if (!mounted || _loadedVideoId != video.videoId) return;
       // Only now is a YouTube live recognisable: drop any resume point rather
       // than seek into a window that is seconds long (that stalls the player).
@@ -442,6 +457,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       await _tuneLiveEdge(_playingIsLive);
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
       var openUrl = isSplit ? (streams.videoUrl ?? streams.url) : streams.url;
+      var audioUrl = isSplit ? streams.audioUrl : null;
       Map<String, String>? httpHeaders;
       if (streams.proxyPath != null) {
         // YouTube live: play through the backend's self-healing HLS proxy —
@@ -450,13 +466,47 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         final server = ref.read(settingsProvider);
         openUrl = '${server.url}${streams.proxyPath}';
         httpHeaders = {'Authorization': 'Bearer ${server.token}'};
+      } else if (cellular && !_playingIsLive) {
+        // Mobile data: direct googlevideo is paced for the backend's IP and
+        // served by a far edge — measured 27-82 KB/s and unstable, vs a
+        // steady ~85 KB/s when the backend relays the same bytes. Route VOD
+        // playback through /api/proxy (what the web client already uses);
+        // lives keep their own paths.
+        final server = ref.read(settingsProvider);
+        openUrl = proxiedStreamUrl(server.url, openUrl,
+            playlist: streams.kind == 'hls');
+        if (audioUrl != null) {
+          audioUrl = proxiedStreamUrl(server.url, audioUrl);
+        }
+        httpHeaders = {'Authorization': 'Bearer ${server.token}'};
+      }
+      // media_kit only installs http-header-fields from its on_load hook,
+      // which mpv can run after the external audio-add fetch: the proxied
+      // audio track then hits /api/proxy without Authorization (observed as a
+      // 401 → silent video). Set the property up front so every request of
+      // this load — main media and external tracks alike — carries it, and
+      // clear it explicitly when playing direct URLs (the Bearer token must
+      // never reach an upstream CDN).
+      final headerFields = httpHeaders == null
+          ? ''
+          : httpHeaders.entries.map((e) => '${e.key}: ${e.value}').join(',');
+      final platform = player.platform;
+      if (platform is NativePlayer) {
+        await platform.setProperty('http-header-fields', headerFields);
       }
       final media = Media(openUrl, httpHeaders: httpHeaders);
       await player.open(media);
 
       if (isSplit) {
+        // Chained loads: unloading the previous video fires media_kit's
+        // on_unload hook, which clears http-header-fields — possibly after
+        // the pre-open set above. Re-install it so the external track's
+        // fetch stays authenticated no matter how the hooks interleaved.
+        if (headerFields.isNotEmpty && platform is NativePlayer) {
+          await platform.setProperty('http-header-fields', headerFields);
+        }
         // DASH: separate video/audio URLs — attach the audio as an external track.
-        await player.setAudioTrack(AudioTrack.uri(streams.audioUrl!));
+        await player.setAudioTrack(AudioTrack.uri(audioUrl!));
       }
       if (mounted) setState(() => _streams = streams);
       // media_kit's Media(start:) only sets mpv's `start` property, which was
@@ -747,7 +797,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       builder: (sheetContext) => SafeArea(
         child: Consumer(
           builder: (context, ref, _) {
-            final current = ref.watch(maxHeightProvider);
+            final current = _onCellular
+                ? ref.watch(cellularMaxHeightProvider)
+                : ref.watch(maxHeightProvider);
             final served = _streams?.height;
             // Selectable, not a caption: it is the only way back to "no cap"
             // from the player, and it doubles as the autofocus target when
@@ -760,7 +812,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               children: [
                 ListTile(
                   autofocus: maxIsCurrent,
-                  title: const Text('Qualité maximale'),
+                  title: Text(_onCellular
+                      ? 'Qualité maximale (données mobiles)'
+                      : 'Qualité maximale'),
                   subtitle: Text(served == null
                       ? 'La meilleure piste sous le plafond est choisie.'
                       : 'Actuellement servi : ${served}p'),
@@ -809,7 +863,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           .any((l) => l.video.videoId == video.videoId);
 
   Future<void> _setMaxHeight(int height, Video video) async {
-    await ref.read(maxHeightProvider.notifier).setHeight(height);
+    // Edits whichever ceiling produced the playing stream: on mobile data the
+    // in-player control adjusts the cellular cap, not the Wi-Fi one.
+    if (_onCellular) {
+      await ref.read(cellularMaxHeightProvider.notifier).setHeight(height);
+    } else {
+      await ref.read(maxHeightProvider.notifier).setHeight(height);
+    }
     if (!mounted) return;
     final position = _isLivePlayback(video) ? null : player.state.position;
     await _load(video, resume: false, startAt: position);
@@ -1018,7 +1078,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     hasNext: queue.hasNext,
                     hasPrevious: queue.hasPrevious,
                     audioDelayMs: ref.watch(audioDelayProvider),
-                    maxHeight: ref.watch(maxHeightProvider),
+                    maxHeight: _onCellular
+                        ? ref.watch(cellularMaxHeightProvider)
+                        : ref.watch(maxHeightProvider),
                   ),
               ],
             ),
@@ -1257,7 +1319,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                         TextButton(
                           onPressed: _showQualitySheet,
                           child: Text(
-                            '${ref.watch(maxHeightProvider)}p',
+                            '${_onCellular ? ref.watch(cellularMaxHeightProvider) : ref.watch(maxHeightProvider)}p',
                             style: TextStyle(color: colors.onSurface),
                           ),
                         ),

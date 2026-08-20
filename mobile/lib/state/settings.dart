@@ -12,6 +12,7 @@ const kFirstFeedSeedKey = 'first_feed_seed';
 const kSponsorblockKey = 'sponsorblock_enabled';
 const kAudioDelayKey = 'audio_delay_ms';
 const kMaxHeightKey = 'max_height';
+const kCellularMaxHeightKey = 'max_height_cellular';
 
 class ServerSettings {
   final String url;
@@ -96,6 +97,27 @@ class MaxHeightNotifier extends Notifier<int> {
 
 final maxHeightProvider =
     NotifierProvider<MaxHeightNotifier, int>(MaxHeightNotifier.new);
+
+/// Ceiling used instead of [maxHeightProvider] when the phone is on mobile
+/// data. 480p (~40 KB/s with audio) is what a weak cellular link sustains —
+/// the Wi-Fi ceiling routinely picks tracks (60-160 KB/s) such a link cannot
+/// carry, which showed as constant stutter.
+class CellularMaxHeightNotifier extends Notifier<int> {
+  @override
+  int build() =>
+      ref.watch(sharedPreferencesProvider).getInt(kCellularMaxHeightKey) ?? 480;
+
+  Future<void> setHeight(int height) async {
+    await ref
+        .read(sharedPreferencesProvider)
+        .setInt(kCellularMaxHeightKey, height);
+    state = height;
+  }
+}
+
+final cellularMaxHeightProvider =
+    NotifierProvider<CellularMaxHeightNotifier, int>(
+        CellularMaxHeightNotifier.new);
 
 const kQualityLadder = [360, 480, 720, 1080, 1440, 2160];
 
