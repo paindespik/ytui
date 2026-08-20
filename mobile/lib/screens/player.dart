@@ -135,6 +135,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   // which needs no seek at all.
   int _stallStrikes = 0;
   int _progressEvents = 0;
+  // Progress a strike-forced restart abandoned: the heartbeat must not save
+  // below it, or restarting from 0 would erase the server bookmark it could
+  // not reach (measured: 251 s of real progress overwritten with 1 s).
+  Duration _bookmarkFloor = Duration.zero;
   DateTime _lastStallRecoveryAt = DateTime.fromMillisecondsSinceEpoch(0);
   List<SponsorSegment> _segments = const [];
   DateTime _lastSkip = DateTime.fromMillisecondsSinceEpoch(0);
@@ -388,10 +392,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // A live restarts at its edge; a VOD picks up where the picture froze —
     // unless every recovery wedged again before playing: then the resume
     // point itself is the poison (a seek the demuxer cannot serve) and the
-    // only way out is to start over from the beginning.
-    final at = _isLivePlayback(video) || _stallStrikes >= 3
-        ? null
-        : player.state.position;
+    // only way out is to start over from the beginning. The abandoned
+    // position stays floored so the heartbeat cannot erase that progress.
+    Duration? at = _isLivePlayback(video) ? null : player.state.position;
+    if (at != null && _stallStrikes >= 3) {
+      _bookmarkFloor = at;
+      at = null;
+    }
     _retried = false;  // a fresh stream deserves a fresh error budget
     _noteProgress();
     unawaited(_load(video, resume: false, startAt: at));
@@ -435,7 +442,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   Future<void> _load(Video video,
       {bool resume = true, Duration? startAt}) async {
-    if (_loadedVideoId != video.videoId) _stallStrikes = 0; // fresh video
+    if (_loadedVideoId != video.videoId) {
+      _stallStrikes = 0; // fresh video, fresh recovery budget
+      _bookmarkFloor = Duration.zero;
+    }
     _progressEvents = 0;
     _loadedVideoId = video.videoId;
     _completedFor = null;
@@ -1006,6 +1016,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // A resume seek that has not landed yet: the player still reports the
     // start of the stream, and writing that would erase the resume point.
     if (!_resume.allowsSave(pos.inSeconds.toDouble())) return;
+    // Below progress a forced restart abandoned: keep the older, larger
+    // bookmark until playback catches up with it again.
+    if (pos < _bookmarkFloor) return;
+    _bookmarkFloor = Duration.zero;
     try {
       await api.savePosition(
         target.videoId,
