@@ -303,6 +303,20 @@ def test_streams_audio_only(client):
     assert body["url"] == "https://x/audio.m4a"
 
 
+def test_streams_audio_only_prefers_original_over_dub(client):
+    # Third site of the same trap: the audio_only branch used a bare bitrate
+    # max() and could hand out an auto-dubbed rendition.
+    dub = {**AONLY, "format_id": "140-1", "url": "https://x/audio-dub.m4a",
+           "format_note": "English (United States) dubbed-auto", "abr": 192}
+    orig = {**AONLY, "format_id": "140-0", "url": "https://x/audio-orig.m4a",
+            "format_note": "French (France) original (default)", "abr": 128}
+    with _patch_ydl(_info([PROG, dub, orig])):
+        resp = client.get(
+            "/api/videos/vid000000001/streams", params={"audio_only": True}
+        )
+    assert resp.json()["url"] == "https://x/audio-orig.m4a"
+
+
 def test_streams_max_height_falls_back_to_lowest(client):
     with _patch_ydl(_info([VONLY, AONLY])):
         resp = client.get(

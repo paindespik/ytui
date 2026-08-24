@@ -736,7 +736,9 @@ def _extract_streams(
             if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
         ]
         if audio:
-            best = max(audio, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+            # _audio_rank keeps the original soundtrack ahead of auto-dubbed
+            # renditions (the Opus preference is benign here).
+            best = max(audio, key=_audio_rank)
             return make("progressive", best["url"])
         # fall through: use whatever combined format exists
 
