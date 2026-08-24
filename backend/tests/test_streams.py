@@ -250,14 +250,20 @@ def test_streams_split_dash(client):
     assert body["audio_url"] == "https://x/audio.m4a"
 
 
+# Real shape of a multi-audio YouTube video (visionos client): dubs carry no
+# "dub" marker anywhere, just "German (DE), low" with language_preference -1;
+# the original track reads "… original (default)" with language_preference 10.
+DUB = {**AONLY, "format_id": "140-1", "url": "https://x/audio-dub.m4a",
+       "format_note": "German (DE), low", "language": "de-DE",
+       "language_preference": -1, "abr": 192}
+ORIG = {**AONLY, "format_id": "140-0", "url": "https://x/audio-orig.m4a",
+        "format_note": "English (US) original (default), low",
+        "language": "en-US", "language_preference": 10, "abr": 128}
+
+
 def test_streams_split_audio_prefers_original_over_dub(client):
-    # YouTube lists auto-dubbed renditions next to the original soundtrack:
-    # a bare bitrate max() used to hand a French video its English auto-dub.
-    dub = {**AONLY, "format_id": "140-1", "url": "https://x/audio-dub.m4a",
-           "format_note": "English (United States) dubbed-auto", "abr": 192}
-    orig = {**AONLY, "format_id": "140-0", "url": "https://x/audio-orig.m4a",
-            "format_note": "French (France) original (default)", "abr": 128}
-    with _patch_ydl(_info([VONLY, dub, orig])):
+    # A bare bitrate max() used to hand out the higher-bitrate auto-dub.
+    with _patch_ydl(_info([VONLY, DUB, ORIG])):
         resp = client.get("/api/videos/vid000000001/streams")
     body = resp.json()
     assert body["kind"] == "split"
@@ -268,12 +274,8 @@ def test_split_mp4_audio_prefers_original_over_dub():
     # The DASH/MPD path (browser >360p) had the same bare bitrate max() and
     # kept serving auto-dubbed audio after the /streams path was fixed.
     vonly = {**VONLY, "ext": "mp4", "width": 1920}
-    dub = {**AONLY, "ext": "m4a", "format_id": "140-1",
-           "url": "https://x/audio-dub.m4a",
-           "format_note": "German (Germany) dubbed-auto", "abr": 192}
-    orig = {**AONLY, "ext": "m4a", "format_id": "140-0",
-            "url": "https://x/audio-orig.m4a",
-            "format_note": "French (France) original (default)", "abr": 128}
+    dub = {**DUB, "ext": "m4a"}
+    orig = {**ORIG, "ext": "m4a"}
     with _patch_ydl(_info([vonly, dub, orig])):
         split = ytdlp._extract_split_mp4(
             "https://www.youtube.com/watch?v=dubmpd000001", 1440
@@ -306,15 +308,24 @@ def test_streams_audio_only(client):
 def test_streams_audio_only_prefers_original_over_dub(client):
     # Third site of the same trap: the audio_only branch used a bare bitrate
     # max() and could hand out an auto-dubbed rendition.
-    dub = {**AONLY, "format_id": "140-1", "url": "https://x/audio-dub.m4a",
-           "format_note": "English (United States) dubbed-auto", "abr": 192}
-    orig = {**AONLY, "format_id": "140-0", "url": "https://x/audio-orig.m4a",
-            "format_note": "French (France) original (default)", "abr": 128}
-    with _patch_ydl(_info([PROG, dub, orig])):
+    with _patch_ydl(_info([PROG, DUB, ORIG])):
         resp = client.get(
             "/api/videos/vid000000001/streams", params={"audio_only": True}
         )
     assert resp.json()["url"] == "https://x/audio-orig.m4a"
+
+
+def test_streams_dub_note_penalized_without_language_preference(client):
+    # Fallback for extractors that only mark the dub in format_note.
+    dub = {**AONLY, "format_id": "140-1", "url": "https://x/audio-dub.m4a",
+           "format_note": "English (United States) dubbed-auto", "abr": 192}
+    orig = {**AONLY, "format_id": "140-0", "url": "https://x/audio-orig.m4a",
+            "format_note": "French (France) original (default)", "abr": 128}
+    with _patch_ydl(_info([VONLY, dub, orig])):
+        resp = client.get("/api/videos/vid000000001/streams")
+    body = resp.json()
+    assert body["kind"] == "split"
+    assert body["audio_url"] == "https://x/audio-orig.m4a"
 
 
 def test_streams_audio_only_keeps_bitrate_order_across_codecs(client):
