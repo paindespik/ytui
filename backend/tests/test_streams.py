@@ -264,6 +264,24 @@ def test_streams_split_audio_prefers_original_over_dub(client):
     assert body["audio_url"] == "https://x/audio-orig.m4a"
 
 
+def test_split_mp4_audio_prefers_original_over_dub():
+    # The DASH/MPD path (browser >360p) had the same bare bitrate max() and
+    # kept serving auto-dubbed audio after the /streams path was fixed.
+    vonly = {**VONLY, "ext": "mp4", "width": 1920}
+    dub = {**AONLY, "ext": "m4a", "format_id": "140-1",
+           "url": "https://x/audio-dub.m4a",
+           "format_note": "German (Germany) dubbed-auto", "abr": 192}
+    orig = {**AONLY, "ext": "m4a", "format_id": "140-0",
+            "url": "https://x/audio-orig.m4a",
+            "format_note": "French (France) original (default)", "abr": 128}
+    with _patch_ydl(_info([vonly, dub, orig])):
+        split = ytdlp._extract_split_mp4(
+            "https://www.youtube.com/watch?v=dubmpd000001", 1440
+        )
+    assert split is not None
+    assert split.audio_url == "https://x/audio-orig.m4a"
+
+
 def test_streams_split_audio_prefers_opus_over_m4a(client):
     # Same soundtrack in both codecs: Opus/WebM seeks reliably through the
     # byte proxy where the m4a rendition wedged the mobile demuxer.

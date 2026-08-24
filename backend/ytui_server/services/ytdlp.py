@@ -924,7 +924,16 @@ def _extract_split_mp4(url: str, max_height: int) -> SplitMp4 | None:
     if not videos or not audios:
         return None
     bv = max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
-    ba = max(audios, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+    # Same dubbed-auto trap as _audio_rank: a plain bitrate max() can pick an
+    # auto-dubbed rendition over the original soundtrack. Original first; we
+    # are constrained to mp4a here so no Opus preference applies.
+    ba = max(
+        audios,
+        key=lambda f: (
+            "dub" not in (f.get("format_note") or "").lower(),
+            f.get("abr") or f.get("tbr") or 0,
+        ),
+    )
     height = bv.get("height") or 0
     duration = info.get("duration")
     return SplitMp4(
