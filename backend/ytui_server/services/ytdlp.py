@@ -736,9 +736,14 @@ def _extract_streams(
             if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
         ]
         if audio:
-            # _audio_rank keeps the original soundtrack ahead of auto-dubbed
-            # renditions (the Opus preference is benign here).
-            best = max(audio, key=_audio_rank)
+            # Original soundtrack first, then bitrate. No Opus preference
+            # here: this path hands a raw audio URL to the client, so the
+            # codec choice must stay what it always was (top-bitrate m4a) —
+            # a <audio src> consumer (Safari/iOS) cannot play WebM/Opus.
+            best = max(
+                audio,
+                key=lambda f: (_is_original(f), f.get("abr") or f.get("tbr") or 0),
+            )
             return make("progressive", best["url"])
         # fall through: use whatever combined format exists
 
@@ -861,20 +866,27 @@ def _extract_streams(
     raise UpstreamError("No playable stream found")
 
 
-def _audio_rank(f: dict) -> tuple:
-    """Order audio-only formats for the split path, best last.
+def _is_original(f: dict) -> bool:
+    """True unless the format is a dubbed rendition.
 
     YouTube lists auto-dubbed renditions (format_note "… dubbed-auto") next
     to the original soundtrack at comparable bitrates: a plain bitrate max()
     used to hand a French video its English auto-dub. The original always
     wins; formats without dub metadata (other platforms) count as original.
-    Opus/WebM then beats AAC/m4a — same bitrates, and the m4a rendition is
-    what the mobile player's demuxer failed to resume-seek through the proxy
-    (stuck `seeking=yes`, empty audio-pts) while Opus seeked fine.
     """
-    note = (f.get("format_note") or "").lower()
+    return "dub" not in (f.get("format_note") or "").lower()
+
+
+def _audio_rank(f: dict) -> tuple:
+    """Order audio-only formats for the split path, best last.
+
+    Original soundtrack first (see _is_original). Opus/WebM then beats
+    AAC/m4a — same bitrates, and the m4a rendition is what the mobile
+    player's demuxer failed to resume-seek through the proxy (stuck
+    `seeking=yes`, empty audio-pts) while Opus seeked fine.
+    """
     return (
-        "dub" not in note,
+        _is_original(f),
         (f.get("acodec") or "").startswith("opus"),
         f.get("abr") or f.get("tbr") or 0,
     )
@@ -926,15 +938,11 @@ def _extract_split_mp4(url: str, max_height: int) -> SplitMp4 | None:
     if not videos or not audios:
         return None
     bv = max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
-    # Same dubbed-auto trap as _audio_rank: a plain bitrate max() can pick an
-    # auto-dubbed rendition over the original soundtrack. Original first; we
-    # are constrained to mp4a here so no Opus preference applies.
+    # Original first (see _is_original); constrained to mp4a here so no
+    # Opus preference applies.
     ba = max(
         audios,
-        key=lambda f: (
-            "dub" not in (f.get("format_note") or "").lower(),
-            f.get("abr") or f.get("tbr") or 0,
-        ),
+        key=lambda f: (_is_original(f), f.get("abr") or f.get("tbr") or 0),
     )
     height = bv.get("height") or 0
     duration = info.get("duration")

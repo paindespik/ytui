@@ -317,6 +317,19 @@ def test_streams_audio_only_prefers_original_over_dub(client):
     assert resp.json()["url"] == "https://x/audio-orig.m4a"
 
 
+def test_streams_audio_only_keeps_bitrate_order_across_codecs(client):
+    # Unlike the split path, audio_only hands a raw URL to the client: no
+    # Opus preference (a <audio src> consumer cannot play WebM/Opus), the
+    # top-bitrate rendition wins as it always did.
+    opus = {**AONLY, "format_id": "251", "url": "https://x/audio.webm",
+            "acodec": "opus", "abr": 118}
+    with _patch_ydl(_info([PROG, AONLY, opus])):
+        resp = client.get(
+            "/api/videos/vid000000001/streams", params={"audio_only": True}
+        )
+    assert resp.json()["url"] == "https://x/audio.m4a"
+
+
 def test_streams_max_height_falls_back_to_lowest(client):
     with _patch_ydl(_info([VONLY, AONLY])):
         resp = client.get(
