@@ -228,6 +228,12 @@ export class FakeMediaElement extends FakeNode {
     this.paused = false;
     this.dispatchEvent(new Event("play"));
   }
+  /// La lecture a réellement démarré (première frame) — sémantique de `playing`.
+  emitPlaying() {
+    if (this.readyState < 3) this.readyState = 3;
+    this.paused = false;
+    this.dispatchEvent(new Event("playing"));
+  }
   emitVolumeChange() {
     this.dispatchEvent(new Event("volumechange"));
   }

@@ -69,17 +69,20 @@ export class Player {
     this._gainNode = null;
     this._limiter = null;
     this._gestureResume = null;
+    this._volumeSynced = false;
 
     this._onTimeUpdate = this._onTimeUpdate.bind(this);
     this._onElementError = this._onElementError.bind(this);
     this._onVolume = this._onVolume.bind(this);
     this._onPlay = this._onPlay.bind(this);
+    this._onPlaying = this._onPlaying.bind(this);
     this._onSeeked = this._onSeeked.bind(this);
     this._onEnded = this._onEnded.bind(this);
     videoEl.addEventListener("timeupdate", this._onTimeUpdate);
     videoEl.addEventListener("error", this._onElementError);
     videoEl.addEventListener("volumechange", this._onVolume);
     videoEl.addEventListener("play", this._onPlay);
+    videoEl.addEventListener("playing", this._onPlaying);
     videoEl.addEventListener("seeked", this._onSeeked);
     videoEl.addEventListener("ended", this._onEnded);
     videoEl.volume = prefs.volume;
@@ -140,6 +143,7 @@ export class Player {
     this.el.removeEventListener("error", this._onElementError);
     this.el.removeEventListener("volumechange", this._onVolume);
     this.el.removeEventListener("play", this._onPlay);
+    this.el.removeEventListener("playing", this._onPlaying);
     this.el.removeEventListener("seeked", this._onSeeked);
     this.el.removeEventListener("ended", this._onEnded);
     for (const k of Object.keys(playerActions)) delete playerActions[k];
@@ -167,6 +171,7 @@ export class Player {
     // Web Audio existe (il impose le proxy same-origin).
     this._armResume(start);
     this._ended = false;
+    this._volumeSynced = false; // un nouvel attach = un nouveau flux OS à re-synchroniser
     this._applyGain();
     const v = this.video;
     const streamsP = api.videoStreams(v.video_id, {
@@ -711,6 +716,26 @@ export class Player {
 
   _onPlay() {
     this._resumeAudio();
+  }
+
+  // Décalage de volume Gecko/Linux (Pulse/PipeWire) : au démarrage du flux
+  // audio, le mixeur d'OS peut « restaurer » le volume de la stream à une
+  // ancienne valeur par-dessus celui de l'élément — la vidéo démarre alors
+  // plus bas que l'indique la barre (icône normale, rien de muet), et le
+  // premier changement de volume de l'utilisateur rétablit le niveau réel.
+  // Une micro-variation de el.volume au premier `playing` force Gecko à
+  // repousser le volume courant au flux (cubeb_stream_set_volume) : même
+  // effet que toucher la barre, mais sans geste requis.
+  _onPlaying() {
+    if (this._volumeSynced || this.el.muted || this.el.volume < 0.005) return;
+    this._volumeSynced = true;
+    const v = this.el.volume;
+    this.el.volume = v - 0.005; // garde ≥ 0.005 : le dip ne descend jamais sous 0
+    // Restauration courte après le flux : le dip de 0,5 % est inaudible, et
+    // le 2ᵉ set garantit qu'un « restore » OS tardif ne survit pas.
+    setTimeout(() => {
+      if (!this._destroyed) this.el.volume = v;
+    }, 150);
   }
 
   _onVolume() {

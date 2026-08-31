@@ -15,6 +15,7 @@ import {
   fakeHls,
   mockApi,
   flush,
+  wait,
   makeVideo,
 } from "./harness.mjs";
 
@@ -626,6 +627,106 @@ describe("lecteur web — reprise et playlist", () => {
       player._savePosition();
       await flush();
       assert.deepEqual(savedPositions(api), []);
+      player.destroy();
+    });
+  });
+
+  // ─── Synchronisation du volume au premier `playing` (Gecko/Linux) ───
+
+  describe("nudge de volume au premier playing", () => {
+    test("le volume est micro-ajusté puis restauré au démarrage de la lecture", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi(routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      assert.equal(el.volume, 1);
+
+      el.emitPlaying();
+      assert.ok(el.volume < 1, `dip attendu, obtenu ${el.volume}`);
+      await wait(170);
+      assert.equal(el.volume, 1, "volume restauré après le dip");
+      player.destroy();
+    });
+
+    test("volume très bas : pas de dip (le dip ne doit pas descendre sous 0)", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi(routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      el.volume = 0.004; // juste sous le garde
+      el.emitPlaying();
+      assert.equal(el.volume, 0.004, "pas de dip, pas d'exception");
+      player.destroy();
+    });
+
+    test("un seul nudge par flux : le 2ᵉ playing ne replonge pas", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi(routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      await el.emitPlaying();
+      await wait(170);
+      el.emitPlaying(); // ex. reprise après pause
+      assert.equal(el.volume, 1, "plus de dip sur un playing suivant");
+      player.destroy();
+    });
+
+    test("muet : pas de dip (le flux OS n'est pas encore audible)", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi(routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      el.muted = true; // muet par l'utilisateur avant le démarrage
+      el.emitPlaying();
+      assert.equal(el.volume, 1);
+      el.muted = false;
+      el.emitPlaying(); // dé-muet → le flux démarre : le nudge a lieu
+      assert.ok(el.volume < 1);
+      await wait(170);
+      assert.equal(el.volume, 1);
+      player.destroy();
+    });
+
+    test("la préférence persistée est laissée intacte après le nudge", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi(routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }));
+      globalThis.localStorage.setItem("ytui.volume", "0.8");
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      assert.equal(el.volume, 0.8);
+      el.emitPlaying();
+      assert.ok(el.volume < 0.8);
+      await wait(170);
+      assert.equal(el.volume, 0.8);
+      assert.equal(globalThis.localStorage.getItem("ytui.volume"), "0.8");
+      player.destroy();
+    });
+
+    test("un nouvel attach (flux expiré) re-arme le nudge", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi(routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      el.emitPlaying();
+      await wait(170);
+
+      await player._fatalOrRetry("Flux interrompu");
+      el.emitPlaying();
+      assert.ok(el.volume < 1, "nouveau flux → nouveau nudge");
+      await wait(170);
+      assert.equal(el.volume, 1);
       player.destroy();
     });
   });
