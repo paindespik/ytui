@@ -299,16 +299,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // mpv's default ~2 s of readahead freezes on every blip. 30 s of media
     // (bounded at 64 MiB) absorbs them; `cache-pause-wait` makes a rebuffer
     // gather 3 s before resuming instead of stutter-resuming frame by frame.
-    // Cellular carriers put phones behind NAT64 (64:ff9b::/96): the gateway
-    // silently reaps long-lived paced connections it considers idle, and a
-    // read on such a blackholed socket blocks for ~45 s (no RST) — measured
-    // wedging every resume-seek. Bound every stream I/O and let ffmpeg
-    // reconnect with a Range at the current offset instead of hanging.
-    // rw_timeout is in microseconds; 8 s stays under the stall watchdog.
-    await platform.setProperty(
-      'stream-lavf-o',
-      'reconnect=1,reconnect_streamed=1,reconnect_delay_max=3,rw_timeout=8000000',
-    );
+    // (stream-lavf-o reconnect/rw_timeout tuning is per-load: [_tuneTransport].)
     await platform.setProperty('cache', 'yes');
     await platform.setProperty('cache-secs', '30');
     await platform.setProperty('demuxer-readahead-secs', '30');
@@ -322,12 +313,28 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// media to buffer from, not enough to ride out a network blip. Starting 6
   /// segments back doubles the cushion — the ~30 s of extra latency behind
   /// the live edge is the price of smooth playback.
-  Future<void> _tuneLiveEdge(bool live) async {
+  ///
+  /// The lavf reconnect/rw_timeout options cure cellular NAT64 blackholes on
+  /// plain progressive streams (a dead read aborts in 8 s and ffmpeg reopens
+  /// with a Range at the current offset), but they POISON HLS and lives:
+  /// any transient EIO mid-segment makes `reconnect_streamed` reopen a
+  /// Range-less endpoint (the live proxy restarts the segment at byte 0
+  /// while ffmpeg keeps its own offset) — measured on-device as corrupted
+  /// A/V, every variant re-downloaded in a loop, cache pinned at 0 s and an
+  /// endless spinner. Only direct non-HLS media gets the reconnect net.
+  Future<void> _tuneTransport(bool live, {required bool hls}) async {
     final platform = player.platform;
     if (platform is! NativePlayer) return;
     await platform.setProperty(
       'demuxer-lavf-o',
       live ? 'live_start_index=-6' : '',
+    );
+    await platform.setProperty(
+      'stream-lavf-o',
+      live || hls
+          ? ''
+          : 'reconnect=1,reconnect_streamed=1,reconnect_delay_max=3,'
+              'rw_timeout=8000000',
     );
   }
 
@@ -508,7 +515,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
       // The audio backend must be picked before playback starts.
       await _mpvConfigured;
-      await _tuneLiveEdge(_playingIsLive);
+      await _tuneTransport(_playingIsLive,
+          hls: streams.kind == 'hls' || streams.proxyPath != null);
       final isSplit = streams.kind == 'split' && streams.audioUrl != null;
       var openUrl = isSplit ? (streams.videoUrl ?? streams.url) : streams.url;
       var audioUrl = isSplit ? streams.audioUrl : null;
