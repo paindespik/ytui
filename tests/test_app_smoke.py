@@ -155,6 +155,9 @@ class FakeClient:
     async def lives(self) -> list[Video]:
         return []
 
+    async def sponsor_segments(self, video_id, platform="youtube"):
+        return []
+
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
@@ -561,3 +564,41 @@ async def test_q_quits_from_home(app):
         await pilot.press("q")
         await pilot.pause()
         assert app._exit
+
+async def test_ctrl_enter_plays_also_in_separate_mpv(app, monkeypatch):
+    """Ctrl+Enter on a list spawns a one-shot mpv, leaving the controlled player alone."""
+    launched: list[tuple[str, object]] = []
+
+    def fake_play(url, player, audio_only=None, start=None):
+        launched.append((url, start))
+
+    monkeypatch.setattr("ytui.app.play", fake_play)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = app.screen.query_one("#feed-list", VideoList)
+        video_list.focus()
+        await pilot.pause()
+        await pilot.press("ctrl+enter")
+        await app.workers.wait_for_complete()
+    assert launched == [(VIDEO.url, None)]
+    assert not app.player.process_alive()
+
+
+async def test_detail_ctrl_enter_play_also(app, monkeypatch):
+    launched: list[tuple[str, object]] = []
+
+    def fake_play(url, player, audio_only=None, start=None):
+        launched.append((url, start))
+
+    monkeypatch.setattr("ytui.app.play", fake_play)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_detail(VIDEO)
+        await pilot.pause()
+        await pilot.press("ctrl+enter")
+        await app.workers.wait_for_complete()
+    assert launched == [(VIDEO.url, None)]

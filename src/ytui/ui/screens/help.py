@@ -20,6 +20,7 @@ HELP_TEXT = """\
   j / k / ↓ / ↑   Move selection
   g / G           Top / bottom
   Enter           Play video/playlist in mpv, or open a channel
+  Ctrl+Enter      Play too: separate mpv window, keeps current playback
   e               Enqueue in the running mpv (append-play)
   i               Video details (full description, views, likes)
   o               Open the channel or playlist of the item
@@ -68,7 +69,7 @@ HELP_TEXT = """\
   In a playlist:  Enter play entry, p play all (mpv queue), x remove
 
 [b]Video details[/b]
-  Enter play · A audio only · e enqueue · y copy URL
+  Enter play · Ctrl+Enter play too · A audio only · e enqueue · y copy URL
   o open channel · d download · s save to playlist
   L like · C comment (YouTube account)
   c               Reload comments (YouTube / Odysee, read-only)

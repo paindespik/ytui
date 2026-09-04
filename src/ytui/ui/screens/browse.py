@@ -17,6 +17,7 @@ class BrowseScreen(Screen):
         Binding("o", "open_item", "Open channel/playlist"),
         Binding("a", "add_channel", "Follow channel"),
         Binding("e", "enqueue", "Enqueue"),
+        Binding("ctrl+enter", "play_also", "Play too"),
         Binding("i", "detail", "Details"),
         Binding("A", "play_audio", "Audio only", show=False),
         Binding("d", "download", "Download", show=False),
@@ -76,6 +77,12 @@ class BrowseScreen(Screen):
         if video is None:
             return
         self.app.enqueue_video(video)
+
+    def action_play_also(self) -> None:
+        video = self._highlighted()
+        if video is None:
+            return
+        self.app.play_also(video)
 
     def action_detail(self) -> None:
         video = self._highlighted()

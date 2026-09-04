@@ -47,6 +47,7 @@ class VideoDetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("enter", "play", "Play"),
+        Binding("ctrl+enter", "play_also", "Play too"),
         Binding("A", "play_audio", "Audio only"),
         Binding("e", "enqueue", "Enqueue"),
         Binding("y", "copy_url", "Copy URL"),
@@ -187,6 +188,9 @@ class VideoDetailScreen(Screen):
 
     def action_play(self) -> None:
         self.app.play_video(self.video)
+
+    def action_play_also(self) -> None:
+        self.app.play_also(self.video)
 
     def action_play_audio(self) -> None:
         self.app.play_video(self.video, audio_only=True)

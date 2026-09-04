@@ -328,6 +328,29 @@ class YtuiApp(App):
         ):
             self.push_screen(LiveChatScreen(video))
 
+    def play_also(self, video: Video) -> None:
+        """Play in a separate one-shot mpv; the controlled player keeps running."""
+        if video.kind == "channel":
+            self.notify("Channels cannot be played (press o to open).", timeout=5)
+            return
+        self._record_watch(video)
+        # exclusive=False so a second Ctrl+Enter does not cancel the first
+        # (Twitch/TikTok URL resolution can take a few seconds).
+        self.run_worker(
+            self._play_also_async(video), group="player-extra", exclusive=False
+        )
+
+    async def _play_also_async(self, video: Video) -> None:
+        start = await self._resume_start_for(video)
+        url = await self._playback_url(video)
+        try:
+            play(url, self.config.player, start=start or None)
+        except PlayerError as exc:
+            self.notify(str(exc), severity="error", timeout=10)
+            return
+        self._notify_resume(start)
+        self.notify(f"Also playing: {video.title}", timeout=4)
+
     def play_from_history(self, video: Video) -> None:
         """Replay from the history screen: resume position and playlist context."""
         self._record_watch(video)
