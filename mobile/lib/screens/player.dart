@@ -14,6 +14,7 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../services/audio_events.dart';
 import '../services/background_playback.dart';
 import '../services/network.dart';
 import '../state/providers.dart';
@@ -33,6 +34,14 @@ const _kAudioDelayStepMs = 25;
 /// Shown whenever an account action comes back as 409: the server holds no
 /// YouTube OAuth token (pushed from the desktop with `ytui auth push`).
 const _kNotConnected = 'Compte YouTube non connecté (ytui auth push)';
+
+/// Android activity channel carrying Bluetooth headset plug state and the
+/// Bose earbuds' media buttons: see [AudioEvent] and MainActivity.kt.
+const _kAudioChannel = 'dev.ytui.app/audio';
+
+/// Android activity channel for device queries and media-session state
+/// (see MainActivity.kt).
+const _kDeviceChannel = 'dev.ytui.app/device';
 
 /// Maps raw playback errors to user-friendly French messages.
 String _friendlyError(String raw) {
@@ -155,6 +164,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   StreamSubscription<bool>? _playingSub;
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<PlayerLog>? _logSub;
+  StreamSubscription<dynamic>? _audioSub;
   bool _immersive = false;
 
   /// The account's rating for the playing video ("like"/"dislike"/"none") and
@@ -178,6 +188,37 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   /// remote scrubs instead of queueing dozens of decoder seeks.
   Duration? _seekTarget;
   Timer? _seekDebounce;
+
+  /// Android audio events (see [AudioEvent]): a disconnected Bluetooth
+  /// earphone pauses the video (nobody is listening to it anymore), and the
+  /// Bose earbuds' button presses steer play/pause/skip.
+  void _onAudioEvent(Map<Object?, Object?> event) {
+    final audio = AudioEvent.parse(event);
+    if (audio.btConnected != null) {
+      final connected = audio.btConnected!;
+      debugPrint(
+          'ytui audio/bt_headset: ${connected ? 'connected' : 'disconnected'}');
+      if (!connected && player.state.playing) player.pause();
+      return;
+    }
+    final button = audio.mediaButton;
+    if (button == null) return;
+    debugPrint('ytui audio/media_button: ${button.name}');
+    _revealControls(); // no-op on phone; keeps the TV overlay visible
+    final queue = ref.read(queueProvider);
+    switch (button) {
+      case MediaButton.play:
+        player.play();
+      case MediaButton.pause:
+        player.pause();
+      case MediaButton.playPause:
+        player.playOrPause();
+      case MediaButton.next:
+        if (queue.hasNext) ref.read(queueProvider.notifier).next();
+      case MediaButton.previous:
+        if (queue.hasPrevious) ref.read(queueProvider.notifier).previous();
+    }
+  }
 
   /// Landscape → fullscreen: hide the system bars (immersive) while the video
   /// fills the screen, mirroring the YouTube app. Idempotent so it can be
@@ -252,6 +293,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         title: video.title,
         text: playing ? '▶ ${video.channelTitle}' : '⏸ ${video.channelTitle}',
       );
+      // Keep the Android media session in sync (Bose earbuds' buttons map to
+      // play or pause according to this state; the lock screen shows it too).
+      unawaited(
+        MethodChannel(_kDeviceChannel)
+            .invokeMethod('setMediaPlaybackState', playing)
+            .catchError((_) {}),
+      );
     });
     _positionSub = player.stream.position.listen((position) {
       if (position != _lastPosition) {
@@ -274,6 +322,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         debugPrint('ytui mpv/${log.prefix}: ${log.text.trim()}');
       }
     });
+    // Bluetooth earphone plug state + media buttons (Bose), from the Android
+    // activity: pause on disconnect, buttons steer play/pause/skip.
+    _audioSub = EventChannel(_kAudioChannel).receiveBroadcastStream().listen(
+      (dynamic event) => _onAudioEvent(event as Map<Object?, Object?>),
+    );
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) => _savePosition());
     _stallWatchdog =
         Timer.periodic(const Duration(seconds: 5), (_) => _checkStall());
@@ -1050,6 +1103,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _playingSub?.cancel();
     _positionSub?.cancel();
     _logSub?.cancel();
+    _audioSub?.cancel();
     _hideControls?.cancel();
     _seekDebounce?.cancel();
     _surfaceFocus.dispose();
