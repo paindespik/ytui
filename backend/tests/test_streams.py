@@ -520,7 +520,15 @@ def test_entry_to_item_no_id():
 
 
 def _make_lockup(content_id="rel0000001", title="Related video", channel="Chan Related",
-                  duration_text="4:20", thumb_url="https://i.ytimg.com/vi/rel0000001/hq.jpg"):
+                  duration_text="4:20", thumb_url="https://i.ytimg.com/vi/rel0000001/hq.jpg",
+                  views=None):
+    rows = [{"metadataParts": [{"text": {"content": channel}}]}]
+    if views is not None:
+        # The InnerTube /next shape: ["144K", "4d ago"] second row.
+        rows.append({"metadataParts": [
+            {"text": {"content": views}},
+            {"text": {"content": "4d ago"}},
+        ]})
     return {
         "lockupViewModel": {
             "contentId": content_id,
@@ -530,9 +538,7 @@ def _make_lockup(content_id="rel0000001", title="Related video", channel="Chan R
                     "title": {"content": title},
                     "metadata": {
                         "contentMetadataViewModel": {
-                            "metadataRows": [
-                                {"metadataParts": [{"text": {"content": channel}}]}
-                            ]
+                            "metadataRows": rows
                         }
                     },
                 }
@@ -561,18 +567,25 @@ def _yt_initial_data_html(lockups):
 
 
 class FakeResponse:
-    def __init__(self, text, status_code=200):
+    def __init__(self, text, status_code=200, json_data=None):
         self.text = text
         self.status_code = status_code
+        self._json_data = json_data
 
     def raise_for_status(self):
         return None
 
+    def json(self):
+        if self._json_data is None:
+            raise ValueError("not json")
+        return self._json_data
+
 
 class FakeAsyncClient:
-    def __init__(self, response=None, error=None, **kwargs):
+    def __init__(self, response=None, error=None, post_response=None, **kwargs):
         self._response = response
         self._error = error
+        self._post_response = post_response
 
     async def __aenter__(self):
         return self
@@ -584,6 +597,11 @@ class FakeAsyncClient:
         if self._error is not None:
             raise self._error
         return self._response
+
+    async def post(self, url, **kwargs):
+        if self._error is not None:
+            raise self._error
+        return self._post_response or self._response
 
 
 def test_related_videos(client):
@@ -619,6 +637,40 @@ def test_related_videos_network_error(client):
     with patch.object(httpx, "AsyncClient", lambda **kw: fake_client):
         resp = client.get("/api/videos/vid000000001/related")
     assert resp.status_code == 502
+
+
+def test_related_videos_next_endpoint_carries_view_counts(client):
+    """The InnerTube /next primary path parses the [\"144K\", ...] row."""
+    next_data = {"contents": {"items": [_make_lockup(views="144K")]}}
+    fake_client = FakeAsyncClient(post_response=FakeResponse("", json_data=next_data))
+    with patch.object(httpx, "AsyncClient", lambda **kw: fake_client):
+        resp = client.get("/api/videos/vid000000001/related")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["video_id"] == "rel0000001"
+    assert items[0]["view_count"] == 144000
+
+
+def test_parse_compact_count():
+    assert ytdlp._parse_compact_count("144K") == 144000
+    assert ytdlp._parse_compact_count("1.5B") == 1_500_000_000
+    assert ytdlp._parse_compact_count("1,815,671") == 1815671
+    assert ytdlp._parse_compact_count("37K") == 37000
+    assert ytdlp._parse_compact_count("1234567") == 1234567
+    # Ages and labels are not counts.
+    assert ytdlp._parse_compact_count("4d ago") is None
+    assert ytdlp._parse_compact_count("Streamed 1d ago") is None
+    assert ytdlp._parse_compact_count("") is None
+
+
+def test_streams_expose_view_count(client):
+    """/streams rides on the same yt-dlp extraction: the count is free."""
+    with _patch_ydl(_info([PROG, HLS], manifest_url="https://x/master.m3u8",
+                          view_count=1234567)):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    assert resp.json()["view_count"] == 1234567
 
 
 # ─── YouTube ~60 s delivery cap (see ytdlp._delivery_truncated) ───

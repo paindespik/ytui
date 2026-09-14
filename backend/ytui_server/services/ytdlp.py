@@ -681,6 +681,8 @@ def _extract_streams(
     title = info.get("title") or ""
     duration = info.get("duration")
     duration = int(duration) if duration else None
+    raw_views = info.get("view_count")
+    view_count = raw_views if isinstance(raw_views, int) else None
     formats = info.get("formats") or []
 
     def _pick_sub_url(fmts: list[dict]) -> str | None:
@@ -724,6 +726,7 @@ def _extract_streams(
             audio_url=audio_url,
             title=title,
             duration=duration,
+            view_count=view_count,
             expires_at=_stream_expiry(url_),
             height=height,
             is_live=bool(info.get("is_live")),
@@ -982,6 +985,16 @@ def _parse_badge_duration(text: str) -> int | None:
         seconds = seconds * 60 + p
     return seconds
 
+_COMPACT_COUNT_RE = re.compile(r"^(\d+(?:\.\d{1,2})?)([KMB])?$", re.IGNORECASE)
+_COMPACT_MULTIPLIERS = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+
+def _parse_compact_count(text: str) -> int | None:
+    """'144K' / '1.2M' / '1,815,671' -> int; anything else (dates, labels) -> None."""
+    match = _COMPACT_COUNT_RE.match(re.sub(r"[,\s]", "", text or ""))
+    if not match:
+        return None
+    return int(float(match.group(1)) * _COMPACT_MULTIPLIERS[(match.group(2) or "").upper()])
+
 
 def _walk_lockups(node: object) -> list[dict]:
     """Recursively collect every lockupViewModel dict with contentType == video."""
@@ -1034,6 +1047,15 @@ def _lockup_to_video(lockup: dict) -> Video | None:
         parts = rows[0].get("metadataParts") or []
         if parts:
             channel_title = ((parts[0].get("text") or {}).get("content")) or ""
+    # Watch-next lockups (InnerTube /next) carry a second row: ["144K", "4d ago"].
+    view_count: int | None = None
+    for row in rows[1:]:
+        for part in row.get("metadataParts") or []:
+            view_count = _parse_compact_count(((part.get("text") or {}).get("content")) or "")
+            if view_count is not None:
+                break
+        if view_count is not None:
+            break
 
     thumbnail_url = ""
     image = ((lockup.get("contentImage") or {}).get("thumbnailViewModel") or {}).get("image") or {}
@@ -1077,26 +1099,61 @@ def _lockup_to_video(lockup: dict) -> Video | None:
         channel_id=_find_browse_id(metadata_vm),
         thumbnail_url=thumbnail_url,
         duration=duration,
+        view_count=view_count,
         kind="video",
         platform="youtube",
     )
 
 
+# The anonymous WEB context for InnerTube /next. The lockups it returns are
+# the browser's "Up next" list — unlike the watch page's initial ytInitialData
+# (channel name only), every lockup carries a ["144K", "4d ago"] metadata row,
+# which is the only cheap source of view counts for suggestions.
+_INNERTUBE_WEB_CONTEXT = {
+    "client": {
+        "clientName": "WEB",
+        "clientVersion": "2.20250101.00.00",
+        "hl": "en",
+        "gl": "US",
+    }
+}
+
 async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
-    """Scrape YouTube's watch page ytInitialData for related/suggested videos."""
+    """YouTube's "Up next" for a video, with view counts where available."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "en-US"}
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
-            resp = await http_client.get(url, headers=headers)
-            if resp.status_code == 429:
-                raise UpstreamError("YouTube rate-limited related videos (429)")
-            resp.raise_for_status()
-            html = resp.text
-        match = _YT_INITIAL_DATA_RE.search(html)
-        if not match:
-            raise UpstreamError("ytInitialData not found")
-        data = json.loads(match.group(1))
+            data: dict = {}
+            try:
+                resp = await http_client.post(
+                    "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
+                    json={"context": _INNERTUBE_WEB_CONTEXT, "videoId": video_id},
+                    headers={
+                        **headers,
+                        "Content-Type": "application/json",
+                        "Origin": "https://www.youtube.com",
+                        "Referer": url,
+                    },
+                )
+                if resp.status_code == 429:
+                    raise UpstreamError("YouTube rate-limited related videos (429)")
+                resp.raise_for_status()
+                data = resp.json() or {}
+            except UpstreamError:
+                raise
+            except Exception as exc:
+                log.debug("related /next failed, falling back to the watch page: %s", exc)
+            if not data.get("contents"):
+                # Watch-page HTML: same list shape, but no view counts.
+                resp = await http_client.get(url, headers=headers)
+                if resp.status_code == 429:
+                    raise UpstreamError("YouTube rate-limited related videos (429)")
+                resp.raise_for_status()
+                match = _YT_INITIAL_DATA_RE.search(resp.text)
+                if not match:
+                    raise UpstreamError("ytInitialData not found")
+                data = json.loads(match.group(1))
     except UpstreamError:
         raise
     except Exception as exc:

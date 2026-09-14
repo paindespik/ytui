@@ -151,6 +151,7 @@ class StreamInfo {
   final String? audioUrl;
   final String title;
   final int? duration;
+  final int? viewCount;
   final DateTime? expiresAt;
   final int? height;
 
@@ -172,6 +173,7 @@ class StreamInfo {
     this.audioUrl,
     this.title = '',
     this.duration,
+    this.viewCount,
     this.expiresAt,
     this.height,
     this.isLive = false,
@@ -185,6 +187,7 @@ class StreamInfo {
         videoUrl: json['video_url'] as String?,
         audioUrl: json['audio_url'] as String?,
         title: json['title'] as String? ?? '',
+        viewCount: json['view_count'] as int?,
         duration: json['duration'] as int?,
         height: json['height'] as int?,
         isLive: json['is_live'] as bool? ?? false,

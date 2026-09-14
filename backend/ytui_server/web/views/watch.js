@@ -5,6 +5,7 @@ import {
   el,
   toast,
   errorToast,
+  fmtCount,
   fmtDuration,
   watchPath,
   channelPath,
@@ -294,6 +295,10 @@ export async function render(view, { params }) {
     if (height) parts.push(`${height}p`);
     if (live) parts.push("EN DIRECT");
     else if (streamsInfo.duration) parts.push(fmtDuration(streamsInfo.duration));
+    // /streams carries the view count (same yt-dlp extraction); fall back to
+    // whatever the listing already knew (feed items have it since RSS enrichment).
+    const views = streamsInfo.view_count ?? video.view_count;
+    if (!live && views != null) parts.push(`${fmtCount(views)} vues`);
     metaLine.textContent = parts.join(" · ");
   }
 

@@ -186,6 +186,9 @@ class StreamInfo(BaseModel):
     audio_url: str | None = None
     title: str = ""
     duration: int | None = None
+    # From the same yt-dlp extraction as the stream URL: free for players that
+    # already call /streams (None: lives without a count, other platforms).
+    view_count: int | None = None
     expires_at: datetime | None = None
     # Height of the video track actually served (None: audio-only or unknown).
     height: int | None = None

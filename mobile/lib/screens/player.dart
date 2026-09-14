@@ -14,6 +14,7 @@ import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../format.dart';
 import '../services/audio_events.dart';
 import '../services/background_playback.dart';
 import '../services/network.dart';
@@ -1218,6 +1219,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     // chat in that slot instead.
     final commentsAvailable = !chatEnabled &&
         (video.platform == 'youtube' || video.platform == 'odysee');
+    // View count: /streams carries it (same yt-dlp extraction as the stream
+    // URL); fall back to what the listing already knew (feed items since the
+    // RSS enrichment). Lives show their chat, not a count.
+    final viewCount = (_isLiveId(video) || inLives)
+        ? null
+        : (_streams?.viewCount ?? video.viewCount);
 
     return Scaffold(
       appBar: AppBar(
@@ -1317,6 +1324,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
+                              if (viewCount != null)
+                                Text(
+                                  '${compactCount(viewCount)} vues',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colors.onSurfaceVariant,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                             ],
                           ),
                         ),
