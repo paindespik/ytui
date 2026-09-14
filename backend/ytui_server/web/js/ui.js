@@ -131,7 +131,15 @@ export function videoCard(video, { live = false, onOpen } = {}) {
       ? el("span", { class: "badge watched", text: "✓" })
       : null,
   );
-  const sub = [video.channel_title, video.published ? fmtRelative(video.published) : ""]
+  const views =
+    video.kind === "video" && video.view_count != null
+      ? `${fmtCount(video.view_count)} vues`
+      : "";
+  const sub = [
+    video.channel_title,
+    views,
+    video.published ? fmtRelative(video.published) : "",
+  ]
     .filter(Boolean)
     .join(" · ");
   const card = el(

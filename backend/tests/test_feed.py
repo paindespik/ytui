@@ -6,8 +6,24 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import pytest
+
+from ytui_server.services import ytdlp
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _no_view_count_enrichment(monkeypatch):
+    """Feed tests stay hermetic: no yt-dlp /videos fetch by default.
+
+    Tests that care about enrichment re-patch ytdlp.channel_videos.
+    """
+
+    async def _none(channel_url: str, limit: int = 50, offset: int = 0):
+        return []
+
+    monkeypatch.setattr(ytdlp, "channel_videos", _none)
 
 
 def _mock_get(responses: dict[str, httpx.Response]):
@@ -130,3 +146,99 @@ def test_feed_bitchute_channel(client, app):
     assert body["videos"], body
     assert all(v["platform"] == "bitchute" for v in body["videos"])
     assert body["videos"][0]["url"].startswith("https://www.bitchute.com/video/")
+
+
+def test_feed_youtube_videos_carry_view_counts(client, app):
+    """RSS items gain view counts from the parallel /videos lookup."""
+    from ytui_server.models import FollowedChannel, Video
+
+    xml = (FIXTURES / "channel_feed.xml").read_bytes()
+    app.state.db.add_channel(
+        FollowedChannel(ref="UCtest000000000000000000", channel_id="UCtest000000000000000000")
+    )
+
+    async def fake_counts(channel_url: str, limit: int = 50, offset: int = 0):
+        assert "/channel/UCtest000000000000000000" in channel_url
+        return [
+            Video(video_id="abc123def45", title="A", view_count=1234),
+            Video(video_id="xyz987wvu65", title="B"),  # no count: stays None
+        ]
+
+    with (
+        patch.object(ytdlp, "channel_videos", fake_counts),
+        patch.object(
+            httpx.AsyncClient,
+            "get",
+            _mock_get({"feeds/videos.xml": httpx.Response(200, content=xml)}),
+        ),
+    ):
+        resp = client.get("/api/feed")
+    body = resp.json()
+    assert resp.status_code == 200
+    counts = {v["video_id"]: v["view_count"] for v in body["videos"]}
+    assert counts["abc123def45"] == 1234
+    assert counts["xyz987wvu65"] is None
+
+
+def test_feed_enrichment_failure_keeps_feed(client, app):
+    """The /videos lookup is enrichment only: its failure must not fail the feed."""
+    from ytui_server.models import FollowedChannel
+
+    xml = (FIXTURES / "channel_feed.xml").read_bytes()
+    app.state.db.add_channel(
+        FollowedChannel(ref="UCtest000000000000000000", channel_id="UCtest000000000000000000")
+    )
+
+    async def _broken(channel_url: str, limit: int = 50, offset: int = 0):
+        raise RuntimeError("upstream down")
+
+    with (
+        patch.object(ytdlp, "channel_videos", _broken),
+        patch.object(
+            httpx.AsyncClient,
+            "get",
+            _mock_get({"feeds/videos.xml": httpx.Response(200, content=xml)}),
+        ),
+    ):
+        resp = client.get("/api/feed")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["warnings"] == []
+    assert {v["video_id"] for v in body["videos"]} == {"abc123def45", "xyz987wvu65"}
+    assert all(v["view_count"] is None for v in body["videos"])
+
+
+def test_feed_crowdbunker_videos_carry_view_counts(client, app):
+    from ytui_server.models import FollowedChannel
+
+    app.state.db.add_channel(
+        FollowedChannel(
+            ref="crowdbunker:testorg", channel_id="testorg", platform="crowdbunker"
+        )
+    )
+    items = [
+        {
+            "uid": "uid1234567890",
+            "video": {
+                "id": 1,
+                "title": "A video",
+                "duration": 120,
+                "viewCount": 987,
+                "thumbnails": [{"url": "https://example.com/t.jpg"}],
+            },
+            "organization": {"name": "TestOrg"},
+            "publishedAt": "2026-01-10T12:00:00Z",
+        },
+    ]
+    with patch.object(
+        httpx.AsyncClient,
+        "get",
+        _mock_get(
+            {"api.divulg.org": httpx.Response(200, json={"items": items, "last": None})}
+        ),
+    ):
+        resp = client.get("/api/feed")
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["videos"], body
+    assert body["videos"][0]["view_count"] == 987

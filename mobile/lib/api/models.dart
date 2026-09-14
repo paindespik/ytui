@@ -9,6 +9,7 @@ class Video {
   final DateTime? published;
   final int? duration; // seconds
   final String thumbnailUrl;
+  final int? viewCount;
   final String kind; // video | playlist | channel
   final String platform; // youtube | bitchute | odysee
   final String playlistId;
@@ -22,6 +23,7 @@ class Video {
     this.published,
     this.duration,
     this.thumbnailUrl = '',
+    this.viewCount,
     this.kind = 'video',
     this.platform = 'youtube',
     this.playlistId = '',
@@ -38,6 +40,7 @@ class Video {
             : null,
         duration: json['duration'] as int?,
         thumbnailUrl: json['thumbnail_url'] as String? ?? '',
+        viewCount: json['view_count'] as int?,
         kind: json['kind'] as String? ?? 'video',
         platform: json['platform'] as String? ?? 'youtube',
         playlistId: json['playlist_id'] as String? ?? '',
@@ -52,6 +55,7 @@ class Video {
         'published': published?.toUtc().toIso8601String(),
         'duration': duration,
         'thumbnail_url': thumbnailUrl,
+        'view_count': viewCount,
         'kind': kind,
         'platform': platform,
         'playlist_id': playlistId,

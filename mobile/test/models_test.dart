@@ -12,6 +12,7 @@ void main() {
         'published': '2026-07-11T10:00:00Z',
         'duration': 212,
         'thumbnail_url': 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hq720.jpg',
+        'view_count': 1234567,
         'kind': 'video',
         'platform': 'youtube',
         'playlist_id': '',
@@ -20,6 +21,7 @@ void main() {
       expect(video.videoId, 'dQw4w9WgXcQ');
       expect(video.published, DateTime.utc(2026, 7, 11, 10));
       expect(video.duration, 212);
+      expect(video.viewCount, 1234567);
       expect(video.url, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
       expect(video.durationLabel, '3:32');
     });
@@ -29,6 +31,7 @@ void main() {
       expect(video.kind, 'video');
       expect(video.platform, 'youtube');
       expect(video.published, isNull);
+      expect(video.viewCount, isNull);
       expect(video.durationLabel, '');
     });
 

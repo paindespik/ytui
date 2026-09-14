@@ -211,6 +211,8 @@ class VideoTile extends ConsumerWidget {
                   Text(
                     [
                       video.channelTitle,
+                      if (video.kind == 'video' && video.viewCount != null)
+                        '${compactCount(video.viewCount!)} vues',
                       if (video.kind != 'video') video.kind,
                     ].where((s) => s.isNotEmpty).join(' · '),
                     maxLines: 1,

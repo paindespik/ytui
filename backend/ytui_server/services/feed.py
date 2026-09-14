@@ -17,7 +17,7 @@ import httpx
 
 from ..db import Database
 from ..models import FollowedChannel, Video
-from . import crowdbunker, odysee, tiktok, twitch
+from . import crowdbunker, odysee, tiktok, twitch, ytdlp
 
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 HANDLE_URL = "https://www.youtube.com/{handle}"
@@ -35,6 +35,9 @@ _ODYSEE_CHANNEL_URL_RE = re.compile(r"odysee\.com/(@[^/?#:]+:\w+)")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
 TIMEOUT = httpx.Timeout(5.0)
 CONCURRENCY = 10
+# YouTube RSS carries 15 items at most; the /videos page is only needed to
+# recover the view counts RSS lacks (same window, same order).
+_YT_RSS_MAX_ITEMS = 15
 _CHANNEL_ID_RE = re.compile(r'"channelId"\s*:\s*"(UC[\w-]{22})"')
 _CANONICAL_RE = re.compile(
     r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[\w-]{22})"'
@@ -199,6 +202,22 @@ def merge_feeds(feeds: list[list[Video]]) -> list[Video]:
     return merged
 
 
+async def _fetch_youtube_view_counts(channel_id: str) -> list[Video]:
+    """The channel's newest uploads with view counts, or [].
+
+    YouTube's RSS items carry no view count; the channel's /videos page does.
+    This is pure enrichment: any failure (rate limit, bot check, network)
+    leaves the feed without counts rather than failing it.
+    """
+    try:
+        return await ytdlp.channel_videos(
+            f"https://www.youtube.com/channel/{channel_id}", limit=_YT_RSS_MAX_ITEMS
+        )
+    except Exception as exc:  # noqa: BLE001 - enrichment only
+        log.debug("view-count enrichment failed for %s: %s", channel_id, exc)
+        return []
+
+
 class FeedService:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -361,12 +380,24 @@ class FeedService:
                 if cached is not None:
                     return cached, None
             try:
-                resp = await _get_with_retry(
-                    client,
-                    RSS_URL.format(channel_id=channel_id),
-                    headers={"User-Agent": USER_AGENT},
+                resp, counted = await asyncio.gather(
+                    _get_with_retry(
+                        client,
+                        RSS_URL.format(channel_id=channel_id),
+                        headers={"User-Agent": USER_AGENT},
+                    ),
+                    _fetch_youtube_view_counts(channel_id),
                 )
                 videos = parse_rss(resp.content)
+                if counted:
+                    counts = {
+                        v.video_id: v.view_count
+                        for v in counted
+                        if v.view_count is not None
+                    }
+                    for video in videos:
+                        if video.view_count is None:
+                            video.view_count = counts.get(video.video_id)
                 self.db.set_feed(channel_id, videos)
                 return videos, None
             except Exception as exc:

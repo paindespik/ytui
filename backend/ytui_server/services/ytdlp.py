@@ -530,6 +530,7 @@ def entry_to_item(entry: dict) -> Video | None:
         published=published,
         duration=int(duration) if duration else None,
         thumbnail_url=thumb,
+        view_count=entry.get("view_count"),
         kind=kind,
         platform=platform,
     )

@@ -87,6 +87,8 @@ class Video(BaseModel):
     published: datetime | None = None
     duration: int | None = None  # seconds
     thumbnail_url: str = ""
+    # None: unknown (RSS feeds without counts, playlists, channels, …).
+    view_count: int | None = None
     kind: Literal["video", "playlist", "channel"] = "video"
     platform: Literal[
         "youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"

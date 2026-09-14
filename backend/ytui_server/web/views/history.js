@@ -6,6 +6,7 @@ import {
   spinner,
   emptyState,
   errorToast,
+  fmtCount,
   fmtDuration,
   fmtRelative,
   playVideos,
@@ -45,7 +46,13 @@ function historyRow(entry, body) {
         ? fmtDuration(duration)
         : "";
   const watchedDate = entry.watched_at ? new Date(entry.watched_at * 1000) : null;
-  const sub = [v.channel_title, timeLine, watchedDate ? fmtRelative(watchedDate) : ""]
+  const views = v.view_count != null ? `${fmtCount(v.view_count)} vues` : "";
+  const sub = [
+    v.channel_title,
+    views,
+    timeLine,
+    watchedDate ? fmtRelative(watchedDate) : "",
+  ]
     .filter(Boolean)
     .join(" · ");
   const row = el(

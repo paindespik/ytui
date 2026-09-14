@@ -61,6 +61,7 @@ def _post_to_video(item: dict[str, Any], channel_id: str) -> Video | None:
         if (image.get("url") or "").startswith("http"):
             thumb = image["url"]
             break
+    view_count = video.get("viewCount")
     return Video(
         video_id=uid,
         title=title,
@@ -69,6 +70,7 @@ def _post_to_video(item: dict[str, Any], channel_id: str) -> Video | None:
         published=published,
         duration=int(video["duration"]) if video.get("duration") else None,
         thumbnail_url=thumb,
+        view_count=int(view_count) if isinstance(view_count, int) else None,
         kind="video",
         platform="crowdbunker",
     )
