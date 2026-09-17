@@ -172,6 +172,15 @@ async def _reject_unplayable_odysee(video_id: str, platform: Platform) -> None:
 
 @router.get("/videos/{video_id}", response_model=VideoDetails)
 async def video_details(video_id: str, platform: Platform = "youtube") -> VideoDetails:
+    if platform == "odysee":
+        # The SDK proxy answers in ~200 ms where yt-dlp's api.lbry.tv takes
+        # 10-30 s; fall back to yt-dlp only when the proxy cannot serve it.
+        try:
+            return await odysee.video_details(video_id)
+        except odysee.NotPlayableError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        except Exception as exc:
+            log.warning("odysee direct details failed for %s: %s", video_id, exc)
     try:
         details = await ytdlp.video_details(_video_url(video_id, platform))
     except ytdlp.UpstreamError as exc:
@@ -228,6 +237,21 @@ async def video_streams(
         if resolved is not None:
             url, title, height = resolved
             return StreamInfo(kind="hls", url=url, title=title, height=height)
+    if platform == "odysee":
+        # Direct proxy resolution (~200 ms, cached); yt-dlp fallback below when
+        # the proxy has no streaming URL for this claim.
+        try:
+            direct = await odysee.stream(video_id, max_height=max_height)
+        except odysee.NotPlayableError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        if direct is not None:
+            return StreamInfo(
+                kind=direct.kind,
+                url=direct.url,
+                title=direct.title,
+                duration=direct.duration,
+                height=direct.height,
+            )
     try:
         info = await ytdlp.resolve_streams(
             _video_url(video_id, platform),

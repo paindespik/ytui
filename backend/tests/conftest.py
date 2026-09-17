@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from ytui_server.main import create_app
 from ytui_server.models import Video
-from ytui_server.services import ytdlp
+from ytui_server.services import odysee, ytdlp
 from ytui_server.settings import Settings
 
 TEST_TOKEN = "test-token-123"
@@ -19,10 +19,12 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(autouse=True)
 def _clear_info_cache():
-    """The yt-dlp extract_info TTL cache must not leak between tests."""
+    """The yt-dlp extract_info and Odysee stream TTL caches must not leak between tests."""
     ytdlp._INFO_CACHE.clear()
+    odysee._STREAM_CACHE.clear()
     yield
     ytdlp._INFO_CACHE.clear()
+    odysee._STREAM_CACHE.clear()
 
 
 @pytest.fixture()

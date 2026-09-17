@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from ytui_server.models import Video, video_id_from_url
-from ytui_server.services import ytdlp
+from ytui_server.models import StreamInfo, Video, VideoDetails, video_id_from_url
+from ytui_server.services import odysee, ytdlp
 
 LIGHTHOUSE_HITS = [
     {"name": "linux-video", "claimId": "aa11", "channel": "@chan"},
@@ -114,6 +114,37 @@ REACTION_LIST_RESULT = {
 
 def _rpc(result):
     return {"jsonrpc": "2.0", "result": result, "id": 1}
+
+
+def _mock_proxy(methods: dict):
+    """Patch the SDK proxy post, dispatching on the JSON-RPC method name."""
+
+    async def fake_post(url, **kwargs):
+        method = (kwargs.get("json") or {}).get("method")
+        return httpx.Response(
+            200, json=_rpc(methods[method]), request=httpx.Request("POST", str(url))
+        )
+
+    return patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post))
+
+
+def _mock_head(final_url: str, content_type: str):
+    """Patch httpx HEAD: report the redirect already followed (final URL)."""
+
+    async def fake_head(url, **kwargs):
+        return httpx.Response(
+            200,
+            headers={"content-type": content_type},
+            request=httpx.Request("HEAD", final_url),
+        )
+
+    return patch.object(httpx.AsyncClient, "head", AsyncMock(side_effect=fake_head))
+
+
+def _no_ytdlp(name: str):
+    return patch.object(
+        ytdlp, name, AsyncMock(side_effect=AssertionError(f"{name} must not be called"))
+    )
 
 
 def _mock_odysee_http(post_results: list[dict], get_json=None):
@@ -311,7 +342,58 @@ def test_odysee_search_short_query_empty(client):
     assert resp.json()["items"] == []
 
 
+# ─── /api/videos/{id}?platform=odysee (details via proxy, no yt-dlp) ───
+
+
+def test_odysee_details_via_proxy(client):
+    """Details come from the proxy `resolve`: yt-dlp must never be called."""
+    with _mock_proxy({"resolve": RESOLVE_RESULT}), _no_ytdlp("video_details"):
+        resp = client.get("/api/videos/linux-video:aa11", params={"platform": "odysee"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "Linux Video"
+    assert body["channel_id"] == "@chan:cc33"
+    assert body["channel_title"] == "The Channel"
+    assert body["duration"] == 120
+    assert body["upload_date"] == "2024-06-21"
+
+
+def test_odysee_details_unplayable(client):
+    """A known document/image claim is a 415, not a yt-dlp failure."""
+    with _mock_proxy({"resolve": RESOLVE_RESULT}), _no_ytdlp("video_details"):
+        resp = client.get("/api/videos/a-pdf:ee55", params={"platform": "odysee"})
+    assert resp.status_code == 415
+    assert "document" in resp.json()["detail"]
+
+
+def test_odysee_details_proxy_down_falls_back_to_ytdlp(client):
+    """Proxy unreachable: the yt-dlp path still answers."""
+    details = VideoDetails(video_id="aa11", title="Linux Video", duration=120)
+    post_patch = patch.object(
+        httpx.AsyncClient, "post", AsyncMock(side_effect=httpx.ConnectError("down"))
+    )
+    ytdlp_patch = patch.object(ytdlp, "video_details", AsyncMock(return_value=details))
+    with post_patch, ytdlp_patch:
+        resp = client.get("/api/videos/linux-video:aa11", params={"platform": "odysee"})
+    assert resp.status_code == 200
+    # The requested 'name:claim' id is kept, not yt-dlp's bare claim id.
+    assert resp.json()["video_id"] == "linux-video:aa11"
+
+
 # ─── /api/videos/{id}/streams?platform=odysee ───
+
+MASTER_URL = "https://cdn.example/abc/master.m3u8"
+MASTER = """#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=2890800,RESOLUTION=1280x720,CODECS="avc1.4d401f,mp4a.40.2"
+v0.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=655600,RESOLUTION=640x360,CODECS="avc1.4d401e,mp4a.40.2"
+v1.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=215600,RESOLUTION=256x144,CODECS="avc1.4d400b,mp4a.40.2"
+v2.m3u8
+"""
 
 
 def _fail_resolve():
@@ -326,12 +408,104 @@ def _fail_resolve():
     )
 
 
+def test_odysee_streams_progressive(client):
+    """Original file without transcoding: progressive, yt-dlp never called."""
+    url = "https://cdn.example/original.mp4"
+    proxy = _mock_proxy({"get": {"streaming_url": url}, "resolve": RESOLVE_RESULT})
+    with proxy, _mock_head(url, "video/mp4"), _no_ytdlp("resolve_streams"):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "progressive"
+    assert body["url"] == url
+    assert body["title"] == "Linux Video"
+    assert body["duration"] == 120
+    assert body["height"] is None
+
+
+def test_odysee_streams_hls_default_cap(client):
+    """Transcoded video: the best variant under the default cap (720p here)."""
+    proxy = _mock_proxy(
+        {"get": {"streaming_url": "https://cdn.example/abc/short.mp4"}, "resolve": RESOLVE_RESULT}
+    )
+    get_patch = _mock_master_get()
+    with proxy, _mock_head(MASTER_URL, "application/x-mpegurl"), get_patch, _no_ytdlp("resolve_streams"):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    body = resp.json()
+    assert body["kind"] == "hls"
+    assert body["url"] == "https://cdn.example/abc/v0.m3u8"
+    assert body["height"] == 720
+
+
+def test_odysee_streams_hls_respects_max_height(client):
+    proxy = _mock_proxy(
+        {"get": {"streaming_url": "https://cdn.example/abc/short.mp4"}, "resolve": RESOLVE_RESULT}
+    )
+    get_patch = _mock_master_get()
+    with proxy, _mock_head(MASTER_URL, "application/x-mpegurl"), get_patch, _no_ytdlp("resolve_streams"):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams",
+            params={"platform": "odysee", "max_height": 480},
+        )
+    body = resp.json()
+    assert body["kind"] == "hls"
+    assert body["url"] == "https://cdn.example/abc/v1.m3u8"
+    assert body["height"] == 360
+
+
+def test_odysee_streams_hls_cap_at_lowest_variant(client):
+    """A cap equal to the lowest variant serves that variant exactly."""
+    proxy = _mock_proxy(
+        {"get": {"streaming_url": "https://cdn.example/abc/short.mp4"}, "resolve": RESOLVE_RESULT}
+    )
+    get_patch = _mock_master_get()
+    with proxy, _mock_head(MASTER_URL, "application/x-mpegurl"), get_patch, _no_ytdlp("resolve_streams"):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams",
+            params={"platform": "odysee", "max_height": 144},
+        )
+    body = resp.json()
+    assert body["kind"] == "hls"
+    assert body["url"] == "https://cdn.example/abc/v2.m3u8"
+    assert body["height"] == 144
+
+
+def _mock_master_get():
+    async def fake_get(url, **kwargs):
+        assert str(url) == MASTER_URL
+        return httpx.Response(
+            200, text=MASTER, request=httpx.Request("GET", str(url))
+        )
+
+    return patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get))
+
+
+def test_odysee_streams_cached_across_calls(client):
+    """The resolution is cached: a second call never touches the proxy."""
+    url = "https://cdn.example/original.mp4"
+    proxy = _mock_proxy({"get": {"streaming_url": url}, "resolve": RESOLVE_RESULT})
+    with proxy, _mock_head(url, "video/mp4"):
+        first = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    post_patch = patch.object(
+        httpx.AsyncClient, "post", AsyncMock(side_effect=httpx.ConnectError("down"))
+    )
+    with post_patch:
+        second = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    assert first.json() == second.json()
+
+
 def test_odysee_streams_non_media_claim(client):
     """A stale document/image entry must say so, not 'this stream is not live'."""
-    post_patch, _ = _mock_odysee_http(
-        [_rpc({"items": [RESOLVE_RESULT["lbry://a-pdf#ee55"]]})]
-    )
-    with post_patch, _fail_resolve():
+    proxy = _mock_proxy({"get": {}, "resolve": RESOLVE_RESULT})
+    with proxy, _no_ytdlp("resolve_streams"):
         resp = client.get(
             "/api/videos/a-pdf:ee55/streams", params={"platform": "odysee"}
         )
@@ -339,15 +513,47 @@ def test_odysee_streams_non_media_claim(client):
     assert "document" in resp.json()["detail"]
 
 
-def test_odysee_streams_video_claim_keeps_upstream_error(client):
-    post_patch, _ = _mock_odysee_http(
-        [_rpc({"items": [RESOLVE_RESULT["lbry://other-video#bb22"]]})]
+def test_odysee_streams_no_streaming_url_falls_back_to_ytdlp(client):
+    """Proxy has no streaming URL for a playable claim: yt-dlp answers."""
+    proxy = _mock_proxy({"get": {}, "resolve": RESOLVE_RESULT})
+    fake = AsyncMock(
+        return_value=StreamInfo(
+            kind="hls", url="https://fallback/x.m3u8", title="Linux Video", duration=120, height=720
+        )
     )
-    with post_patch, _fail_resolve():
+    head_patch = patch.object(
+        httpx.AsyncClient, "head", AsyncMock(side_effect=AssertionError("no HEAD expected"))
+    )
+    with proxy, head_patch, patch.object(ytdlp, "resolve_streams", fake):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["url"] == "https://fallback/x.m3u8"
+    fake.assert_awaited_once()
+
+
+def test_odysee_streams_video_claim_keeps_upstream_error(client):
+    """Proxy without streaming URL and yt-dlp failing keeps the 502."""
+    proxy = _mock_proxy({"get": {}, "resolve": RESOLVE_RESULT})
+    with proxy, _fail_resolve():
         resp = client.get(
             "/api/videos/other-video:bb22/streams", params={"platform": "odysee"}
         )
     assert resp.status_code == 502
+
+
+def test_pick_hls_variant_no_fit_degrades_to_lowest():
+    url, height = odysee._pick_hls_variant(MASTER, MASTER_URL, max_height=100)
+    assert url == "https://cdn.example/abc/v2.m3u8"
+    assert height == 144
+
+
+def test_pick_hls_variant_bare_media_playlist_unchanged():
+    media = "#EXTM3U\n#EXTINF:10,\nseg0.ts\n#EXT-X-ENDLIST\n"
+    url, height = odysee._pick_hls_variant(media, MASTER_URL, max_height=1440)
+    assert url == MASTER_URL
+    assert height is None
 
 
 def test_odysee_playlist_rejected(client):

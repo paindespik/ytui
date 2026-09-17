@@ -1,20 +1,27 @@
 """Odysee (LBRY) service: Lighthouse search + SDK proxy resolve/claim_search,
-Commentron comments (read-only). All calls are plain HTTP JSON — no yt-dlp here.
+Commentron comments (read-only), and direct details/stream resolution.
+All calls are plain HTTP JSON — no yt-dlp here.
 
 Video identity: video_id = "{name}:{claim_id}", channel_id = "@name:claim_id".
-The canonical URL https://odysee.com/{video_id} is handled by yt-dlp's LBRY
-extractor for details/streams/downloads.
+Details/streams go through the SDK proxy below; yt-dlp's LBRY extractor stays
+as a fallback only (its api.lbry.tv "get" takes 10-30 s where this proxy
+answers in ~200 ms).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+import time
+import urllib.parse
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
-from ..models import CommentOut, CommentsResponse, Video
+from ..models import CommentOut, CommentsResponse, Video, VideoDetails
 
 LIGHTHOUSE_URL = "https://lighthouse.odysee.tv/search"
 PROXY_URL = "https://api.na-backend.odysee.com/api/v1/proxy"
@@ -259,6 +266,206 @@ async def resolve_channel(
         raise OdyseeError(f"{name!r} is not an Odysee channel")
     title = (claim.get("value") or {}).get("title") or resolved_name
     return f"{resolved_name}:{claim_id}", title
+
+
+class NotPlayableError(OdyseeError):
+    """The claim exists but is not a playable video (image, document, …)."""
+
+
+# ─── Direct details / stream resolution (no yt-dlp) ───
+#
+# yt-dlp's LBRY extractor resolves through api.lbry.tv, whose JSON-RPC "get"
+# was measured at 1-30 s in production (and once hung > 240 s), while the same
+# call against the SDK proxy below answers in ~200 ms. Both details and
+# streams therefore go through the proxy, and yt-dlp remains a fallback for
+# claims the proxy cannot serve.
+
+_STREAM_CACHE_TTL = 6 * 3600.0  # CDN URLs are content-hashed and do not expire
+_STREAM_CACHE_MAX = 128
+_STREAM_CACHE: dict[str, tuple[float, OdyseeStream]] = {}
+# The CDN rejects a bare HEAD without a referer (401); GETs do not need it.
+_CDN_HEADERS = {"Referer": "https://odysee.com/"}
+
+
+def _lbry_uri(video_id: str) -> str:
+    """'name:claim' -> 'lbry://name#claim' (bare claim -> 'lbry://x#claim')."""
+    if ":" in video_id:
+        name, claim = video_id.rsplit(":", 1)
+    else:
+        name, claim = "x", video_id
+    return f"lbry://{name}#{claim}"
+
+
+async def _resolve_claim(client: httpx.AsyncClient, video_id: str) -> dict:
+    """Full claim for a video id via proxy `resolve` ({} when unknown)."""
+    uri = _lbry_uri(video_id)
+    result = await _proxy_call(client, "resolve", {"urls": [uri]})
+    claim = result.get(uri)
+    return claim if isinstance(claim, dict) and "error" not in claim else {}
+
+
+async def video_details(video_id: str) -> VideoDetails:
+    """Video details via the proxy `resolve` (~200 ms; no yt-dlp).
+
+    Raises NotPlayableError for known non-media claims so the router can
+    answer 415 instead of the old yt-dlp 'This stream is not live'.
+    """
+    uri = _lbry_uri(video_id)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=_HEADERS) as client:
+            result = await _proxy_call(client, "resolve", {"urls": [uri]})
+    except Exception as exc:
+        log.warning("odysee details resolve failed for %s: %s", video_id, exc)
+        raise OdyseeError(f"details resolve failed: {exc}") from exc
+    claim = result.get(uri)
+    if not isinstance(claim, dict) or "error" in claim:
+        raise OdyseeError(f"Unknown Odysee video {video_id!r}")
+    value = claim.get("value") or {}
+    if not _is_playable(value):
+        raise NotPlayableError(
+            f"not a playable video ({value.get('stream_type') or 'unknown type'})"
+        )
+    signing = claim.get("signing_channel") or {}
+    ch_name = signing.get("name") or ""
+    ch_claim = signing.get("claim_id") or ""
+    release = value.get("release_time") or claim.get("timestamp")
+    upload_date = ""
+    if release:
+        try:
+            upload_date = datetime.fromtimestamp(
+                int(release), tz=timezone.utc
+            ).strftime("%Y-%m-%d")
+        except (ValueError, OverflowError, OSError):
+            upload_date = ""
+    duration = (value.get("video") or value.get("audio") or {}).get("duration")
+    return VideoDetails(
+        video_id=video_id,
+        title=value.get("title") or claim.get("name") or "",
+        channel_id=f"{ch_name}:{ch_claim}" if ch_name and ch_claim else "",
+        channel_title=(signing.get("value") or {}).get("title") or ch_name,
+        description=value.get("description") or "",
+        view_count=None,
+        like_count=None,
+        duration=int(duration) if duration else None,
+        upload_date=upload_date,
+    )
+
+
+@dataclass
+class OdyseeStream:
+    """A resolved Odysee stream (the fields StreamInfo conveys to clients)."""
+
+    kind: Literal["hls", "progressive"]
+    url: str
+    title: str
+    duration: int | None
+    height: int | None = None
+    view_count: int | None = None
+    is_live: bool = False
+
+
+_HLS_RES_RE = re.compile(r"RESOLUTION=(\d+)x(\d+)")
+
+
+def _pick_hls_variant(
+    master: str, master_url: str, max_height: int
+) -> tuple[str, int | None]:
+    """Best variant playlist of a master manifest honouring max_height.
+
+    Same cap semantics as ytdlp._capped: best height that fits; when nothing
+    fits, the lowest available (a cap must never make a video unplayable).
+    A manifest without variants (a bare media playlist) is returned as-is.
+    """
+    lines = [line.strip() for line in master.splitlines()]
+    variants: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        if not line.startswith("#EXT-X-STREAM-INF:"):
+            continue
+        m = _HLS_RES_RE.search(line)
+        height = int(m.group(2)) if m else 0
+        for nxt in lines[i + 1 : i + 3]:
+            if nxt and not nxt.startswith("#"):
+                variants.append((height, urllib.parse.urljoin(master_url, nxt)))
+                break
+    if not variants:
+        return master_url, None
+    fitting = [v for v in variants if v[0] and v[0] <= max_height]
+    if fitting:
+        height, url = max(fitting, key=lambda v: v[0])
+    else:
+        # 0-height variants sort last, so a real resolution always wins.
+        height, url = min(variants, key=lambda v: v[0] or 10**9)
+    return url, height or None
+
+
+async def stream(video_id: str, max_height: int = 1440) -> OdyseeStream | None:
+    """Direct stream resolution through the SDK proxy (no yt-dlp).
+
+    One `get` (~200 ms) yields the CDN streaming URL; a HEAD then reveals
+    what that URL actually serves: the original file (progressive), or — for
+    transcoded videos — a redirect to a master.m3u8 ladder from which the
+    best variant under `max_height` is picked. Returns None when the proxy
+    cannot provide a streaming URL (the caller falls back to yt-dlp); raises
+    NotPlayableError for known non-media claims.
+    """
+    cached = _STREAM_CACHE.get(video_id)
+    if cached is not None and time.monotonic() - cached[0] < _STREAM_CACHE_TTL:
+        return cached[1]
+    uri = _lbry_uri(video_id)
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=_HEADERS) as client:
+            got, resolved = await asyncio.gather(
+                _proxy_call(client, "get", {"uri": uri}),
+                _resolve_claim(client, video_id),
+            )
+    except Exception as exc:
+        log.warning("odysee stream resolve failed for %s: %s", video_id, exc)
+        return None
+    streaming_url = got.get("streaming_url") if isinstance(got, dict) else None
+    if not streaming_url:
+        if resolved and not _is_playable(resolved.get("value") or {}):
+            raise NotPlayableError(
+                "not a playable video ("
+                f"{(resolved.get('value') or {}).get('stream_type') or 'unknown type'})"
+            )
+        return None
+    title = ""
+    duration: int | None = None
+    if resolved:
+        value = resolved.get("value") or {}
+        title = value.get("title") or ""
+        raw = (value.get("video") or value.get("audio") or {}).get("duration")
+        duration = int(raw) if raw else None
+    kind = "progressive"
+    url, height = streaming_url, None
+    try:
+        async with httpx.AsyncClient(
+            timeout=TIMEOUT, headers=_HEADERS, follow_redirects=True
+        ) as client:
+            head = await client.head(streaming_url, headers=_CDN_HEADERS)
+            final_url = str(head.url)
+            content_type = (head.headers.get("content-type") or "").lower()
+            if final_url.endswith(".m3u8") or "mpegurl" in content_type:
+                manifest = await client.get(final_url, headers=_CDN_HEADERS)
+                manifest.raise_for_status()
+                url, height = _pick_hls_variant(manifest.text, final_url, max_height)
+                kind = "hls"
+    except Exception as exc:
+        log.warning("odysee manifest probe failed for %s: %s", video_id, exc)
+        # The direct URL still plays as progressive.
+    out = OdyseeStream(
+        kind=kind,
+        url=url,
+        title=title,
+        duration=duration,
+        height=height,
+        view_count=None,
+    )
+    if len(_STREAM_CACHE) >= _STREAM_CACHE_MAX and video_id not in _STREAM_CACHE:
+        oldest = min(_STREAM_CACHE, key=lambda k: _STREAM_CACHE[k][0])
+        del _STREAM_CACHE[oldest]
+    _STREAM_CACHE[video_id] = (time.monotonic(), out)
+    return out
 
 
 async def stream_type(video_id: str) -> str:
