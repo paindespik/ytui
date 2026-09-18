@@ -394,6 +394,24 @@ v1.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=215600,RESOLUTION=256x144,CODECS="avc1.4d400b,mp4a.40.2"
 v2.m3u8
 """
+# Top rung without an audio codec: picking it by height would play silent.
+MASTER_AUDIO_GAP = """#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=4500000,RESOLUTION=2560x1440,CODECS="avc1.640028"
+v0.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=655600,RESOLUTION=640x360,CODECS="avc1.4d401e,mp4a.40.2"
+v1.m3u8
+"""
+# Every rung video-only: the ladder must be skipped for the original file.
+MASTER_NO_AUDIO = """#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=2890800,RESOLUTION=1280x720,CODECS="avc1.4d401f"
+v0.m3u8
+
+#EXT-X-STREAM-INF:BANDWIDTH=215600,RESOLUTION=256x144,CODECS="avc1.4d400b"
+v2.m3u8
+"""
 
 
 def _fail_resolve():
@@ -441,6 +459,36 @@ def test_odysee_streams_hls_default_cap(client):
     assert body["height"] == 720
 
 
+def test_odysee_streams_hls_skips_silent_top_variant(client):
+    """A video-only rung must lose to a lower rung that carries audio."""
+    url = "https://cdn.example/abc/short.mp4"
+    proxy = _mock_proxy({"get": {"streaming_url": url}, "resolve": RESOLVE_RESULT})
+    get_patch = _mock_master_get(MASTER_AUDIO_GAP)
+    with proxy, _mock_head(MASTER_URL, "application/x-mpegurl"), get_patch, _no_ytdlp("resolve_streams"):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    body = resp.json()
+    assert body["kind"] == "hls"
+    assert body["url"] == "https://cdn.example/abc/v1.m3u8"
+    assert body["height"] == 360
+
+
+def test_odysee_streams_all_silent_ladder_falls_back_to_original(client):
+    """A ladder with no audio anywhere plays the original file, not silence."""
+    url = "https://cdn.example/abc/short.mp4"
+    proxy = _mock_proxy({"get": {"streaming_url": url}, "resolve": RESOLVE_RESULT})
+    get_patch = _mock_master_get(MASTER_NO_AUDIO)
+    with proxy, _mock_head(MASTER_URL, "application/x-mpegurl"), get_patch, _no_ytdlp("resolve_streams"):
+        resp = client.get(
+            "/api/videos/linux-video:aa11/streams", params={"platform": "odysee"}
+        )
+    body = resp.json()
+    assert body["kind"] == "progressive"
+    assert body["url"] == url
+    assert body["height"] is None
+
+
 def test_odysee_streams_hls_respects_max_height(client):
     proxy = _mock_proxy(
         {"get": {"streaming_url": "https://cdn.example/abc/short.mp4"}, "resolve": RESOLVE_RESULT}
@@ -474,11 +522,11 @@ def test_odysee_streams_hls_cap_at_lowest_variant(client):
     assert body["height"] == 144
 
 
-def _mock_master_get():
+def _mock_master_get(master: str = MASTER):
     async def fake_get(url, **kwargs):
         assert str(url) == MASTER_URL
         return httpx.Response(
-            200, text=MASTER, request=httpx.Request("GET", str(url))
+            200, text=master, request=httpx.Request("GET", str(url))
         )
 
     return patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get))
@@ -547,6 +595,25 @@ def test_pick_hls_variant_no_fit_degrades_to_lowest():
     url, height = odysee._pick_hls_variant(MASTER, MASTER_URL, max_height=100)
     assert url == "https://cdn.example/abc/v2.m3u8"
     assert height == 144
+
+
+def test_pick_hls_variant_requires_audio():
+    url, height = odysee._pick_hls_variant(MASTER_AUDIO_GAP, MASTER_URL, max_height=1440)
+    assert url == "https://cdn.example/abc/v1.m3u8"
+    assert height == 360
+
+
+def test_pick_hls_variant_no_audio_returns_none():
+    url, height = odysee._pick_hls_variant(MASTER_NO_AUDIO, MASTER_URL, max_height=1440)
+    assert url is None
+    assert height is None
+
+
+def test_pick_hls_variant_unknown_codecs_counts_as_muxed():
+    master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360\nv0.m3u8\n"
+    url, height = odysee._pick_hls_variant(master, MASTER_URL, max_height=1440)
+    assert url == "https://cdn.example/abc/v0.m3u8"
+    assert height == 360
 
 
 def test_pick_hls_variant_bare_media_playlist_unchanged():

@@ -365,19 +365,36 @@ class OdyseeStream:
 
 
 _HLS_RES_RE = re.compile(r"RESOLUTION=(\d+)x(\d+)")
+_HLS_CODECS_RE = re.compile(r'CODECS="([^"]*)"')
+_HLS_AUDIO_PREFIXES = ("mp4a", "aac", "ac-3", "ec-3", "opus", "vorbis", "flac")
+
+
+def _variant_has_audio(line: str) -> bool:
+    """True when a variant's CODECS attribute carries an audio codec.
+
+    A variant without one plays silent (audio-less ladder rungs exist in the
+    wild); unknown CODECS count as muxed, as do legacy playlists without it.
+    """
+    m = _HLS_CODECS_RE.search(line)
+    if not m:
+        return True
+    codecs = [c.strip().lower() for c in m.group(1).split(",")]
+    return any(c.startswith(_HLS_AUDIO_PREFIXES) for c in codecs)
 
 
 def _pick_hls_variant(
     master: str, master_url: str, max_height: int
-) -> tuple[str, int | None]:
+) -> tuple[str | None, int | None]:
     """Best variant playlist of a master manifest honouring max_height.
 
     Same cap semantics as ytdlp._capped: best height that fits; when nothing
     fits, the lowest available (a cap must never make a video unplayable).
-    A manifest without variants (a bare media playlist) is returned as-is.
+    A bare media playlist (no variants) is returned as-is. Returns (None, None)
+    when no variant carries an audio track — the caller then falls back to the
+    original file, which does (the old yt-dlp path made the same choice).
     """
     lines = [line.strip() for line in master.splitlines()]
-    variants: list[tuple[int, str]] = []
+    variants: list[tuple[int, bool, str]] = []
     for i, line in enumerate(lines):
         if not line.startswith("#EXT-X-STREAM-INF:"):
             continue
@@ -385,16 +402,21 @@ def _pick_hls_variant(
         height = int(m.group(2)) if m else 0
         for nxt in lines[i + 1 : i + 3]:
             if nxt and not nxt.startswith("#"):
-                variants.append((height, urllib.parse.urljoin(master_url, nxt)))
+                variants.append(
+                    (height, _variant_has_audio(line), urllib.parse.urljoin(master_url, nxt))
+                )
                 break
     if not variants:
         return master_url, None
-    fitting = [v for v in variants if v[0] and v[0] <= max_height]
+    with_audio = [v for v in variants if v[1]]
+    if not with_audio:
+        return None, None
+    fitting = [v for v in with_audio if v[0] and v[0] <= max_height]
     if fitting:
-        height, url = max(fitting, key=lambda v: v[0])
+        height, _, url = max(fitting, key=lambda v: v[0])
     else:
         # 0-height variants sort last, so a real resolution always wins.
-        height, url = min(variants, key=lambda v: v[0] or 10**9)
+        height, _, url = min(with_audio, key=lambda v: v[0] or 10**9)
     return url, height or None
 
 
@@ -448,8 +470,11 @@ async def stream(video_id: str, max_height: int = 1440) -> OdyseeStream | None:
             if final_url.endswith(".m3u8") or "mpegurl" in content_type:
                 manifest = await client.get(final_url, headers=_CDN_HEADERS)
                 manifest.raise_for_status()
-                url, height = _pick_hls_variant(manifest.text, final_url, max_height)
-                kind = "hls"
+                picked, height = _pick_hls_variant(manifest.text, final_url, max_height)
+                if picked is not None:
+                    url, kind = picked, "hls"
+                # picked None: no variant carries audio — keep the original
+                # file (progressive), which does.
     except Exception as exc:
         log.warning("odysee manifest probe failed for %s: %s", video_id, exc)
         # The direct URL still plays as progressive.
