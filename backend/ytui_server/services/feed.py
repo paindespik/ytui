@@ -42,6 +42,14 @@ _CHANNEL_ID_RE = re.compile(r'"channelId"\s*:\s*"(UC[\w-]{22})"')
 _CANONICAL_RE = re.compile(
     r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[\w-]{22})"'
 )
+_YT_CHANNEL_URL_RE = re.compile(r"youtube\.com/channel/(UC[\w-]{22})")
+_YT_HANDLE_URL_RE = re.compile(r"youtube\.com/(@[\w.-]+)")
+
+
+def _youtube_url_ref(ref: str) -> str | None:
+    """Normalize a pasted YouTube channel URL to a UC id or @handle."""
+    m = _YT_CHANNEL_URL_RE.search(ref) or _YT_HANDLE_URL_RE.search(ref)
+    return m.group(1) if m else None
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
 
@@ -224,8 +232,11 @@ class FeedService:
 
     async def resolve_ref(self, ref: str, client: httpx.AsyncClient) -> FollowedChannel:
         """Resolve a channel ref: UC id, @handle, bitchute:/odysee:/twitch:/
-        tiktok:/crowdbunker: prefix, or a bare name (YouTube handle first, then
-        Twitch login)."""
+        tiktok:/crowdbunker: prefix, a pasted youtube.com channel URL, or a
+        bare name (YouTube handle first, then Twitch login)."""
+        url_ref = _youtube_url_ref(ref)
+        if url_ref is not None:
+            ref = url_ref
         cb_ref = None
         if ref.startswith(CROWDBUNKER_PREFIX):
             cb_ref = ref[len(CROWDBUNKER_PREFIX):]
@@ -313,6 +324,8 @@ class FeedService:
         resp = await client.get(
             HANDLE_URL.format(handle=handle),
             headers={"User-Agent": USER_AGENT},
+            # SOCS bypasses the EU consent interstitial redirect.
+            cookies={"SOCS": "CAI"},
             follow_redirects=True,
         )
         if resp.status_code == 404:

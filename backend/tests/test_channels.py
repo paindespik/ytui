@@ -92,6 +92,46 @@ def test_add_handle_resolves(client):
     assert resp.json()["channel_id"] == "UCabcdefghijklmnopqrstuv"
 
 
+def test_add_handle_bypasses_consent_wall(client):
+    """EU IPs get a consent page; the SOCS cookie must make YouTube serve the channel."""
+
+    async def fake_get(url, **kwargs):
+        cookies = kwargs.get("cookies") or {}
+        text = CHANNEL_PAGE if cookies.get("SOCS") == "CAI" else "<html>consent</html>"
+        return httpx.Response(200, text=text, request=httpx.Request("GET", str(url)))
+
+    with patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get)):
+        resp = client.post("/api/channels", json={"ref": "@SomeHandle"})
+    assert resp.status_code == 201
+    assert resp.json()["channel_id"] == "UCabcdefghijklmnopqrstuv"
+
+
+def test_add_youtube_handle_url(client):
+    """A pasted channel URL is normalized to its @handle."""
+    async def fake_get(url, **kwargs):
+        assert url == "https://www.youtube.com/@SomeHandle"
+        return httpx.Response(200, text=CHANNEL_PAGE, request=httpx.Request("GET", str(url)))
+
+    with patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=fake_get)):
+        resp = client.post(
+            "/api/channels", json={"ref": "https://www.youtube.com/@SomeHandle"}
+        )
+    assert resp.status_code == 201
+    assert resp.json()["ref"] == "@SomeHandle"
+    assert resp.json()["channel_id"] == "UCabcdefghijklmnopqrstuv"
+
+
+def test_add_youtube_channel_url(client):
+    """A pasted /channel/UC... URL resolves without any network call."""
+    with patch.object(httpx.AsyncClient, "get", AsyncMock()) as fake:
+        resp = client.post(
+            "/api/channels", json={"ref": "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv"}
+        )
+    assert resp.status_code == 201
+    assert resp.json()["channel_id"] == "UCabcdefghijklmnopqrstuv"
+    fake.assert_not_called()
+
+
 def test_add_handle_unresolvable(client):
     async def fake_get(url, **kwargs):
         return httpx.Response(200, text="<html></html>", request=httpx.Request("GET", str(url)))

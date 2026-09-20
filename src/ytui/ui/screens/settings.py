@@ -114,8 +114,9 @@ class SettingsScreen(Screen):
 
     def action_add_channel(self) -> None:
         prompt = (
-            "Add channel (UC id, @handle, bitchute:<slug>, odysee:@name:claim, "
-            "twitch:<login>, tiktok:<user> or crowdbunker:<handle>):"
+            "Add channel (UC id, @handle, a youtube.com channel URL, "
+            "bitchute:<slug>, odysee:@name:claim, twitch:<login>, tiktok:<user> "
+            "or crowdbunker:<handle>):"
         )
 
         def on_entry(entry: str | None) -> None:
