@@ -1,9 +1,9 @@
 """CrowdBunker service: channel post listings via the public JSON API.
 
-The platform exposes an undocumented but stable API (api.divulg.org) without
-authentication. Video playback does not go through this module: yt-dlp ships
-a CrowdBunkerIE for https://crowdbunker.com/v/{uid}, so details/streams reuse
-the regular ytdlp path.
+The platform exposes an undocumented but stable API (api.crowdbunker.com),
+without authentication. Video playback does not go through this module:
+yt-dlp ships a CrowdBunkerIE for https://crowdbunker.com/v/{uid}, so
+details/streams reuse the regular ytdlp path.
 
 Video identity: video_id = post uid (e.g. "0z4Kms8pi8I"),
 channel_id = organization uid (the @handle, e.g. "PruneDePrune").
@@ -19,7 +19,9 @@ import httpx
 
 from ..models import Video
 
-API_BASE = "https://api.divulg.org"
+# 2026-09: the API moved from api.divulg.org (now answers 403) to this host;
+# the video CDN stayed on the *.divulg.org domains.
+API_BASE = "https://api.crowdbunker.com"
 TIMEOUT = httpx.Timeout(10.0)
 HEADERS = {"accept": "application/json, text/plain, */*"}
 # The posts API returns at most 30 items per page.

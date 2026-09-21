@@ -234,7 +234,7 @@ def test_feed_crowdbunker_videos_carry_view_counts(client, app):
         httpx.AsyncClient,
         "get",
         _mock_get(
-            {"api.divulg.org": httpx.Response(200, json={"items": items, "last": None})}
+            {"api.crowdbunker.com": httpx.Response(200, json={"items": items, "last": None})}
         ),
     ):
         resp = client.get("/api/feed")
