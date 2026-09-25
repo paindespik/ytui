@@ -40,6 +40,10 @@ export const prefs = {
   set muted(v) { set("muted", v); },
   get gain() { return getNum("gain", 1); },
   set gain(v) { set("gain", v); },
+  // Autoplay: when off, the end of a video stops playback instead of pulling
+  // the next queue item (or a suggestion). Same default as the mobile app.
+  get autoplay() { return getBool("autoplay", true); },
+  set autoplay(v) { set("autoplay", v); },
 };
 
 // Clé qualifiée '{platform}:{video_id}' : le même id nu peut exister sur

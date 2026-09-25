@@ -34,7 +34,12 @@ export async function render(view, { params, query }) {
   liveBadge.style.display = "none";
   liveBadge.style.marginLeft = "8px";
   title.append(liveBadge);
-  const followBtn = el("button", { class: "btn", text: "Suivre", disabled: true });
+  const followBtn = el("button", {
+    class: "btn",
+    text: "Suivre",
+    disabled: true,
+    "aria-pressed": "false",
+  });
   const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
   const body = el("div");
 
@@ -43,6 +48,7 @@ export async function render(view, { params, query }) {
     id: "search-input",
     type: "search",
     placeholder: "Rechercher dans la chaîne…",
+    "aria-label": "Rechercher dans la chaîne",
     value: q,
   });
   const searchForm = el(
@@ -95,15 +101,37 @@ export async function render(view, { params, query }) {
       followed = chans.some((c) => c.channel_id === id);
       syncFollowBtn();
     })
-    .catch(() => {});
+    .catch(() => syncFollowBtn()); // /channels muet : le bouton reste utilisable
 
+  // Bascule : une chaîne suivie doit pouvoir être quittée d'ici, sans passer
+  // par les Réglages.
   function syncFollowBtn() {
-    followBtn.textContent = followed ? "Suivi ✓" : "Suivre";
-    followBtn.disabled = followed;
+    followBtn.textContent = followed ? "✓ Suivie — ne plus suivre" : "Suivre";
+    followBtn.setAttribute("aria-pressed", followed ? "true" : "false");
+    followBtn.classList.toggle("primary", followed);
+    followBtn.disabled = false;
   }
+
+  syncFollowBtn();
 
   followBtn.addEventListener("click", async () => {
     followBtn.disabled = true;
+    if (followed) {
+      try {
+        await api.unfollowChannel(id);
+        followed = false;
+        toast("Chaîne retirée");
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          followed = false;
+          toast("Chaîne déjà retirée");
+        } else {
+          errorToast(err);
+        }
+      }
+      syncFollowBtn();
+      return;
+    }
     try {
       await api.followChannel(followRef(platform, id));
       followed = true;

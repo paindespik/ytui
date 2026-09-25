@@ -33,6 +33,13 @@ function focusedVideo() {
   return node && node._video ? node._video : null;
 }
 
+// Carte atteinte autrement qu'avec j/k (Tab, souris) : le DOM focalisé fait foi.
+function activeCardVideo() {
+  const node = document.activeElement;
+  const card = node && typeof node.closest === "function" ? node.closest(".card, .row") : null;
+  return card && card._video ? card._video : null;
+}
+
 function isTyping(e) {
   const t = e.target;
   return (
@@ -49,7 +56,7 @@ export function showHelp() {
     ["j / k", "Carte suivante / précédente"],
     ["Entrée", "Ouvrir l'élément sélectionné"],
     ["q", "Ajouter l'élément à la file d'attente"],
-    ["r", "Actualiser la vue"],
+    ["r", "Actualiser la vue (hors lecture)"],
     ["Espace", "Lecture / pause"],
     ["← / →", "Reculer / avancer de 5 s"],
     ["[ / ]", "Vitesse −0,25 / +0,25"],
@@ -57,6 +64,8 @@ export function showHelp() {
     ["m", "Muet"],
     ["f", "Plein écran"],
     ["n / p", "Vidéo suivante / précédente de la file"],
+    ["a", "Lecture auto (marche / arrêt)"],
+    ["l", "Boucle sur la vidéo courante"],
     ["Échap", "Fermer / retour"],
     ["?", "Cette aide"],
   ];
@@ -104,9 +113,17 @@ export function initShortcuts() {
         e.preventDefault();
         showHelp();
         return;
-      case "Escape":
-        history.back();
+      case "Escape": {
+        // Un menu contextuel ouvert se ferme en premier ; sur l'accueil il n'y a
+        // rien derrière, et remonter sortait carrément de l'application.
+        const menu = document.querySelector(".ctx-menu");
+        if (menu) {
+          menu.remove();
+          return;
+        }
+        if (parseHash().path !== "/") history.back();
         return;
+      }
       case "j":
         e.preventDefault();
         moveFocus(1);
@@ -116,7 +133,7 @@ export function initShortcuts() {
         moveFocus(-1);
         return;
       case "q": {
-        const video = focusedVideo();
+        const video = focusedVideo() || activeCardVideo();
         if (video && video.kind === "video") {
           queue.enqueue(video);
           toast("Ajouté à la file d'attente");
@@ -124,6 +141,9 @@ export function initShortcuts() {
         return;
       }
       case "r":
+        // Sur la page lecture, re-rendre détruirait le lecteur et couperait le
+        // son : il n'y a rien à actualiser ici.
+        if (parseHash().path.startsWith("/watch")) return;
         dispatch(document.getElementById("view"));
         return;
     }
@@ -168,6 +188,12 @@ export function initShortcuts() {
         return;
       case "p":
         playerActions.previous?.();
+        return;
+      case "a":
+        playerActions.toggleAutoplay?.();
+        return;
+      case "l":
+        playerActions.toggleLoop?.();
         return;
     }
   });

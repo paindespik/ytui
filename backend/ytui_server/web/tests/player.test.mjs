@@ -323,6 +323,163 @@ describe("lecteur web — reprise et playlist", () => {
     });
   });
 
+
+  // ─── Concurrence : un seul moteur vivant, une seule reprise valide ───
+  //
+  // Chaque chemin qui réattache un moteur (changement de qualité, retry après
+  // flux expiré) doit invalider ce qui était en vol : deux _attach() concurrents
+  // laissaient un moteur orphelin télécharger en fond, et un écouteur de seek
+  // survivant envoyait la vidéo SUIVANTE à la position de la précédente.
+
+  describe("réattachement concurrent", () => {
+    test("deux changements de qualité rapprochés ne laissent qu'un moteur", async () => {
+      const dash = fakeDashjs();
+      globalThis.window.dashjs = dash;
+      mockApi([
+        { match: "/streams", json: STREAMS_SPLIT, delay: 20 },
+        ...routes({ resume: null, mpd: true, streams: STREAMS_SPLIT }),
+      ]);
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      const first = dash.instances.length;
+
+      const a = player.setMaxHeight(720);
+      const b = player.setMaxHeight(1080);
+      await Promise.all([a, b]);
+      await flush(4);
+
+      const alive = dash.instances.filter((i) => !i.destroyed);
+      assert.equal(alive.length, 1, `moteurs vivants : ${alive.length}`);
+      assert.ok(dash.instances.length > first);
+      player.destroy();
+    });
+
+    test("le seek de reprise périmé n'atteint pas la vidéo suivante", async () => {
+      const api = mockApi(routes({ resume: { position: 300, duration: 600 } }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+
+      // Vidéo suivante demandée AVANT l'arrivée des métadonnées du flux
+      // précédent : l'écouteur loadedmetadata {once:true} de la vidéo d'avant
+      // est toujours branché sur l'élément.
+      api.add({ match: /\/api\/history\/[^/]+\/resume/, method: "GET", status: 404, json: {} });
+      await player.load(makeVideo("suivante"));
+      el.emitLoadedMetadata({ duration: 600 });
+
+      assert.equal(el.currentTime, 0, "la vidéo suivante démarre au début");
+      player.destroy();
+    });
+
+    test("_fatalOrRetry invalide la résolution en vol", async () => {
+      mockApi(routes({ resume: null }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      const before = player._loadToken;
+      await player._fatalOrRetry("Flux interrompu");
+      assert.ok(player._loadToken > before, "le jeton de chargement a changé");
+      player.destroy();
+    });
+  });
+
+  // ─── Sauvegarde de position : pause et fermeture d'onglet ───
+
+  describe("écriture de la position", () => {
+    test("une pause écrit la position immédiatement", async () => {
+      const api = mockApi(routes({ resume: null }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      el.emitLoadedMetadata({ duration: 600 });
+      el.emitTimeUpdate(120);
+      el.dispatchEvent(new Event("pause"));
+      await flush();
+      assert.deepEqual(savedPositions(api), [120]);
+      player.destroy();
+    });
+
+    test("pagehide écrit la position en keepalive", async () => {
+      const api = mockApi(routes({ resume: null }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      el.emitLoadedMetadata({ duration: 600 });
+      el.emitTimeUpdate(200);
+      globalThis.window.dispatchEvent(new Event("pagehide"));
+      await flush();
+      const puts = api.find("/position", "PUT");
+      assert.equal(puts.length, 1);
+      assert.equal(puts[0].init.keepalive, true);
+      player.destroy();
+    });
+  });
+
+  // ─── Boucle, direct déclaré par le serveur, sous-titres ───
+
+  describe("boucle et état « direct »", () => {
+    test("en boucle, la fin du média ne fait pas avancer la file", async () => {
+      mockApi(routes({ resume: null }));
+      const el = new FakeMediaElement();
+      const { player, events } = makePlayer(el);
+      await player.load(VIDEO);
+      el.emitLoadedMetadata({ duration: 600 });
+      assert.equal(player.setLoop(true), true);
+      assert.equal(el.loop, true);
+
+      el.currentTime = 600;
+      el.emitEnded();
+      assert.equal(events.ended, 0, "aucun enchaînement en boucle");
+      assert.equal(el.currentTime, 0, "rejoué depuis le début");
+      assert.ok(el.calls.play >= 2);
+
+      player.setLoop(false);
+      el.emitEnded();
+      assert.equal(events.ended, 1);
+      player.destroy();
+    });
+
+    test("is_live du serveur marque le lecteur en direct (id YouTube ordinaire)", async () => {
+      globalThis.window.Hls = fakeHls().Hls;
+      const api = mockApi(routes({ resume: null, streams: { ...STREAMS_HLS, is_live: true } }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+
+      await player.load(VIDEO);
+      assert.equal(player.live, true);
+      assert.equal(player.setLoop(true), false, "pas de boucle sur un direct");
+
+      el.emitLoadedMetadata({ duration: 600 });
+      el.emitTimeUpdate(30);
+      player._savePosition();
+      await flush();
+      assert.deepEqual(savedPositions(api), [], "aucune position pour un direct");
+      player.destroy();
+    });
+
+    test("la langue de sous-titres choisie est réappliquée après un réattachement", async () => {
+      const subs = [
+        { lang: "fr", label: "Français", url: "https://cdn.example/fr.vtt" },
+        { lang: "en", label: "English", url: "https://cdn.example/en.vtt" },
+      ];
+      mockApi(routes({ resume: null, streams: { ...STREAMS_PROGRESSIVE, subtitles: subs } }));
+      const el = new FakeMediaElement();
+      // textTracks suit les <track> ajoutés par le lecteur (le vrai DOM le fait).
+      el.textTracks = [{ mode: "disabled" }, { mode: "disabled" }];
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+
+      player.setSubtitle(1); // English
+      assert.equal(el.textTracks[1].mode, "showing");
+
+      await player.setMaxHeight(720);
+      assert.equal(el.textTracks[1].mode, "showing", "sous-titres conservés");
+      assert.equal(el.textTracks[0].mode, "disabled");
+      player.destroy();
+    });
+  });
+
   // ─── Reprise sur DASH (toutes les VOD YouTube passent par là) ───
 
   describe("reprise — DASH (VOD YouTube)", () => {

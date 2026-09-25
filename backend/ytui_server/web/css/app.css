@@ -445,6 +445,9 @@ kbd {
   text-align: center;
   padding: 20px;
 }
+/* Le spinner partagé réserve 60px de padding : inutile dans l'overlay, qui est
+   déjà centré sur toute la surface du lecteur. */
+.player-overlay .spinner { padding: 0; }
 .player-overlay .big-play {
   font-size: 30px;
   background: var(--accent);

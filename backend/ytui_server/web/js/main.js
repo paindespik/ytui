@@ -60,13 +60,18 @@ document.getElementById("nav-help").addEventListener("click", showHelp);
     /* server unreachable: the login page will surface the error */
   }
   appRoot.hidden = false;
-  const { path } = parseHash();
-  if (!authenticated && path !== "/login") {
-    navigate("/login");
-  } else if (authenticated && path === "/login") {
-    navigate("/");
-  }
   if (authenticated) watched.load(); // fire and forget
   initShortcuts();
+  const { path } = parseHash();
+  // navigate() change le hash, donc hashchange rendra la bonne vue : rendre ici
+  // en plus afficherait brièvement (et chargerait) la vue qu'on quitte.
+  if (!authenticated && path !== "/login") {
+    navigate("/login");
+    return;
+  }
+  if (authenticated && path === "/login") {
+    navigate("/");
+    return;
+  }
   await render();
 })();

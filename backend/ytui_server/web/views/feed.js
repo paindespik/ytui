@@ -15,9 +15,19 @@ export async function render(view) {
     body,
   );
 
-  async function load(refresh) {
+  // Même intervalle que la TUI et le mobile (5 min) : plus court que le TTL de
+  // cache du backend (15 min), donc ces rafraîchissements sont servis depuis le
+  // cache et la latence de découverte reste bornée à ~5 min.
+  const REFRESH_MS = 5 * 60 * 1000;
+
+  // Signature du dernier rendu : un rafraîchissement silencieux identique ne
+  // re-rend rien (sinon focus clavier et position de lecture sautaient toutes
+  // les 5 min pour rien).
+  let lastSignature = "";
+
+  async function load(refresh, silent = false) {
     refreshBtn.disabled = true;
-    body.replaceChildren(spinner());
+    if (!silent) body.replaceChildren(spinner());
     let lives = [];
     try {
       lives = await api.lives();
@@ -28,12 +38,20 @@ export async function render(view) {
     try {
       out = await api.feed(refresh);
     } catch (err) {
+      refreshBtn.disabled = false;
+      if (silent) return; // tick raté : garder la page telle quelle
       errorToast(err);
       body.replaceChildren(emptyState("Impossible de charger le flux"));
-      refreshBtn.disabled = false;
       return;
     }
     refreshBtn.disabled = false;
+    const signature = JSON.stringify([
+      lives.map((l) => `${l.video.platform}:${l.video.video_id}`),
+      (out.videos || []).map((v) => `${v.platform}:${v.video_id}`),
+      out.warnings || [],
+    ]);
+    if (silent && signature === lastSignature) return;
+    lastSignature = signature;
     body.replaceChildren();
     for (const w of out.warnings || []) {
       body.append(el("div", { class: "notice", text: w }));
@@ -54,4 +72,8 @@ export async function render(view) {
   }
 
   await load(false);
+  // Rafraîchissement périodique, nettoyé au démontage de la vue (sinon il
+  // survit à la navigation et écrit dans un DOM détaché).
+  const timer = setInterval(() => load(false, true), REFRESH_MS);
+  return () => clearInterval(timer);
 }

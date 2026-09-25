@@ -64,8 +64,9 @@ Le code de sortie vaut 0 si tout passe, non nul sinon : utilisable tel quel en C
 | Fichier | Rôle |
 |---|---|
 | `harness.mjs` | Faux environnement navigateur réutilisable (DOM, `location`, `localStorage`, `fetch`, Web Audio, moteurs de lecture). Aucun test. |
-| `queue.test.mjs` | File de lecture (`js/queue.js`) : lecture de playlist, `jumpTo` positionnel, `removeUpcoming`, évènements `change`. |
-| `player.test.mjs` | Lecteur (`js/player.js`) : reprise d'une vidéo partiellement vue (progressif et dash.js), protection du point de reprise, fin de média dédoublonnée, chargements dépassés. |
+| `queue.test.mjs` | File de lecture (`js/queue.js`) : lecture de playlist, `jumpTo` positionnel, `removeUpcoming`, évènements `change`, persistance `sessionStorage` (survie au rechargement). |
+| `player.test.mjs` | Lecteur (`js/player.js`) : reprise d'une vidéo partiellement vue (progressif et dash.js), protection du point de reprise, fin de média dédoublonnée, chargements dépassés, réattachements concurrents (qualité/retry), écriture de position sur `pause`/`pagehide`, boucle et sous-titres conservés. |
+| `watch.test.mjs` | Vue lecture (`views/watch.js`) : cycle de vie du chat en direct (aucun minuteur survivant au démontage), lecture auto, panneau « À suivre », bascule « direct » via `is_live`. |
 | `router.test.mjs` | Routeur (`js/router.js`) : une seule vue montée à la fois, même quand un rendu lent se termine après une autre navigation. |
 | `e2e/` | Scénarios en vrai navigateur sur un vrai backend (manuels, hors CI) — voir `e2e/README.md`. |
 

@@ -20,17 +20,24 @@ export async function render(view, { query }) {
     id: "search-input",
     type: "search",
     placeholder: "Rechercher…",
+    "aria-label": "Rechercher",
     value: q,
   });
   const segButtons = SOURCES.map(([value, label]) =>
     el("button", {
       type: "button",
       class: value === source ? "active" : "",
+      dataset: { source: value },
       text: label,
       onclick: () => {
+        if (value === source) return;
         source = value;
-        segButtons.forEach((b) => b.classList.toggle("active", b.textContent === label));
-        if (input.value.trim()) submit();
+        // Comparaison sur la valeur (le libellé n'est pas une clé), et hash mis
+        // à jour même sans terme : la source choisie reste partageable et
+        // survit à un rechargement.
+        segButtons.forEach((b) => b.classList.toggle("active", b.dataset.source === source));
+        const term = input.value.trim();
+        navigate(`/search?source=${source}` + (term ? `&q=${encodeURIComponent(term)}` : ""));
       },
     }),
   );

@@ -1,0 +1,195 @@
+// Batterie sur la vue lecture (views/watch.js) : cycle de vie du chat en
+// direct, lecture auto, panneau « À suivre » et bascule « direct » déclarée par
+// le serveur. Ce sont les chemins où une fuite (minuteur qui survit à la
+// navigation) ou un mauvais état (direct pris pour une VOD) se paient cher.
+//
+// Lancement : node --test "backend/ytui_server/web/tests/*.test.mjs"
+
+import { test, describe, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+
+import { installDom, mockApi, flush, makeVideo } from "./harness.mjs";
+
+let watch;
+let queue;
+
+const STREAMS_VOD = {
+  kind: "progressive",
+  url: "https://cdn.example/video.mp4",
+  title: "Une vidéo",
+  duration: 600,
+  subtitles: [],
+};
+
+/// Routes minimales d'une page lecture. `lives` et `chat` varient par test.
+function routes({ lives = [], livesDelay = 0, related = [], streams = STREAMS_VOD, chat } = {}) {
+  return [
+    { match: "/api/lives", json: lives, delay: livesDelay },
+    { match: "/chat", json: chat || { messages: [], cursor: 1, active: true } },
+    { match: "/related", json: { items: related } },
+    { match: "/rating", json: { rating: "none" } },
+    { match: /\/api\/history\/[^/]+\/resume/, method: "GET", status: 404, json: {} },
+    { match: /\/position/, method: "PUT", status: 204 },
+    { match: "/api/history", method: "POST", status: 204 },
+    { match: "/mpd", status: 404, json: {} },
+    { match: "/streams", json: streams },
+    { match: "/sponsor", json: { segments: [] } },
+  ];
+}
+
+const mounted = [];
+
+async function mount(view, { platform = "youtube", id = "abc" } = {}) {
+  const cleanup = await watch.render(view, {
+    params: { platform, id },
+    query: new URLSearchParams(),
+  });
+  mounted.push(cleanup);
+  return cleanup;
+}
+
+const mediaEl = (view) => view.querySelectorAll("video")[0];
+const textOf = (node) =>
+  node.children
+    .map((c) => (typeof c === "string" ? c : c.textContent || textOf(c)))
+    .join(" ");
+
+describe("vue lecture — cycle de vie et lecture auto", () => {
+  beforeEach(async () => {
+    installDom();
+    globalThis.localStorage.clear();
+    ({ queue } = await import("../js/queue.js"));
+    queue.items = [];
+    queue.index = 0;
+    watch = await import("../views/watch.js");
+    // Le harness partage #view entre les tests (installDom est idempotent) :
+    // sans ce vidage, mediaEl() renverrait le <video> d'un montage précédent.
+    document.getElementById("view").replaceChildren();
+  });
+
+  afterEach(async () => {
+    for (const c of mounted.splice(0)) {
+      try {
+        c();
+      } catch {
+        /* déjà démonté par le test */
+      }
+    }
+    await flush();
+  });
+
+  // ─── Chat : aucune fuite de minuteur ───
+
+  test("vue démontée pendant /api/lives → le chat ne démarre jamais", async () => {
+    const api = mockApi(routes({ lives: [], livesDelay: 30 }));
+    const view = document.getElementById("view");
+    const cleanup = await mount(view);
+
+    cleanup(); // navigation pendant que /api/lives est encore en vol
+    await flush(8);
+    assert.equal(api.find("/chat").length, 0, "aucun sondage de chat après démontage");
+  });
+
+  test("un direct confirmé sonde le chat, et le démontage l'arrête", async () => {
+    const live = { video: makeVideo("abc", { platform: "youtube" }) };
+    const api = mockApi(routes({ lives: [live] }));
+    const view = document.getElementById("view");
+    const cleanup = await mount(view);
+    await flush(6);
+
+    const during = api.find("/chat").length;
+    assert.ok(during >= 1, "le chat a bien démarré");
+
+    cleanup();
+    await flush(6);
+    assert.equal(api.find("/chat").length, during, "plus aucun tick après démontage");
+  });
+
+  test("le curseur du chat ne recule jamais", async () => {
+    const live = { video: makeVideo("abc", { platform: "youtube" }) };
+    const api = mockApi([
+      // 2ᵉ page sans curseur : rejouer depuis 0 doublonnerait les messages.
+      { match: "/chat", json: () => ({ messages: [], cursor: 0, active: true }) },
+      ...routes({ lives: [live] }),
+    ]);
+    api.routes.unshift({
+      match: "/chat",
+      json: { messages: [{ author: "a", text: "salut" }], cursor: 12, active: true },
+    });
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+
+    const calls = api.find("/chat");
+    assert.ok(calls.length >= 1);
+    for (const c of calls.slice(1)) {
+      assert.ok(c.url.includes("cursor=12"), `curseur régressé : ${c.url}`);
+    }
+  });
+
+  // ─── Lecture auto ───
+
+  test("lecture auto désactivée : la fin d'une vidéo n'avance pas la file", async () => {
+    mockApi(routes());
+    globalThis.localStorage.setItem("ytui.autoplay", "false");
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+
+    const el = mediaEl(view);
+    el.emitLoadedMetadata({ duration: 600 });
+    el.currentTime = 600;
+    el.emitEnded();
+    await flush(4);
+
+    assert.equal(queue.index, 0, "la lecture s'arrête en fin de vidéo");
+  });
+
+  test("lecture auto activée (défaut) : la file avance", async () => {
+    mockApi(routes());
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+
+    const el = mediaEl(view);
+    el.emitLoadedMetadata({ duration: 600 });
+    el.currentTime = 600;
+    el.emitEnded();
+    await flush(4);
+
+    assert.equal(queue.index, 1);
+  });
+
+  // ─── « À suivre » et état direct ───
+
+  test("aucune suggestion → message explicite dans le panneau", async () => {
+    mockApi(routes({ related: [] }));
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+
+    assert.ok(textOf(view).includes("Aucune suggestion"), textOf(view).slice(0, 200));
+  });
+
+  test("is_live renvoyé par /streams : badge EN DIRECT et pas d'enchaînement", async () => {
+    mockApi(
+      routes({
+        streams: { ...STREAMS_VOD, kind: "progressive", is_live: true },
+        related: [makeVideo("zzz")],
+      }),
+    );
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+
+    assert.ok(textOf(view).includes("EN DIRECT"), "badge direct affiché");
+
+    const el = mediaEl(view);
+    el.emitEnded();
+    await flush(4);
+    assert.equal(queue.index, 0, "un direct terminé n'enchaîne pas sur une suggestion");
+  });
+});

@@ -460,6 +460,62 @@ test("playlist de 10 : jumpTo répétés ne perdent ni ne dupliquent d'élément
   }
 });
 
+// ─── Persistance (sessionStorage) ───
+//
+// Un F5 sur /watch ne doit pas réduire une playlist de 30 titres à la seule
+// vidéo portée par l'URL : la file survit au rechargement, par onglet.
+
+test("chaque mutation écrit {items, index} dans sessionStorage", () => {
+  sessionStorage.clear();
+  queue.play(makePlaylist(3), 1);
+  const stored = JSON.parse(sessionStorage.getItem("ytui.queue"));
+  assert.deepEqual(stored.items.map((v) => v.video_id), ["v1", "v2", "v3"]);
+  assert.equal(stored.index, 1);
+
+  queue.next();
+  assert.equal(JSON.parse(sessionStorage.getItem("ytui.queue")).index, 2);
+
+  queue.enqueue(makeVideo("v4"));
+  assert.equal(JSON.parse(sessionStorage.getItem("ytui.queue")).items.length, 4);
+});
+
+test("restore() réhydrate la file du rechargement précédent", () => {
+  sessionStorage.setItem(
+    "ytui.queue",
+    JSON.stringify({ items: makePlaylist(4), index: 2 }),
+  );
+  reset();
+  queue.restore();
+  assert.deepEqual(ids(), ["v1", "v2", "v3", "v4"]);
+  assert.equal(currentId(), "v3");
+  assert.equal(queue.hasNext, true);
+  assert.equal(queue.hasPrevious, true);
+});
+
+test("restore() borne un index hors limites", () => {
+  sessionStorage.setItem("ytui.queue", JSON.stringify({ items: makePlaylist(2), index: 9 }));
+  reset();
+  queue.restore();
+  assert.equal(queue.index, 0);
+  assert.equal(currentId(), "v1");
+});
+
+test("restore() ignore une charge vide, corrompue ou absente", () => {
+  for (const payload of [null, "{pas du json", JSON.stringify({ items: [] }), JSON.stringify({ items: [{}] })]) {
+    reset();
+    if (payload === null) sessionStorage.removeItem("ytui.queue");
+    else sessionStorage.setItem("ytui.queue", payload);
+    queue.restore();
+    assert.deepEqual(ids(), [], `charge rejetée : ${payload}`);
+  }
+});
+
+test("restore() n'émet pas d'évènement change (aucune vue montée au boot)", () => {
+  sessionStorage.setItem("ytui.queue", JSON.stringify({ items: makePlaylist(2), index: 0 }));
+  reset();
+  assert.equal(countChanges(() => queue.restore()), 0);
+});
+
 // ─── Smoke : le harness suffit à charger player.js ───
 
 test("smoke : player.js s'importe et s'instancie sous le harness", async () => {

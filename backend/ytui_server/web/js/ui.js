@@ -100,6 +100,32 @@ export function openVideo(video) {
   }
 }
 
+// Public page of a video on its own platform — what a user expects when they
+// share a link. The backend already computes it (Video.url, a computed field),
+// so it is only rebuilt here when a listing predates that field.
+export function publicVideoUrl(v) {
+  if (v.url) return v.url;
+  const vid = v.video_id;
+  switch (v.platform) {
+    case "odysee":
+      return `https://odysee.com/${vid}`;
+    case "bitchute":
+      return `https://www.bitchute.com/video/${vid}/`;
+    case "crowdbunker":
+      return `https://crowdbunker.com/v/${vid}`;
+    case "twitch":
+      if (vid.includes(":")) return `https://www.twitch.tv/${vid.split(":")[0]}`;
+      if (/^v\d+$/.test(vid)) return `https://www.twitch.tv/videos/${vid.slice(1)}`;
+      return `https://www.twitch.tv/${vid}`;
+    case "tiktok":
+      if (vid.includes(":")) return `https://www.tiktok.com/@${vid.split(":")[0]}/live`;
+      if (v.channel_id) return `https://www.tiktok.com/@${v.channel_id}/video/${vid}`;
+      return `https://www.tiktok.com/embed/${vid}`;
+    default:
+      return `https://www.youtube.com/watch?v=${vid}`;
+  }
+}
+
 // Composite live ids ("login:stream_id" / "user:room_id") mark live content.
 export const isLiveVideo = (v) =>
   (v.platform === "twitch" || v.platform === "tiktok") &&

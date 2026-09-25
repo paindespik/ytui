@@ -11,6 +11,7 @@ export async function render(view) {
     class: "input",
     type: "password",
     placeholder: "Jeton API",
+    "aria-label": "Jeton API",
     autocomplete: "current-password",
     required: true,
   });

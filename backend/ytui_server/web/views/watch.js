@@ -3,6 +3,7 @@
 import { api, ApiError } from "../js/api.js";
 import {
   el,
+  spinner,
   toast,
   errorToast,
   fmtCount,
@@ -10,7 +11,9 @@ import {
   watchPath,
   channelPath,
   detailPath,
+  publicVideoUrl,
   addToPlaylistModal,
+  openModal,
 } from "../js/ui.js";
 import { queue } from "../js/queue.js";
 import { replace, navigate } from "../js/router.js";
@@ -19,9 +22,19 @@ import { playerActions } from "../js/shortcuts.js";
 import { prefs, QUALITIES, GAINS } from "../js/state.js";
 import { createComments } from "../js/comments.js";
 
+// Sleep-timer presets (minutes), mirroring the mobile player menu.
+const SLEEP_PRESETS = [15, 30, 45, 60, 90];
+const CHAT_POLL_MS = 3000;
+
 export async function render(view, { params }) {
   const { platform, id } = params;
-  const live = isLiveId(platform, id);
+  // Vue démontée : toute continuation asynchrone (chat, « À suivre », overlay)
+  // doit s'arrêter là plutôt que d'écrire dans un DOM qui n'est plus affiché —
+  // et surtout de réarmer un minuteur.
+  let disposed = false;
+  // Un direct YouTube garde un id ordinaire : l'état démarre avec l'heuristique
+  // d'id composite et bascule dès que /streams (is_live) ou le chat le confirme.
+  let isLive = isLiveId(platform, id);
 
   let video =
     queue.current && queue.current.video_id === id && queue.current.platform === platform
@@ -67,7 +80,7 @@ export async function render(view, { params }) {
   if (video.channel_id) {
     channelLink.href = "#" + channelPath(video.channel_id, platform, video.channel_title);
   }
-  const metaLine = el("span", { class: "sub", text: live ? "EN DIRECT" : "" });
+  const metaLine = el("span", { class: "sub", text: isLive ? "EN DIRECT" : "" });
 
   const speedSel = el(
     "select",
@@ -118,15 +131,193 @@ export async function render(view, { params }) {
     "+ Playlist",
   );
 
+  // ─── Navigation dans la file (n / p au clavier, boutons ici) ───
+
+  const prevBtn = el(
+    "button",
+    { class: "btn", title: "Vidéo précédente (p)", onclick: () => playerActions.previous?.() },
+    "⏮ Précédent",
+  );
+  const nextBtn = el(
+    "button",
+    { class: "btn", title: "Vidéo suivante (n)", onclick: () => playerActions.next?.() },
+    "⏭ Suivant",
+  );
+
+  function syncNav() {
+    prevBtn.disabled = !queue.hasPrevious;
+    nextBtn.disabled = !queue.hasNext;
+  }
+
+  // ─── Lecture auto / boucle / minuterie / partage (parité mobile) ───
+
+  const autoplayBtn = el("button", {
+    class: "btn",
+    title: "Enchaîner automatiquement la vidéo suivante (a)",
+    "aria-pressed": "false",
+    onclick: () => {
+      prefs.autoplay = !prefs.autoplay;
+      syncAutoplay();
+      toast(prefs.autoplay ? "Lecture auto activée" : "Lecture auto désactivée");
+    },
+  });
+
+  function syncAutoplay() {
+    const on = prefs.autoplay;
+    autoplayBtn.textContent = on ? "↪ Lecture auto ✓" : "↪ Lecture auto";
+    autoplayBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    autoplayBtn.classList.toggle("primary", on);
+  }
+
+  const loopBtn = el("button", {
+    class: "btn",
+    title: "Répéter cette vidéo (l)",
+    "aria-pressed": "false",
+    onclick: () => {
+      if (isLive) return;
+      player.setLoop(!player.loop);
+      syncLoop();
+      toast(player.loop ? "Boucle activée" : "Boucle désactivée");
+    },
+  });
+
+  function syncLoop() {
+    const on = Boolean(player && player.loop);
+    loopBtn.textContent = on ? "🔂 Boucle ✓" : "🔂 Boucle";
+    loopBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    loopBtn.classList.toggle("primary", on);
+    loopBtn.disabled = isLive;
+  }
+
+  // Minuterie de mise en veille : soit une échéance, soit « fin de la vidéo ».
+  let sleepTimer = null;
+  let sleepTick = null;
+  let sleepDeadline = 0;
+  let sleepAtEnd = false;
+
+  const sleepBtn = el("button", {
+    class: "btn",
+    title: "Minuterie de mise en veille",
+    onclick: () => sleepMenu(),
+  });
+
+  function clearSleep() {
+    clearTimeout(sleepTimer);
+    clearInterval(sleepTick);
+    sleepTimer = null;
+    sleepTick = null;
+    sleepDeadline = 0;
+    sleepAtEnd = false;
+    syncSleep();
+  }
+
+  function syncSleep() {
+    if (sleepAtEnd) sleepBtn.textContent = "⏱ Fin de la vidéo";
+    else if (sleepDeadline) {
+      const left = Math.max(1, Math.ceil((sleepDeadline - Date.now()) / 60000));
+      sleepBtn.textContent = `⏱ ${left} min`;
+    } else sleepBtn.textContent = "⏱ Minuterie";
+    sleepBtn.classList.toggle("primary", Boolean(sleepDeadline || sleepAtEnd));
+  }
+
+  function fireSleep() {
+    clearSleep();
+    videoEl.pause();
+    toast("Minuterie écoulée : lecture en pause");
+  }
+
+  function setSleep(minutes) {
+    clearSleep();
+    sleepDeadline = Date.now() + minutes * 60000;
+    sleepTimer = setTimeout(fireSleep, minutes * 60000);
+    sleepTick = setInterval(syncSleep, 30000); // libellé = temps restant
+    syncSleep();
+    toast(`Minuterie : ${minutes} min`);
+  }
+
+  function sleepMenu() {
+    const buttons = [
+      ...SLEEP_PRESETS.map((m) =>
+        el(
+          "button",
+          {
+            class: "btn",
+            onclick: () => {
+              close();
+              setSleep(m);
+            },
+          },
+          `${m} min`,
+        ),
+      ),
+      el(
+        "button",
+        {
+          class: "btn",
+          onclick: () => {
+            close();
+            clearSleep();
+            sleepAtEnd = true;
+            syncSleep();
+            toast("Minuterie : fin de la vidéo");
+          },
+        },
+        "Fin de la vidéo",
+      ),
+      el(
+        "button",
+        {
+          class: "btn",
+          onclick: () => {
+            close();
+            clearSleep();
+            toast("Minuterie désactivée");
+          },
+        },
+        "Désactiver",
+      ),
+    ];
+    const { close } = openModal(
+      "Minuterie de mise en veille",
+      el("div", { class: "list-pick" }, buttons),
+    );
+  }
+
+  const shareBtn = el(
+    "button",
+    { class: "btn", title: "Partager le lien public", onclick: () => shareVideo() },
+    "Partager",
+  );
+
+  async function shareVideo() {
+    // Toujours le lien public de la plateforme : l'URL interne ytui n'a aucun
+    // sens hors de ce serveur.
+    const url = publicVideoUrl(video);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: video.title || "ytui", url });
+        return;
+      } catch {
+        return; // partage annulé par l'utilisateur
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Lien copié");
+    } catch {
+      toast("Copie impossible", { error: true });
+    }
+  }
+
   const queuePanel = el("div", { class: "rows" });
   const relatedPanel = el("div", { class: "rows" });
   const relatedSection = el(
     "div",
-    { hidden: platform !== "youtube" || live },
+    { hidden: platform !== "youtube" || isLive },
     el("div", { class: "section-title", text: "À suivre" }),
     relatedPanel,
   );
-  const chatLiveNow = (platform === "youtube" || platform === "twitch") && live;
+  const chatLiveNow = (platform === "youtube" || platform === "twitch") && isLive;
   const chatPanel = el("div", { class: "chat-body" });
   const chatSection = el(
     "div",
@@ -251,6 +442,12 @@ export async function render(view, { params }) {
             gainSel,
             qualitySel,
             subSel,
+            prevBtn,
+            nextBtn,
+            autoplayBtn,
+            loopBtn,
+            sleepBtn,
+            shareBtn,
             pipBtn,
             likeBtn,
             commentsBtn,
@@ -282,6 +479,32 @@ export async function render(view, { params }) {
     );
   }
 
+  // Toute erreur de lecture propose la même issue : réessayer. (Avant, seul
+  // onFatal offrait le bouton ; un rejet de player.load() laissait un message
+  // mort à l'écran.)
+  function showError(message) {
+    showOverlay(
+      message,
+      el("button", { class: "btn primary", onclick: () => startPlayback() }, "Réessayer"),
+    );
+  }
+
+  // Entre la demande et la première image il peut s'écouler plusieurs secondes
+  // (résolution yt-dlp + MPD) : l'attente doit se voir.
+  function showLoading() {
+    overlayHost.replaceChildren(el("div", { class: "player-overlay" }, spinner()));
+  }
+
+  function startPlayback() {
+    if (disposed) return;
+    showLoading();
+    player.load(video).catch((err) => {
+      if (disposed) return;
+      errorToast(err);
+      showError(err.detail || "Lecture impossible");
+    });
+  }
+
   // ─── Lecteur ───
 
   // La hauteur annoncée par /streams est celle de la piste choisie côté serveur,
@@ -293,13 +516,25 @@ export async function render(view, { params }) {
     const parts = [];
     const height = videoEl.videoHeight || streamsInfo.height;
     if (height) parts.push(`${height}p`);
-    if (live) parts.push("EN DIRECT");
+    if (isLive) parts.push("EN DIRECT");
     else if (streamsInfo.duration) parts.push(fmtDuration(streamsInfo.duration));
     // /streams carries the view count (same yt-dlp extraction); fall back to
     // whatever the listing already knew (feed items have it since RSS enrichment).
     const views = streamsInfo.view_count ?? video.view_count;
-    if (!live && views != null) parts.push(`${fmtCount(views)} vues`);
+    if (!isLive && views != null) parts.push(`${fmtCount(views)} vues`);
     metaLine.textContent = parts.join(" · ");
+  }
+
+  // Bascule définitive en « direct » : badge, pas de suggestions, pas
+  // d'enchaînement en fin de flux, pas de boucle.
+  function markLive() {
+    if (isLive) return;
+    isLive = true;
+    related = [];
+    setSideHidden(relatedSection, true);
+    player.setLoop(false);
+    syncLoop();
+    renderMeta();
   }
 
   videoEl.addEventListener("loadedmetadata", renderMeta);
@@ -313,6 +548,7 @@ export async function render(view, { params }) {
         document.title = `${streams.title} — ytui`;
       }
       streamsInfo = streams;
+      if (streams.is_live) markLive();
       renderMeta();
       subSel.replaceChildren(
         el("option", { value: "-1" }, "Sous-titres : aucun"),
@@ -321,25 +557,7 @@ export async function render(view, { params }) {
         ),
       );
     },
-    onFatal: (msg) => {
-      showOverlay(
-        msg,
-        el(
-          "button",
-          {
-            class: "btn primary",
-            onclick: () => {
-              clearOverlay();
-              player.load(video).catch((err) => {
-                errorToast(err);
-                showOverlay(err.detail || "Lecture impossible");
-              });
-            },
-          },
-          "Réessayer",
-        ),
-      );
-    },
+    onFatal: (msg) => showError(msg),
     onAutoplayBlocked: () => {
       showOverlay(
         null,
@@ -372,6 +590,7 @@ export async function render(view, { params }) {
   qualitySel.onchange = (e) => player.setMaxHeight(Number(e.target.value));
   subSel.addEventListener("change", () => player.setSubtitle(Number(subSel.value)));
   videoEl.addEventListener("play", clearOverlay);
+  videoEl.addEventListener("playing", clearOverlay);
 
   // ─── File d'attente & « À suivre » ───
 
@@ -431,10 +650,16 @@ export async function render(view, { params }) {
 
   let related = [];
   async function loadRelated() {
-    if (platform !== "youtube" || live) return;
+    if (platform !== "youtube" || isLive) return;
+    relatedPanel.replaceChildren(spinner());
     try {
       const out = await api.related(id, platform);
+      if (disposed || isLive) return;
       related = (out.items || []).filter((v) => v.kind === "video");
+      if (!related.length) {
+        relatedPanel.replaceChildren(el("div", { class: "sub", text: "Aucune suggestion" }));
+        return;
+      }
       relatedPanel.replaceChildren(
         ...related.map((v) =>
           sideRow(v, {
@@ -445,9 +670,9 @@ export async function render(view, { params }) {
           }),
         ),
       );
-      setSideHidden(relatedSection, related.length === 0);
     } catch {
-      setSideHidden(relatedSection, true);
+      if (disposed) return;
+      relatedPanel.replaceChildren(el("div", { class: "sub", text: "Suggestions indisponibles" }));
     }
   }
 
@@ -455,24 +680,38 @@ export async function render(view, { params }) {
   let chatCursor = 0;
   let chatTimer = null;
   let chatSeen = false;
+  let chatStarted = false;
+  let chatStopped = false;
   const chatWaiting = el("div", { class: "sub", text: "En attente de messages…" });
   const hexColor = (c) => (c && /^#[0-9A-Fa-f]{6}$/.test(c) ? c : "");
 
   function stopChat() {
+    chatStopped = true;
     if (chatTimer) {
-      clearInterval(chatTimer);
+      clearTimeout(chatTimer);
       chatTimer = null;
     }
   }
 
+  // Sondage non réentrant : le tick suivant n'est armé qu'une fois la réponse
+  // traitée (un setInterval de 3 s empilait les requêtes dès que le serveur
+  // répondait plus lentement, et les pages arrivaient dans le désordre).
   async function pollChat() {
-    let page;
+    chatTimer = null;
+    let page = null;
     try {
       page = await api.liveChat(id, platform, chatCursor);
     } catch {
-      return; // tick raté, on réessaie au suivant
+      /* tick raté, on réessaie au suivant */
     }
-    chatCursor = page.cursor || 0;
+    if (disposed || chatStopped) return;
+    if (!page) {
+      chatTimer = setTimeout(pollChat, CHAT_POLL_MS);
+      return;
+    }
+    // Le curseur ne recule jamais : une réponse sans curseur (ou plus ancienne)
+    // rejouerait des messages déjà affichés.
+    chatCursor = Math.max(chatCursor, Number(page.cursor) || 0);
     const msgs = page.messages || [];
     if (msgs.length) chatWaiting.remove();
     const atBottom =
@@ -492,27 +731,34 @@ export async function render(view, { params }) {
         chatWaiting.textContent = "Le direct est terminé.";
         chatPanel.append(chatWaiting);
       }
+      return;
     }
+    chatTimer = setTimeout(pollChat, CHAT_POLL_MS);
   }
 
   function startChat() {
-    if (chatTimer) return;
+    if (disposed || chatStarted) return;
+    chatStarted = true;
+    chatStopped = false;
+    markLive(); // un chat actif = un direct, quel que soit le format de l'id
     setSideHidden(chatSection, false);
     setSideHidden(queueSection, true);
     chatPanel.append(chatWaiting);
-    chatTimer = setInterval(pollChat, 3000);
     pollChat();
   }
 
   async function initChat() {
     if (platform !== "youtube" && platform !== "twitch") return;
-    if (live) {
+    if (isLive) {
       startChat(); // id composite Twitch → direct en cours
       return;
     }
     if (platform === "youtube") {
       try {
         const out = await api.lives();
+        // La vue a pu être démontée pendant l'attente : sans ce garde, le
+        // sondage du chat survivait à la navigation.
+        if (disposed) return;
         if ((out || []).some((it) => it.video && it.video.video_id === id)) startChat();
       } catch {
         /* pas de chat disponible */
@@ -524,7 +770,15 @@ export async function render(view, { params }) {
   // (enqueue + next — sémantique mobile exacte). Appelé une seule fois par
   // média : le lecteur dédoublonne `ended` natif et PLAYBACK_ENDED de dash.js.
   async function onEnded() {
-    if (live) return;
+    if (isLive) return;
+    // Minuterie « fin de la vidéo » : on s'arrête là, file ou pas.
+    if (sleepAtEnd) {
+      clearSleep();
+      videoEl.pause();
+      toast("Minuterie écoulée : lecture en pause");
+      return;
+    }
+    if (!prefs.autoplay) return; // lecture auto désactivée : la lecture s'arrête
     if (queue.hasNext) {
       queue.next();
       return;
@@ -538,6 +792,7 @@ export async function render(view, { params }) {
         first = null;
       }
     }
+    if (disposed || isLive) return;
     if (first) {
       queue.enqueue(first);
       queue.next();
@@ -547,6 +802,7 @@ export async function render(view, { params }) {
   let queueIndex = queue.index;
   const onQueueChange = () => {
     renderQueue();
+    syncNav();
     const cur = queue.current;
     const moved = queue.index !== queueIndex;
     queueIndex = queue.index;
@@ -558,11 +814,7 @@ export async function render(view, { params }) {
       // Même vidéo à une autre place (playlist qui répète un titre) : l'URL ne
       // change pas, donc aucun re-rendu — il faut relancer le média ici, sinon
       // la lecture reste bloquée sur la fin du doublon.
-      clearOverlay();
-      player.load(video).catch((err) => {
-        errorToast(err);
-        showOverlay(err.detail || "Lecture impossible");
-      });
+      startPlayback();
     }
   };
   queue.addEventListener("change", onQueueChange);
@@ -573,19 +825,33 @@ export async function render(view, { params }) {
   };
   playerActions.previous = () => {
     if (queue.hasPrevious) queue.previous();
-    else if (!live) videoEl.currentTime = 0;
+    else if (!isLive) videoEl.currentTime = 0;
+  };
+  playerActions.toggleAutoplay = () => {
+    prefs.autoplay = !prefs.autoplay;
+    syncAutoplay();
+    toast(prefs.autoplay ? "Lecture auto activée" : "Lecture auto désactivée");
+  };
+  playerActions.toggleLoop = () => {
+    if (isLive) return;
+    player.setLoop(!player.loop);
+    syncLoop();
+    toast(player.loop ? "Boucle activée" : "Boucle désactivée");
   };
 
   renderQueue();
+  syncNav();
+  syncAutoplay();
+  syncLoop();
+  syncSleep();
   loadRelated();
   initChat();
-  player.load(video).catch((err) => {
-    errorToast(err);
-    showOverlay(err.detail || "Lecture impossible");
-  });
+  startPlayback();
 
   return () => {
+    disposed = true;
     stopChat();
+    clearSleep();
     queue.removeEventListener("change", onQueueChange);
     player.destroy();
     document.title = "ytui";

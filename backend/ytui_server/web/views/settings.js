@@ -101,6 +101,7 @@ export async function render(view) {
     class: "input",
     type: "text",
     placeholder: "Référence de chaîne…",
+    "aria-label": "Référence de chaîne à suivre",
   });
   view.append(
     el(
@@ -170,6 +171,7 @@ export async function render(view) {
     type: "text",
     value: prefs.subLangs,
     placeholder: "fr,en",
+    "aria-label": "Langues des sous-titres",
     onchange: (e) => {
       prefs.subLangs = e.target.value.trim();
     },

@@ -39,6 +39,7 @@ export class Player {
     this.video = null;
     this.streams = null;
     this.live = false;
+    this.loop = false;
     this.rate = 1;
     this._engine = null;
     this._hls = null;
@@ -70,6 +71,11 @@ export class Player {
     this._limiter = null;
     this._gestureResume = null;
     this._volumeSynced = false;
+    // Langues des pistes de sous-titres du chargement courant + langue choisie
+    // par l'utilisateur : un changement de qualité reconstruit les <track>, la
+    // sélection doit survivre au réattachement.
+    this._subLangs = [];
+    this._preferredSubLang = null;
 
     this._onTimeUpdate = this._onTimeUpdate.bind(this);
     this._onElementError = this._onElementError.bind(this);
@@ -78,6 +84,8 @@ export class Player {
     this._onPlaying = this._onPlaying.bind(this);
     this._onSeeked = this._onSeeked.bind(this);
     this._onEnded = this._onEnded.bind(this);
+    this._onPause = this._onPause.bind(this);
+    this._onPageHide = this._onPageHide.bind(this);
     videoEl.addEventListener("timeupdate", this._onTimeUpdate);
     videoEl.addEventListener("error", this._onElementError);
     videoEl.addEventListener("volumechange", this._onVolume);
@@ -85,6 +93,9 @@ export class Player {
     videoEl.addEventListener("playing", this._onPlaying);
     videoEl.addEventListener("seeked", this._onSeeked);
     videoEl.addEventListener("ended", this._onEnded);
+    videoEl.addEventListener("pause", this._onPause);
+    // Onglet fermé / navigation sortante : dernière chance d'écrire la position.
+    window.addEventListener("pagehide", this._onPageHide);
     videoEl.volume = prefs.volume;
     videoEl.muted = prefs.muted;
 
@@ -146,6 +157,8 @@ export class Player {
     this.el.removeEventListener("playing", this._onPlaying);
     this.el.removeEventListener("seeked", this._onSeeked);
     this.el.removeEventListener("ended", this._onEnded);
+    this.el.removeEventListener("pause", this._onPause);
+    window.removeEventListener("pagehide", this._onPageHide);
     for (const k of Object.keys(playerActions)) delete playerActions[k];
     if ("mediaSession" in navigator) {
       navigator.mediaSession.metadata = null;
@@ -202,6 +215,10 @@ export class Player {
     }
     if (this._stale(token)) return;
     this.streams = streams;
+    // Un direct YouTube garde un id de vidéo ordinaire : seul ce drapeau le
+    // distingue d'une VOD (pas de reprise, pas de boucle, pas d'enchaînement).
+    if (streams.is_live) this.live = true;
+    if (this.live) this.setLoop(false);
     this.cb.onMeta?.(streams);
 
     if (streams.kind === "hls") {
@@ -404,11 +421,15 @@ export class Player {
       return;
     }
     this._retried = true;
+    // Nouveau jeton : la résolution en cours (s'il y en a une) ne doit pas
+    // brancher un second moteur par-dessus celui que ce retry installe.
+    const token = ++this._loadToken;
     const pos = this.live ? 0 : Math.floor(this.el.currentTime || 0);
     this._teardownEngines();
     try {
       await this._attach(pos); // URLs re-résolues (expiration)
     } catch {
+      if (this._destroyed || token !== this._loadToken) return;
       this.cb.onFatal?.("Flux expiré ou indisponible — réessayer");
     }
   }
@@ -440,8 +461,11 @@ export class Player {
 
   _seekOnReady(start) {
     if (!start || start <= 0) return;
+    // Le jeton est capturé ici : l'écouteur {once:true} survit au teardown et
+    // enverrait sinon la vidéo SUIVANTE à la position de la précédente.
+    const token = this._loadToken;
     const apply = () => {
-      if (this._destroyed) return;
+      if (this._destroyed || token !== this._loadToken) return;
       if (Math.abs(this.el.currentTime - start) > 2) this._seekTo(start);
     };
     if (this.el.readyState >= 1) apply();
@@ -481,6 +505,18 @@ export class Player {
   // (endOfStream MSE). Sans dédoublonnage, la file avançait de deux vidéos.
   _onEnded() {
     if (this._destroyed || this._ended) return;
+    // Boucle : rejouer sur place, sans jamais toucher à la file (l'attribut
+    // `loop` de l'élément suffit en lecture native, pas avec dash.js qui émet
+    // son propre PLAYBACK_ENDED).
+    if (this.loop && !this.live) {
+      try {
+        this.el.currentTime = 0;
+      } catch {
+        /* média non seekable */
+      }
+      this._play();
+      return;
+    }
     this._ended = true;
     this._savePosition(); // marque la vidéo comme vue jusqu'au bout
     this.cb.onEnded?.();
@@ -507,7 +543,7 @@ export class Player {
     }, HEARTBEAT_MS);
   }
 
-  _savePosition() {
+  _savePosition({ keepalive = false } = {}) {
     if (!this.video || this.live) return;
     const duration = this.el.duration;
     if (!duration || !Number.isFinite(duration)) return;
@@ -517,7 +553,7 @@ export class Player {
     // du flux, l'écrire effacerait le point de reprise qu'on vient de lire.
     if (!this._resumeSettled && position < this._resumeTarget - 5) return;
     const video = this.video;
-    api.savePosition(video.video_id, position, duration, video.platform).catch(async (err) => {
+    api.savePosition(video.video_id, position, duration, video.platform, { keepalive }).catch(async (err) => {
       // 404 : l'enregistrement dans l'historique (fire and forget) n'a pas
       // encore atterri, ou la ligne a été évincée. Réenregistrer puis réessayer
       // une fois, sinon les premières secondes d'une vidéo quittée vite sont
@@ -563,6 +599,7 @@ export class Player {
 
   _addSubtitleTracks(subs) {
     [...this.el.querySelectorAll("track")].forEach((t) => t.remove());
+    this._subLangs = subs.map((s) => s.lang);
     for (const s of subs) {
       const track = document.createElement("track");
       track.kind = "subtitles";
@@ -573,7 +610,12 @@ export class Player {
       this.el.append(track);
     }
     for (const t of this.el.textTracks) t.mode = "disabled";
-    this.cb.onSubtitleChange?.(-1);
+    // Réapplication du choix utilisateur après un réattachement (changement de
+    // qualité, retry) : sans ça les sous-titres disparaissaient silencieusement.
+    const wanted = this._preferredSubLang;
+    const index = wanted ? this._subLangs.indexOf(wanted) : -1;
+    if (index >= 0) this.setSubtitle(index);
+    else this.cb.onSubtitleChange?.(-1);
   }
 
   _showingIndex() {
@@ -585,6 +627,7 @@ export class Player {
     tracks.forEach((t, i) => {
       t.mode = i === index ? "showing" : "disabled";
     });
+    this._preferredSubLang = index >= 0 ? this._subLangs[index] || null : null;
     this.cb.onSubtitleChange?.(this._showingIndex());
   }
 
@@ -617,6 +660,10 @@ export class Player {
   // suffit, et la préférence persiste pour les lectures suivantes.
   async setMaxHeight(height) {
     prefs.maxHeight = height;
+    // Jeton neuf : sans lui, deux _attach() concurrents (double changement de
+    // qualité, ou changement pendant une résolution lente) branchaient chacun
+    // leur moteur — celui du premier restait orphelin à télécharger.
+    const token = ++this._loadToken;
     const pos = this.live ? 0 : Math.floor(this.el.currentTime || 0);
     this._teardownEngines();
     this._retried = false;
@@ -624,10 +671,19 @@ export class Player {
     try {
       await this._attach(pos);
     } catch (err) {
+      if (this._destroyed || token !== this._loadToken) return;
       this.cb.onFatal?.(err.detail || "Lecture impossible");
       return;
     }
+    if (this._destroyed || token !== this._loadToken) return;
     toast(`Qualité : ≤${height}p`);
+  }
+
+  // Boucle sur la vidéo courante (jamais sur un direct : il n'a pas de fin).
+  setLoop(on) {
+    this.loop = Boolean(on) && !this.live;
+    this.el.loop = this.loop;
+    return this.loop;
   }
 
   _applyRate() {
@@ -716,6 +772,20 @@ export class Player {
 
   _onPlay() {
     this._resumeAudio();
+  }
+
+  // Une pause est souvent le moment où l'utilisateur quitte la page : écrire la
+  // position tout de suite plutôt que d'attendre la prochaine pulsation.
+  _onPause() {
+    if (this._destroyed || this._ended) return;
+    this._savePosition();
+  }
+
+  // Onglet fermé / bfcache : requête keepalive, le document peut mourir juste
+  // après sans que le navigateur l'annule.
+  _onPageHide() {
+    if (this._destroyed) return;
+    this._savePosition({ keepalive: true });
   }
 
   // Décalage de volume Gecko/Linux (Pulse/PipeWire) : au démarrage du flux

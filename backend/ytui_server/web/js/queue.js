@@ -1,6 +1,10 @@
 // Client-side play queue — exact port of mobile/lib/state/queue.dart.
 // Emits a "change" event on every mutation.
 
+// Per-tab persistence key: a reload on /watch must not collapse a playlist
+// down to the single video carried by the URL.
+const STORE_KEY = "ytui.queue";
+
 class PlayQueue extends EventTarget {
   items = [];
   index = 0;
@@ -12,7 +16,41 @@ class PlayQueue extends EventTarget {
   get hasPrevious() { return this.index > 0; }
   get upcoming() { return this.items.slice(this.index + 1); }
 
-  _emit() { this.dispatchEvent(new Event("change")); }
+  _emit() {
+    this._persist();
+    this.dispatchEvent(new Event("change"));
+  }
+
+  // sessionStorage (not localStorage): each tab keeps its own queue, and the
+  // state dies with the tab — exactly the lifetime of a play session.
+  _persist() {
+    try {
+      sessionStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({ items: this.items, index: this.index }),
+      );
+    } catch {
+      /* storage unavailable or full: persistence is best effort */
+    }
+  }
+
+  // Called once at boot. Silently ignores anything that is not a usable queue.
+  restore() {
+    try {
+      const raw = sessionStorage.getItem(STORE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      const items = Array.isArray(data && data.items)
+        ? data.items.filter((v) => v && typeof v.video_id === "string")
+        : [];
+      if (!items.length) return;
+      this.items = items;
+      const i = Number(data.index);
+      this.index = Number.isInteger(i) && i >= 0 && i < items.length ? i : 0;
+    } catch {
+      /* corrupted payload: start from an empty queue */
+    }
+  }
 
   play(videos, startIndex = 0) {
     this.items = [...videos];
@@ -76,3 +114,4 @@ class PlayQueue extends EventTarget {
 }
 
 export const queue = new PlayQueue();
+queue.restore();
