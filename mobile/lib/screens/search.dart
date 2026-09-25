@@ -4,10 +4,13 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/models.dart';
 import '../state/providers.dart';
+import '../state/settings.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
+import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
 const _kSourceLabels = {
@@ -24,6 +27,20 @@ class SearchScreen extends ConsumerStatefulWidget {
 }
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
+  /// Results list. On TV the focus then moves from the text field to the
+  /// first result (a fresh [ScreenFocus] per query): otherwise it stayed in
+  /// the field and two D-pad presses went to the source selector first.
+  Widget _results(List<Video> items) {
+    final list = ResponsiveCenter(
+      child: ListView.builder(
+        itemCount: items.length,
+        itemBuilder: (_, i) => VideoTile(video: items[i]),
+      ),
+    );
+    if (!ref.watch(isTvProvider)) return list;
+    return ScreenFocus(key: ValueKey('$_source:$_query'), child: list);
+  }
+
   String _query = '';
   String _source = 'youtube';
   final _controller = TextEditingController();
@@ -108,13 +125,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                               icon: Icons.search_off,
                               message: 'Aucun résultat',
                             )
-                          : ResponsiveCenter(
-                              child: ListView(
-                                children: [
-                                  for (final v in items) VideoTile(video: v)
-                                ],
-                              ),
-                            ),
+                          : _results(items),
                     ),
           ),
         ],

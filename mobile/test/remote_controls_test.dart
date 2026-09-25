@@ -116,7 +116,7 @@ void main() {
     Future<void> focusLastAction(WidgetTester tester) async {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
-      for (var i = 0; i < 8; i++) {
+      for (var i = 0; i < 16; i++) {
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
         await tester.pump();
       }
@@ -209,6 +209,114 @@ void main() {
       expect(seeks, isEmpty);
     });
 
+    /// Hint line text, i.e. the description of the focused element.
+    String hintLine(WidgetTester tester) => tester
+        .widget<Text>(find.descendant(
+          of: find.byType(ValueListenableBuilder<String?>),
+          matching: find.byType(Text),
+        ))
+        .data!;
+
+    /// Walks the action row rightwards until the hint names [target].
+    Future<bool> focusAction(WidgetTester tester, String target) async {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      // DOWN lands under the bar's centre: rewind to the row's start first.
+      for (var i = 0; i < 16; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+      }
+      for (var i = 0; i < 16; i++) {
+        if (hintLine(tester) == target) return true;
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pump();
+        await tester.pump();
+      }
+      return hintLine(tester) == target;
+    }
+
+    testWidgets('describes the focused button on the hint line',
+        (tester) async {
+      final entry = FocusNode();
+      addTearDown(entry.dispose);
+      var loops = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: buildControls(
+            entryFocus: entry,
+            onSeek: (_) {},
+            loop: true,
+            onLoop: () => loops++,
+            onAutoplay: () {},
+            onSleep: () {},
+          ),
+        ),
+      ));
+      entry.requestFocus();
+      await tester.pump();
+      // The key hint until a button holds the focus.
+      expect(hintLine(tester), contains('OK lecture/pause'));
+
+      expect(await focusAction(tester, 'Lecture en boucle : activée'), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      expect(loops, 1);
+    });
+
+    testWidgets('hides the toggles a caller does not wire', (tester) async {
+      final entry = FocusNode();
+      addTearDown(entry.dispose);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: buildControls(entryFocus: entry, onSeek: (_) {}),
+        ),
+      ));
+      expect(find.byTooltip('Lecture en boucle : désactivée'), findsNothing);
+      expect(find.byTooltip('Minuterie de mise en veille'), findsNothing);
+    });
+
+    testWidgets('down from the action row reaches the up-next cards',
+        (tester) async {
+      final entry = FocusNode();
+      addTearDown(entry.dispose);
+      final played = <String>[];
+      // Shared by the overlay and the cards, as the player does.
+      final hint = ValueNotifier<String?>(null);
+      addTearDown(hint.dispose);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: buildControls(
+            entryFocus: entry,
+            onSeek: (_) {},
+            hint: hint,
+            upNext: RemoteCardStrip(
+              title: 'Suggestions',
+              cards: [
+                for (final title in ['Première', 'Deuxième'])
+                  RemoteVideoCard(
+                    title: title,
+                    thumbnailUrl: '',
+                    hint: hint,
+                    onPressed: () => played.add(title),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ));
+      entry.requestFocus();
+      await tester.pump();
+      expect(hintLine(tester), contains('options et à suivre'));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown); // action row
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown); // strip
+      await tester.pump();
+      expect(hintLine(tester), startsWith('OK : lire'));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      expect(played, hasLength(1));
+    });
+
     testWidgets('marks the focused action even in touch highlight mode',
         (tester) async {
       // Android's default highlight mode is `touch`, which suppresses focus
@@ -246,6 +354,15 @@ Widget buildControls({
   VoidCallback? onAudioDelay,
   VoidCallback? onQuality,
   bool live = false,
+  bool loop = false,
+  VoidCallback? onLoop,
+  bool autoplay = true,
+  VoidCallback? onAutoplay,
+  String? sleepLabel,
+  VoidCallback? onSleep,
+  VoidCallback? onLike,
+  Widget? upNext,
+  ValueNotifier<String?>? hint,
 }) {
   return RemotePlayerControls(
     title: 'Une vidéo',
@@ -268,5 +385,14 @@ Widget buildControls({
     onQuality: onQuality ?? () {},
     onInteract: onInteract ?? () {},
     entryFocus: entryFocus,
+    loop: loop,
+    onLoop: onLoop,
+    autoplay: autoplay,
+    onAutoplay: onAutoplay,
+    sleepLabel: sleepLabel,
+    onSleep: onSleep,
+    onLike: onLike,
+    upNext: upNext,
+    hint: hint,
   );
 }

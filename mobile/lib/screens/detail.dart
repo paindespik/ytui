@@ -6,11 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/client.dart';
+import '../api/models.dart';
 import '../format.dart';
 import '../state/providers.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/comment_card.dart';
+import '../widgets/open_player.dart';
 import '../widgets/responsive.dart';
 import '../widgets/screen_focus.dart';
 
@@ -84,19 +86,37 @@ class DetailScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
 
-            // Action buttons (YouTube only)
-            if (platform == 'youtube')
-              Row(
-                children: [
+            // Actions: play on every platform (also the first thing a remote
+            // can focus here), like/comment on YouTube.
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Lire'),
+                  onPressed: () => openPlayer(context, ref, [
+                    Video(
+                      videoId: videoId,
+                      title: d.title,
+                      channelTitle: d.channelTitle,
+                      channelId: d.channelId,
+                      duration: d.duration,
+                      platform: platform,
+                    ),
+                  ]),
+                ),
+                if (platform == 'youtube') ...[
                   _LikeButton(videoId: videoId),
-                  const SizedBox(width: 12),
                   FilledButton.tonalIcon(
                     icon: const Icon(Icons.comment_outlined, size: 18),
                     label: const Text('Commentaire'),
                     onPressed: () => _comment(context, ref),
                   ),
                 ],
-              ),
+              ],
+            ),
+            const SizedBox(height: 12),
 
             // Odysee read-only notice
             if (platform == 'odysee')
@@ -137,15 +157,7 @@ class DetailScreen extends ConsumerWidget {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(
-                  d.description,
-                  maxLines: 12,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    height: 1.6,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
+                child: _Description(text: d.description),
               ),
             ),
 
@@ -344,3 +356,57 @@ class _OdyseeComments extends ConsumerWidget {
   }
 }
 
+
+/// Description, folded to [_foldedLines] lines with an "Afficher plus"
+/// toggle when longer: the fold used to be final, the rest unreachable.
+class _Description extends StatefulWidget {
+  const _Description({required this.text});
+
+  final String text;
+
+  @override
+  State<_Description> createState() => _DescriptionState();
+}
+
+class _DescriptionState extends State<_Description> {
+  static const _foldedLines = 12;
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.bodyMedium?.copyWith(
+      height: 1.6,
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    if (widget.text.isEmpty) {
+      return Text('Pas de description.', style: style);
+    }
+    return LayoutBuilder(builder: (context, constraints) {
+      final painter = TextPainter(
+        text: TextSpan(text: widget.text, style: style),
+        maxLines: _foldedLines,
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout(maxWidth: constraints.maxWidth);
+      final foldable = painter.didExceedMaxLines;
+      painter.dispose();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.text,
+            maxLines: _expanded ? null : _foldedLines,
+            overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+            style: style,
+          ),
+          if (foldable)
+            TextButton(
+              onPressed: () => setState(() => _expanded = !_expanded),
+              child: Text(_expanded ? 'Afficher moins' : 'Afficher plus'),
+            ),
+        ],
+      );
+    });
+  }
+}

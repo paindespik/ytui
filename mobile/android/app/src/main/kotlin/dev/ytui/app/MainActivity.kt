@@ -37,6 +37,16 @@ class MainActivity : FlutterActivity() {
                         setMediaSessionPlaybackState(call.arguments as? Boolean ?: true)
                         result.success(null)
                     }
+                    // System share sheet for a video link (player "Partager").
+                    "share" -> {
+                        val text = call.argument<String>("text")
+                        if (text.isNullOrEmpty()) {
+                            result.error("no_text", "nothing to share", null)
+                        } else {
+                            share(text, call.argument<String>("subject"))
+                            result.success(null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -53,6 +63,24 @@ class MainActivity : FlutterActivity() {
                     stopAudioMonitors()
                 }
             })
+    }
+
+    /** The monitors normally stop with the Dart subscription (onCancel); an
+     *  activity torn down without it must not leak the receiver or leave a
+     *  ghost media session catching the media keys. */
+    override fun onDestroy() {
+        stopAudioMonitors()
+        audioEventSink = null
+        super.onDestroy()
+    }
+
+    private fun share(text: String, subject: String?) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            if (!subject.isNullOrEmpty()) putExtra(Intent.EXTRA_SUBJECT, subject)
+        }
+        startActivity(Intent.createChooser(send, null))
     }
 
     // ------------------------------------------------------------------

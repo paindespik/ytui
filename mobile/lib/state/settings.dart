@@ -13,6 +13,7 @@ const kSponsorblockKey = 'sponsorblock_enabled';
 const kAudioDelayKey = 'audio_delay_ms';
 const kMaxHeightKey = 'max_height';
 const kCellularMaxHeightKey = 'max_height_cellular';
+const kAutoplayNextKey = 'autoplay_next';
 
 class ServerSettings {
   final String url;
@@ -120,6 +121,24 @@ final cellularMaxHeightProvider =
         CellularMaxHeightNotifier.new);
 
 const kQualityLadder = [360, 480, 720, 1080, 1440, 2160];
+
+/// Whether the end of a video chains into the next one (queue first, then the
+/// first suggestion). Off, playback simply stops at the end. Persisted: it is
+/// a listening habit (one long video at night, a music queue...), not a
+/// per-video choice.
+class AutoplayNextNotifier extends Notifier<bool> {
+  @override
+  bool build() =>
+      ref.watch(sharedPreferencesProvider).getBool(kAutoplayNextKey) ?? true;
+
+  Future<void> setEnabled(bool value) async {
+    await ref.read(sharedPreferencesProvider).setBool(kAutoplayNextKey, value);
+    state = value;
+  }
+}
+
+final autoplayNextProvider =
+    NotifierProvider<AutoplayNextNotifier, bool>(AutoplayNextNotifier.new);
 
 /// True on Android TV / projectors (leanback, no touchscreen): playback is
 /// driven by the remote instead of the touch overlay. Overridden in main()

@@ -3,21 +3,50 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
+import '../api/models.dart';
 import '../state/providers.dart';
-import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/open_player.dart';
 import '../widgets/responsive.dart';
 import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
 
-class HistoryScreen extends ConsumerWidget {
+class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HistoryScreen> createState() => _HistoryScreenState();
+}
+
+class _HistoryScreenState extends ConsumerState<HistoryScreen> {
+  /// Entries removed here, hidden right away: the provider only drops them
+  /// after the DELETE and a re-fetch, and a rebuild in between would put a
+  /// dismissed Dismissible back in the tree (assertion in debug, flicker in
+  /// release). Platform-qualified: the same id can exist on two platforms.
+  final Set<String> _removed = {};
+
+  static String _key(Video video) => '${video.platform}:${video.videoId}';
+
+  Future<void> _remove(Video video) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _removed.add(_key(video)));
+    try {
+      await ref
+          .read(apiProvider)
+          .removeWatch(video.videoId, platform: video.platform);
+      ref.invalidate(historyProvider);
+    } catch (e) {
+      if (mounted) setState(() => _removed.remove(_key(video)));
+      messenger.showSnackBar(SnackBar(
+        content: Text('Échec de la suppression : ${AppError.messageFor(e)}'),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final history = ref.watch(historyProvider);
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -39,7 +68,11 @@ class HistoryScreen extends ConsumerWidget {
         loading: () => const AppLoading(),
         error: (e, _) =>
             AppError.from(e, onRetry: () => ref.invalidate(historyProvider)),
-        data: (entries) {
+        data: (all) {
+          final entries = [
+            for (final entry in all)
+              if (!_removed.contains(_key(entry.video))) entry,
+          ];
           if (entries.isEmpty) {
             return const AppEmpty(
               message: 'Aucun historique de visionnage',
@@ -53,7 +86,7 @@ class HistoryScreen extends ConsumerWidget {
               itemBuilder: (context, i) {
                 final entry = entries[i];
                 return Dismissible(
-                  key: ValueKey(entry.video.videoId),
+                  key: ValueKey(_key(entry.video)),
                   direction: DismissDirection.endToStart,
                   background: Container(
                     color: colorScheme.error,
@@ -61,18 +94,12 @@ class HistoryScreen extends ConsumerWidget {
                     padding: const EdgeInsets.only(right: kGutter),
                     child: Icon(Icons.delete, color: colorScheme.onError),
                   ),
-                  onDismissed: (_) async {
-                    await ref.read(apiProvider).removeWatch(
-                        entry.video.videoId,
-                        platform: entry.video.platform);
-                    ref.invalidate(historyProvider);
-                  },
+                  onDismissed: (_) => _remove(entry.video),
                   child: VideoTile(
                     video: entry.video,
-                    onTap: () {
-                      ref.read(queueProvider.notifier).play([entry.video]);
-                      context.push('/player');
-                    },
+                    onTap: () => openPlayer(context, ref, [entry.video]),
+                    onRemove: () => _remove(entry.video),
+                    removeLabel: 'Retirer de l\'historique',
                   ),
                 );
               },

@@ -47,6 +47,21 @@ ThemeData buildAppTheme() {
   );
 
   return base.copyWith(
+    // Focus overlay of InkWells/ListTiles. The M3 default (onSurface at ~10%)
+    // is invisible on a projected dark theme, and on TV the focus is the
+    // remote's only cursor.
+    focusColor: scheme.primary.withValues(alpha: 0.28),
+    // Icon buttons (app bar actions, ⋮) draw their own overlay: same stronger
+    // tint when focused, M3 defaults for every other state (null falls back).
+    iconButtonTheme: IconButtonThemeData(
+      style: ButtonStyle(
+        overlayColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.focused)
+              ? scheme.primary.withValues(alpha: 0.35)
+              : null,
+        ),
+      ),
+    ),
     // Flat, blended app bars that sit on the scaffold surface.
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surface,

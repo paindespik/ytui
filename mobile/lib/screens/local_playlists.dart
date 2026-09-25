@@ -8,9 +8,9 @@ import 'package:go_router/go_router.dart';
 import '../api/models.dart';
 import '../format.dart';
 import '../state/providers.dart';
-import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/open_player.dart';
 import '../widgets/playlist_import.dart';
 import '../widgets/responsive.dart';
 import '../widgets/screen_focus.dart';
@@ -144,9 +144,15 @@ class LocalPlaylistsScreen extends ConsumerWidget {
     if (name == null || name.isEmpty || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     final api = ref.read(apiProvider);
-    final ok = playlist == null
-        ? await api.createPlaylist(name) != null
-        : await api.renamePlaylist(playlist.id, name);
+    final bool ok;
+    try {
+      ok = playlist == null
+          ? await api.createPlaylist(name) != null
+          : await api.renamePlaylist(playlist.id, name);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(AppError.messageFor(e))));
+      return;
+    }
     if (!ok) {
       messenger.showSnackBar(
           const SnackBar(content: Text('Ce nom est déjà utilisé')));
@@ -194,13 +200,19 @@ class LocalPlaylistsScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (confirmed != true) return;
-    await ref.read(apiProvider).deletePlaylist(playlist.id);
+    if (confirmed != true || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(apiProvider).deletePlaylist(playlist.id);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(
+          content: Text('Échec de la suppression : ${AppError.messageFor(e)}')));
+    }
     ref.invalidate(playlistsProvider);
   }
 }
 
-class LocalPlaylistScreen extends ConsumerWidget {
+class LocalPlaylistScreen extends ConsumerStatefulWidget {
   final int playlistId;
   final String name;
 
@@ -208,7 +220,50 @@ class LocalPlaylistScreen extends ConsumerWidget {
       {super.key, required this.playlistId, this.name = ''});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LocalPlaylistScreen> createState() =>
+      _LocalPlaylistScreenState();
+}
+
+class _LocalPlaylistScreenState extends ConsumerState<LocalPlaylistScreen> {
+  /// Entries removed here, hidden right away (see HistoryScreen: a dismissed
+  /// Dismissible must not come back while the list re-fetches). A video is in
+  /// a playlist at most once, so the platform-qualified id is a unique key.
+  final Set<String> _removed = {};
+
+  /// Removals run one after the other: the backend compacts positions after
+  /// each one, so two quick swipes on stale positions deleted the neighbour.
+  Future<void> _removals = Future<void>.value();
+
+  static String _key(Video video) => '${video.platform}:${video.videoId}';
+
+  void _remove(Video video) {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _removed.add(_key(video)));
+    _removals = _removals.then((_) async {
+      final api = ref.read(apiProvider);
+      try {
+        // The position is read fresh for this very removal.
+        final items = await api.playlistItems(widget.playlistId);
+        final index = items.indexWhere((i) => _key(i.video) == _key(video));
+        if (index >= 0) {
+          await api.removePlaylistItem(widget.playlistId, items[index].position);
+        }
+      } catch (e) {
+        if (mounted) setState(() => _removed.remove(_key(video)));
+        messenger.showSnackBar(SnackBar(
+          content: Text('Échec de la suppression : ${AppError.messageFor(e)}'),
+        ));
+      }
+      if (!mounted) return;
+      ref.invalidate(playlistItemsProvider(widget.playlistId));
+      ref.invalidate(playlistsProvider);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final playlistId = widget.playlistId;
+    final name = widget.name;
     final items = ref.watch(playlistItemsProvider(playlistId));
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -223,7 +278,11 @@ class LocalPlaylistScreen extends ConsumerWidget {
         loading: () => const AppLoading(),
         error: (e, _) => AppError.from(e,
             onRetry: () => ref.invalidate(playlistItemsProvider(playlistId))),
-        data: (entries) {
+        data: (all) {
+          final entries = [
+            for (final entry in all)
+              if (!_removed.contains(_key(entry.video))) entry,
+          ];
           if (entries.isEmpty) {
             return const AppEmpty(
               message: 'Cette playlist est vide',
@@ -247,10 +306,7 @@ class LocalPlaylistScreen extends ConsumerWidget {
                     child: FilledButton.icon(
                       onPressed: videos.isEmpty
                           ? null
-                          : () {
-                              ref.read(queueProvider.notifier).play(videos);
-                              context.push('/player');
-                            },
+                          : () => openPlayer(context, ref, videos),
                       icon: const Icon(Icons.play_arrow),
                       label: Text('Lire les ${videos.length} vidéos'),
                       style: FilledButton.styleFrom(
@@ -265,8 +321,11 @@ class LocalPlaylistScreen extends ConsumerWidget {
                   );
                 }
                 final entry = entries[index - 1];
+                // Tapping a video plays the playlist from there on, like the
+                // "Play all" button does from the top.
+                final start = videos.indexOf(entry.video);
                 return Dismissible(
-                  key: ValueKey('${entry.position}-${entry.video.videoId}'),
+                  key: ValueKey(_key(entry.video)),
                   direction: DismissDirection.endToStart,
                   background: Container(
                     color: colorScheme.error,
@@ -274,14 +333,16 @@ class LocalPlaylistScreen extends ConsumerWidget {
                     padding: const EdgeInsets.only(right: kGutter),
                     child: Icon(Icons.delete, color: colorScheme.onError),
                   ),
-                  onDismissed: (_) async {
-                    await ref
-                        .read(apiProvider)
-                        .removePlaylistItem(playlistId, entry.position);
-                    ref.invalidate(playlistItemsProvider(playlistId));
-                    ref.invalidate(playlistsProvider);
-                  },
-                  child: VideoTile(video: entry.video),
+                  onDismissed: (_) => _remove(entry.video),
+                  child: VideoTile(
+                    video: entry.video,
+                    onTap: start < 0
+                        ? null
+                        : () => openPlayer(context, ref, videos,
+                            startIndex: start),
+                    onRemove: () => _remove(entry.video),
+                    removeLabel: 'Retirer de la playlist',
+                  ),
                 );
               },
             ),

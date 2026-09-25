@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import '../api/models.dart';
 import '../state/providers.dart';
+import '../state/settings.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
@@ -41,6 +42,22 @@ class HomeFeedScreen extends ConsumerWidget {
             ),
           ),
           actions: [
+            // A remote cannot pull to refresh: the TV gets a button.
+            if (ref.watch(isTvProvider))
+              Builder(
+                builder: (context) => IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: 'Actualiser',
+                  onPressed: () async {
+                    if (DefaultTabController.of(context).index == 1) {
+                      await ref.read(suggestionsProvider.notifier).refresh();
+                    } else {
+                      ref.invalidate(livesProvider);
+                      await ref.read(feedProvider.notifier).refresh();
+                    }
+                  },
+                ),
+              ),
             IconButton(
               icon: const Icon(Icons.search),
               tooltip: 'Rechercher',
@@ -164,54 +181,61 @@ class _VideoListView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    // Header rows (warnings, empty state) then the videos, built lazily: the
+    // feed runs to several hundred tiles, too many to build up front on the
+    // projector's SoC.
+    final headers = <Widget>[
+      for (final warning in warnings)
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: kGutter,
+            vertical: 4,
+          ),
+          child: Material(
+            color: colors.errorContainer,
+            borderRadius: BorderRadius.circular(kRadiusMd),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    color: colors.onErrorContainer,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      warning,
+                      style: TextStyle(color: colors.onErrorContainer),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      if (videos.isEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: 64),
+          child: AppEmpty(icon: emptyIcon, message: emptyMessage),
+        ),
+    ];
     return RefreshIndicator(
       onRefresh: onRefresh,
       child: ResponsiveCenter(
-        child: ListView(
+        child: ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: 8),
           physics: const AlwaysScrollableScrollPhysics(),
-          children: [
-            for (final warning in warnings)
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: kGutter,
-                  vertical: 4,
-                ),
-                child: Material(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(kRadiusMd),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.warning_amber_rounded,
-                          color: Theme.of(context).colorScheme.onErrorContainer,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            warning,
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onErrorContainer,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            if (videos.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 64),
-                child: AppEmpty(icon: emptyIcon, message: emptyMessage),
-              ),
-            for (final video in videos)
-              VideoTile(video: video, live: liveIds.contains(video.videoId)),
-          ],
+          itemCount: headers.length + videos.length,
+          itemBuilder: (context, i) {
+            if (i < headers.length) return headers[i];
+            final video = videos[i - headers.length];
+            return VideoTile(
+              video: video,
+              live: liveIds.contains(video.videoId),
+            );
+          },
         ),
       ),
     );

@@ -9,7 +9,11 @@ import 'settings.dart';
 
 final apiProvider = Provider<YtuiApi>((ref) {
   final settings = ref.watch(settingsProvider);
-  return YtuiApi(baseUrl: settings.url, token: settings.token);
+  final api = YtuiApi(baseUrl: settings.url, token: settings.token);
+  // New server settings rebuild the client: release the old one's pooled
+  // connections (requests still in flight are allowed to finish).
+  ref.onDispose(api.dio.close);
+  return api;
 });
 
 final feedProvider =

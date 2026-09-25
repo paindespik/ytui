@@ -10,6 +10,7 @@ import '../api/client.dart';
 import '../state/providers.dart';
 import '../state/settings.dart';
 import '../theme.dart';
+import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
 import '../widgets/screen_focus.dart';
 
@@ -411,9 +412,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                         icon: const Icon(Icons.delete_outline),
                                         tooltip: 'Ne plus suivre',
                                         onPressed: () async {
-                                          await ref
-                                              .read(apiProvider)
-                                              .unfollowChannel(c.channelId);
+                                          final messenger =
+                                              ScaffoldMessenger.of(context);
+                                          final name = c.title.isEmpty
+                                              ? c.ref
+                                              : c.title;
+                                          try {
+                                            await ref
+                                                .read(apiProvider)
+                                                .unfollowChannel(c.channelId);
+                                            messenger.showSnackBar(SnackBar(
+                                                content: Text(
+                                                    'Chaîne retirée : $name')));
+                                          } catch (e) {
+                                            messenger.showSnackBar(SnackBar(
+                                                content: Text(AppError
+                                                    .messageFor(e))));
+                                          }
                                           ref.invalidate(channelsProvider);
                                           ref.invalidate(feedProvider);
                                         },
@@ -463,7 +478,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (refValue == null || refValue.isEmpty || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await ref.read(apiProvider).followChannel(refValue);
+      final followed = await ref.read(apiProvider).followChannel(refValue);
+      messenger.showSnackBar(SnackBar(
+          content: Text('Chaîne suivie : '
+              '${followed.title.isEmpty ? followed.ref : followed.title}')));
       ref.invalidate(channelsProvider);
       ref.invalidate(feedProvider);
     } on ApiException catch (e) {

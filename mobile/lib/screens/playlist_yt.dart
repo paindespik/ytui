@@ -6,9 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../state/providers.dart';
-import '../state/queue.dart';
 import '../theme.dart';
 import '../widgets/app_state_views.dart';
+import '../widgets/open_player.dart';
 import '../widgets/playlist_import.dart';
 import '../widgets/responsive.dart';
 import '../widgets/screen_focus.dart';
@@ -79,10 +79,7 @@ class YtPlaylistScreen extends ConsumerWidget {
                     padding: const EdgeInsets.fromLTRB(
                         kGutter, kGutter, kGutter, 8),
                     child: FilledButton.icon(
-                      onPressed: () {
-                        ref.read(queueProvider.notifier).play(videos);
-                        context.push('/player');
-                      },
+                      onPressed: () => openPlayer(context, ref, videos),
                       icon: const Icon(Icons.play_arrow),
                       label: Text('Lire les ${videos.length} vidéos'),
                       style: FilledButton.styleFrom(
@@ -99,12 +96,8 @@ class YtPlaylistScreen extends ConsumerWidget {
                 final videoIndex = index - 1;
                 return VideoTile(
                   video: videos[videoIndex],
-                  onTap: () {
-                    ref
-                        .read(queueProvider.notifier)
-                        .play(videos, startIndex: videoIndex);
-                    context.push('/player');
-                  },
+                  onTap: () => openPlayer(context, ref, videos,
+                      startIndex: videoIndex),
                 );
               },
             ),

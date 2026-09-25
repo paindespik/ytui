@@ -38,9 +38,10 @@ class Video {
         published: json['published'] != null
             ? DateTime.tryParse(json['published'] as String)
             : null,
-        duration: json['duration'] as int?,
+        // num, not int: a float-typed count (123.0) must not fail the list.
+        duration: (json['duration'] as num?)?.toInt(),
         thumbnailUrl: json['thumbnail_url'] as String? ?? '',
-        viewCount: json['view_count'] as int?,
+        viewCount: (json['view_count'] as num?)?.toInt(),
         kind: json['kind'] as String? ?? 'video',
         platform: json['platform'] as String? ?? 'youtube',
         playlistId: json['playlist_id'] as String? ?? '',
@@ -61,6 +62,24 @@ class Video {
         'playlist_id': playlistId,
       };
 
+  /// Public web page of the video, for sharing. The backend fills [url] on
+  /// every listing; the fallback mirrors its `Video.url` for entries built
+  /// without one (older history rows, hand-made instances).
+  String get shareUrl {
+    if (url.isNotEmpty) return url;
+    final login = videoId.split(':').first;
+    return switch (platform) {
+      'odysee' => 'https://odysee.com/$videoId',
+      'bitchute' => 'https://www.bitchute.com/video/$videoId/',
+      'crowdbunker' => 'https://crowdbunker.com/v/$videoId',
+      'twitch' => 'https://www.twitch.tv/$login',
+      'tiktok' => videoId.contains(':')
+          ? 'https://www.tiktok.com/@$login/live'
+          : 'https://www.tiktok.com/@$videoId',
+      _ => 'https://www.youtube.com/watch?v=$videoId',
+    };
+  }
+
   String get durationLabel {
     final d = duration;
     if (d == null || d <= 0) return '';
@@ -77,7 +96,7 @@ class FeedResult {
   const FeedResult({required this.videos, this.warnings = const []});
 
   factory FeedResult.fromJson(Map<String, dynamic> json) => FeedResult(
-        videos: (json['videos'] as List<dynamic>)
+        videos: (json['videos'] as List<dynamic>? ?? const [])
             .map((e) => Video.fromJson(e as Map<String, dynamic>))
             .toList(),
         warnings: (json['warnings'] as List<dynamic>? ?? [])
@@ -115,9 +134,9 @@ class VideoDetails {
         channelId: json['channel_id'] as String? ?? '',
         channelTitle: json['channel_title'] as String? ?? '',
         description: json['description'] as String? ?? '',
-        viewCount: json['view_count'] as int?,
-        likeCount: json['like_count'] as int?,
-        duration: json['duration'] as int?,
+        viewCount: (json['view_count'] as num?)?.toInt(),
+        likeCount: (json['like_count'] as num?)?.toInt(),
+        duration: (json['duration'] as num?)?.toInt(),
         uploadDate: json['upload_date'] as String? ?? '',
       );
 }
@@ -187,9 +206,9 @@ class StreamInfo {
         videoUrl: json['video_url'] as String?,
         audioUrl: json['audio_url'] as String?,
         title: json['title'] as String? ?? '',
-        viewCount: json['view_count'] as int?,
-        duration: json['duration'] as int?,
-        height: json['height'] as int?,
+        viewCount: (json['view_count'] as num?)?.toInt(),
+        duration: (json['duration'] as num?)?.toInt(),
+        height: (json['height'] as num?)?.toInt(),
         isLive: json['is_live'] as bool? ?? false,
         proxyPath: json['proxy_path'] as String?,
         expiresAt: json['expires_at'] != null
@@ -296,7 +315,7 @@ class LocalPlaylist {
         id: json['id'] as int,
         name: json['name'] as String,
         createdAt: (json['created_at'] as num).toDouble(),
-        count: json['count'] as int? ?? 0,
+        count: (json['count'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -317,8 +336,8 @@ class PlaylistImport {
   factory PlaylistImport.fromJson(Map<String, dynamic> json) => PlaylistImport(
         playlist:
             LocalPlaylist.fromJson(json['playlist'] as Map<String, dynamic>),
-        added: json['added'] as int? ?? 0,
-        skipped: json['skipped'] as int? ?? 0,
+        added: (json['added'] as num?)?.toInt() ?? 0,
+        skipped: (json['skipped'] as num?)?.toInt() ?? 0,
         sourceTitle: json['source_title'] as String? ?? '',
       );
 }
@@ -360,10 +379,10 @@ class Comment {
         commentId: json['comment_id'] as String,
         text: json['text'] as String? ?? '',
         channelName: json['channel_name'] as String? ?? '',
-        timestamp: json['timestamp'] as int?,
-        replies: json['replies'] as int? ?? 0,
-        likes: json['likes'] as int? ?? 0,
-        dislikes: json['dislikes'] as int? ?? 0,
+        timestamp: (json['timestamp'] as num?)?.toInt(),
+        replies: (json['replies'] as num?)?.toInt() ?? 0,
+        likes: (json['likes'] as num?)?.toInt() ?? 0,
+        dislikes: (json['dislikes'] as num?)?.toInt() ?? 0,
         isPinned: json['is_pinned'] as bool? ?? false,
       );
 }
@@ -389,7 +408,7 @@ class CommentsPage {
         items: (json['items'] as List<dynamic>)
             .map((e) => Comment.fromJson(e as Map<String, dynamic>))
             .toList(),
-        total: json['total'] as int? ?? 0,
+        total: (json['total'] as num?)?.toInt() ?? 0,
         nextCursor: json['next_cursor'] as String?,
         disabled: json['disabled'] as bool? ?? false,
       );
@@ -430,7 +449,7 @@ class ChatPage {
         messages: (json['messages'] as List<dynamic>? ?? const [])
             .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
             .toList(),
-        cursor: json['cursor'] as int? ?? 0,
+        cursor: (json['cursor'] as num?)?.toInt() ?? 0,
         active: json['active'] as bool? ?? true,
       );
 }

@@ -13,6 +13,12 @@ const double kWideBreakpoint = 720;
 /// centered column shows clear, balanced margins instead of near-full-bleed.
 const double kMaxContentWidth = 640;
 
+/// Screen width from which [kMaxContentWidth] is relaxed to
+/// [kLandscapeMaxContentWidth]: a 960 dp projector (always landscape) showed a
+/// 640 dp column between two 160 dp empty bands.
+const double kLandscapeBreakpoint = 900;
+const double kLandscapeMaxContentWidth = 840;
+
 /// Centers [child] within a max-width column on wide screens.
 ///
 /// Below [kWideBreakpoint] this is a no-op (child fills the width). Above it,
@@ -33,9 +39,13 @@ class ResponsiveCenter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final width = maxWidth == kMaxContentWidth &&
+            MediaQuery.sizeOf(context).width >= kLandscapeBreakpoint
+        ? kLandscapeMaxContentWidth
+        : maxWidth;
     return Center(
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
+        constraints: BoxConstraints(maxWidth: width),
         child: child,
       ),
     );

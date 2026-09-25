@@ -18,17 +18,15 @@ import 'services/background.dart';
 import 'services/background_playback.dart';
 import 'services/live_poll.dart';
 import 'services/notifications.dart';
+import 'state/queue.dart';
 import 'state/settings.dart';
 import 'theme.dart';
+import 'widgets/open_player.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  await initNotifications();
-  await requestNotificationsPermission();
-  await initForegroundTask();
-  await registerBackgroundLiveCheck();
   final isTv = await _detectTv();
   if (isTv) {
     // Android defaults to the touch highlight mode, which hides every focus
@@ -36,15 +34,47 @@ Future<void> main() async {
     FocusManager.instance.highlightStrategy =
         FocusHighlightStrategy.alwaysTraditional;
   }
+  // Created up front (not by ProviderScope) so a notification tap can reach
+  // the queue from outside the widget tree.
+  final container = ProviderContainer(
+    overrides: [
+      sharedPreferencesProvider.overrideWithValue(prefs),
+      isTvProvider.overrideWithValue(isTv),
+    ],
+  );
+  await initNotifications(
+    onTap: (payload) => _playFromNotification(container, payload),
+  );
+  await requestNotificationsPermission();
+  await initForegroundTask();
+  await registerBackgroundLiveCheck();
 
   runApp(
-    ProviderScope(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        isTvProvider.overrideWithValue(isTv),
-      ],
+    UncontrolledProviderScope(
+      container: container,
       child: const YtuiApp(),
     ),
+  );
+
+  // A tap on a notification while the app was not running started it: play
+  // that video once the router is up.
+  final launchPayload = await notificationLaunchPayload();
+  if (launchPayload != null) {
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _playFromNotification(container, launchPayload),
+    );
+  }
+}
+
+/// Plays the video carried by a tapped live / new-video notification (the
+/// batch summary carries none: it just opens the app).
+void _playFromNotification(ProviderContainer container, String? payload) {
+  final video = videoFromPayload(payload);
+  if (video == null || !container.read(settingsProvider).isConfigured) return;
+  container.read(queueProvider.notifier).play([video]);
+  showPlayer(
+    navigator: _router.routerDelegate.navigatorKey.currentState,
+    router: _router,
   );
 }
 
@@ -63,7 +93,7 @@ final _router = GoRouter(
   routes: [
     GoRoute(path: '/', builder: (_, __) => const HomeFeedScreen()),
     GoRoute(path: '/search', builder: (_, __) => const SearchScreen()),
-    GoRoute(path: '/player', builder: (_, __) => const PlayerScreen()),
+    GoRoute(path: kPlayerPath, builder: (_, __) => const PlayerScreen()),
     GoRoute(path: '/history', builder: (_, __) => const HistoryScreen()),
     GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
     GoRoute(

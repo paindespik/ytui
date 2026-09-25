@@ -26,6 +26,51 @@ void main() {
       expect(video.durationLabel, '3:32');
     });
 
+    test('accepts float-typed counts instead of failing the whole list', () {
+      final video = Video.fromJson({
+        'video_id': 'a',
+        'title': 't',
+        'duration': 212.0,
+        'view_count': 1.5e6,
+      });
+      expect(video.duration, 212);
+      expect(video.viewCount, 1500000);
+    });
+
+    test('shareUrl prefers the backend url, else mirrors Video.url', () {
+      expect(
+        const Video(videoId: 'x', title: 't', url: 'https://example.com/v')
+            .shareUrl,
+        'https://example.com/v',
+      );
+      expect(const Video(videoId: 'dQw4w9WgXcQ', title: 't').shareUrl,
+          'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+      expect(
+        const Video(videoId: 'name:ab12', title: 't', platform: 'odysee')
+            .shareUrl,
+        'https://odysee.com/name:ab12',
+      );
+      expect(
+        const Video(videoId: 'abc', title: 't', platform: 'bitchute').shareUrl,
+        'https://www.bitchute.com/video/abc/',
+      );
+      expect(
+        const Video(videoId: 'uid1', title: 't', platform: 'crowdbunker')
+            .shareUrl,
+        'https://crowdbunker.com/v/uid1',
+      );
+      expect(
+        const Video(videoId: 'login:123', title: 't', platform: 'twitch')
+            .shareUrl,
+        'https://www.twitch.tv/login',
+      );
+      expect(
+        const Video(videoId: 'user:9', title: 't', platform: 'tiktok')
+            .shareUrl,
+        'https://www.tiktok.com/@user/live',
+      );
+    });
+
     test('tolerates minimal payload with defaults', () {
       final video = Video.fromJson({'video_id': 'abc', 'title': 't'});
       expect(video.kind, 'video');

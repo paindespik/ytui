@@ -1,7 +1,10 @@
 /// Integrated player: resolves streams just before playback (URLs expire),
 /// plays through media_kit, records history and heartbeats the position.
-/// Shows YouTube suggestions below the video, autoplays the next one, and
+/// Shows YouTube suggestions below the video, autoplays the next one (unless
+/// "Lecture auto" is off), loops or stops on a sleep timer on demand, and
 /// keeps playing in the background (screen off) via a foreground service.
+/// On TV/projectors the layout is always fullscreen: the remote overlay then
+/// carries the same options plus the queue/suggestions strip.
 library;
 
 import 'dart:async';
@@ -9,6 +12,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart' as mkv;
 
@@ -24,6 +28,8 @@ import '../state/queue.dart';
 import '../state/resume_guard.dart';
 import '../theme.dart';
 import '../widgets/comment_card.dart';
+import '../widgets/open_player.dart';
+import '../widgets/player_actions.dart';
 import '../widgets/remote_controls.dart';
 import '../widgets/responsive.dart';
 import '../widgets/video_tile.dart';
@@ -184,11 +190,26 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   bool _controlsVisible = false;
   Timer? _hideControls;
 
+  /// Hint line of the remote overlay: the description of whatever holds the
+  /// focus (buttons and "À suivre" cards alike).
+  final ValueNotifier<String?> _remoteHint = ValueNotifier<String?>(null);
+
   /// Pending seek target while arrow keys are still coming in: presses
   /// accumulate and a single seek is issued once they stop, so holding the
   /// remote scrubs instead of queueing dozens of decoder seeks.
   Duration? _seekTarget;
   Timer? _seekDebounce;
+
+  /// Loop the playing video (mpv `loop-file`). Kept while the player is open,
+  /// whatever gets played, until switched off; never applied to a live.
+  bool _loop = false;
+
+  /// Sleep timer: pause at [_sleepDeadline], or when the current video ends
+  /// if [_sleepAtEnd]. [_sleepTicker] only refreshes the remaining-time label.
+  DateTime? _sleepDeadline;
+  bool _sleepAtEnd = false;
+  Timer? _sleepTimer;
+  Timer? _sleepTicker;
 
   /// Android audio events (see [AudioEvent]): a disconnected Bluetooth
   /// earphone pauses the video (nobody is listening to it anymore), and the
@@ -240,6 +261,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    PlayerPresence.enter();
     _completedSub = player.stream.completed.where((done) => done).listen((_) {
       // media_kit re-emits `completed` (and re-arms it on the next open()):
       // without this guard the queue advanced twice and skipped a video.
@@ -250,6 +272,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
       _completedFor = finishedId;
       _markFinished(finishedId!); // non nul : shouldHandleCompletion l'a vérifié
+      if (_sleepAtEnd) {
+        // Sleep timer set to "end of video": stop here, nothing chains.
+        _cancelSleep();
+        _revealControls();
+        _notify('Minuterie : lecture arrêtée à la fin de la vidéo',
+            alsoOnTv: true);
+        return;
+      }
+      if (!ref.read(autoplayNextProvider)) {
+        // Autoplay off: playback stops at the end. On TV the overlay comes
+        // up (and stays, since nothing plays) so the remote can pick what's
+        // next from the strip.
+        _revealControls();
+        return;
+      }
       final queue = ref.read(queueProvider);
       if (queue.hasNext) {
         ref.read(queueProvider.notifier).next();
@@ -272,6 +309,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         _errorCheckPending = false;
         if (!mounted || player.state.playing) return;
       }
+      // Noise from a media resting at its end (see [_restsAtEnd]) is no reason
+      // to reload it.
+      if (_restsAtEnd) return;
       // Expired/broken stream URL: re-resolve once, then surface the error.
       if (_retried) {
         if (mounted) setState(() => _error = message);
@@ -314,6 +354,17 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       // there (seek landed, or the stream simply started at the right place).
       _resume.confirm(position.inSeconds.toDouble());
       _maybeSkipSponsor(position);
+      // Replayed after an end that did not chain (autoplay off, sleep timer):
+      // re-arm the completion guard so the next end is handled again. The
+      // margin keeps a late position update at the very end from re-arming
+      // it (a duplicate `completed` would then advance the queue twice).
+      if (_completedFor != null && _completedFor == _loadedVideoId) {
+        final duration = player.state.duration;
+        if (duration > Duration.zero &&
+            position < duration - const Duration(seconds: 3)) {
+          _completedFor = null;
+        }
+      }
     });
     _logSub = player.stream.log.listen((log) {
       // Only the audio-output banner: it names the backend and, for opensles,
@@ -438,6 +489,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   void _checkStall() {
     if (!mounted || _error != null || !player.state.playing) return;
+    if (_restsAtEnd) return;
     final now = DateTime.now();
     final stallAfter = _playingIsLive ? _kStallAfterLive : _kStallAfter;
     final retryGap = _playingIsLive ? _kStallRetryGapLive : _kStallRetryGap;
@@ -465,6 +517,21 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     unawaited(_load(video, resume: false, startAt: at));
   }
 
+  /// The media reached its end and nothing replaced it: autoplay off, an "end
+  /// of video" sleep timer, or nothing left to chain. The player then rests
+  /// on the last frame — neither a stall nor a failure. Treated as one, the
+  /// watchdog (measured on the projector: 16 s after the end) or an EOF error
+  /// reloaded the video, and the resume logic, finding a bookmark at the very
+  /// end, restarted it from 0 and wiped the bookmark.
+  bool get _restsAtEnd {
+    if (player.state.completed) return true;
+    if (_loadedVideoId != null && _completedFor == _loadedVideoId) return true;
+    if (_playingIsLive) return false;
+    final duration = player.state.duration;
+    return duration > Duration.zero &&
+        player.state.position >= duration - const Duration(seconds: 2);
+  }
+
   /// Plays the first suggestion for the current video (autoplay at end of queue).
   Future<void> _autoplayNext() async {
     final video = ref.read(queueProvider).current;
@@ -472,7 +539,11 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     try {
       final related =
           await ref.read(relatedProvider((video.videoId, video.platform)).future);
-      if (!mounted || related.isEmpty) return;
+      if (!mounted) return;
+      if (related.isEmpty) {
+        _revealControls(); // TV: nothing chains, hand over to the remote
+        return;
+      }
       final notifier = ref.read(queueProvider.notifier);
       notifier.enqueue(related.first);
       notifier.next();
@@ -612,6 +683,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       }
       final media = Media(openUrl, httpHeaders: httpHeaders);
       await player.open(media);
+      // loop-file is player-wide in mpv: re-state it for every media so a
+      // live never inherits it (an ended live must not be reopened forever).
+      unawaited(player.setPlaylistMode(
+          _loop && !_playingIsLive ? PlaylistMode.single : PlaylistMode.none));
 
       if (isSplit) {
         // Chained loads: unloading the previous video fires media_kit's
@@ -797,6 +872,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _hideControls?.cancel();
     _hideControls = null;
     if (!_controlsVisible) return;
+    _remoteHint.value = null; // its buttons are going away with the overlay
     setState(() => _controlsVisible = false);
     // Hand the keys back to the video surface.
     _surfaceFocus.requestFocus();
@@ -1053,6 +1129,192 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     if (mounted) _revealControls();
   }
 
+  /// Short confirmation at the bottom of the screen. On TV the overlay's hint
+  /// line already tells the state of the focused toggle, so only messages
+  /// with [alsoOnTv] (things that happened on their own) show there.
+  void _notify(String message, {bool alsoOnTv = false}) {
+    if (!mounted || (!alsoOnTv && ref.read(isTvProvider))) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+      ));
+  }
+
+  /// Loops the playing video, or stops looping it.
+  void _toggleLoop() {
+    final on = !_loop;
+    setState(() => _loop = on);
+    // A looping video never ends: an "end of video" sleep timer never fires.
+    if (on && _sleepAtEnd) _cancelSleep();
+    unawaited(
+        player.setPlaylistMode(on ? PlaylistMode.single : PlaylistMode.none));
+    _notify(on ? 'Lecture en boucle activée' : 'Lecture en boucle désactivée');
+  }
+
+  void _toggleAutoplay() {
+    final on = !ref.read(autoplayNextProvider);
+    unawaited(ref.read(autoplayNextProvider.notifier).setEnabled(on));
+    _notify(on
+        ? 'Lecture auto activée : la suivante s\'enchaîne'
+        : 'Lecture auto désactivée : arrêt à la fin de la vidéo');
+  }
+
+  bool get _sleepActive => _sleepDeadline != null || _sleepAtEnd;
+
+  /// Remaining time of the sleep timer, for the button label; null when off.
+  String? get _sleepLabel {
+    if (_sleepAtEnd) return 'Fin de vidéo';
+    final deadline = _sleepDeadline;
+    if (deadline == null) return null;
+    final minutes = (deadline.difference(DateTime.now()).inSeconds / 60).ceil();
+    return '${minutes < 1 ? 1 : minutes} min';
+  }
+
+  /// Arms the sleep timer ([after] from now, or at the end of the current
+  /// video with [atEnd]); no argument disarms it.
+  void _setSleep({Duration? after, bool atEnd = false}) {
+    _sleepTimer?.cancel();
+    _sleepTicker?.cancel();
+    _sleepTimer = null;
+    _sleepTicker = null;
+    if (!mounted) return;
+    setState(() {
+      _sleepAtEnd = atEnd;
+      _sleepDeadline = after == null ? null : DateTime.now().add(after);
+      if (atEnd) _loop = false; // a looping video would never reach its end
+    });
+    if (atEnd) unawaited(player.setPlaylistMode(PlaylistMode.none));
+    if (after != null) {
+      _sleepTimer = Timer(after, _onSleepElapsed);
+      // Only refreshes the "N min" label.
+      _sleepTicker = Timer.periodic(const Duration(seconds: 20), (_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  void _cancelSleep() => _setSleep();
+
+  void _onSleepElapsed() {
+    if (!mounted) return;
+    unawaited(player.pause());
+    _cancelSleep();
+    _revealControls();
+    _notify('Minuterie écoulée : lecture en pause', alsoOnTv: true);
+  }
+
+  /// Sleep timer choices. The current state comes first so the remote lands
+  /// on it (a long sheet does not scroll to an autofocused item further down).
+  Future<void> _showSleepSheet() async {
+    const choices = <(Duration, String)>[
+      (Duration(minutes: 15), '15 minutes'),
+      (Duration(minutes: 30), '30 minutes'),
+      (Duration(minutes: 45), '45 minutes'),
+      (Duration(hours: 1), '1 heure'),
+      (Duration(minutes: 90), '1 h 30'),
+    ];
+    final video = ref.read(queueProvider).current;
+    final canStopAtEnd = video != null && !_isLivePlayback(video);
+    final active = _sleepActive;
+    _revealControls(pinned: true);
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(kGutter, 16, kGutter, 8),
+              child: Text(
+                active
+                    ? 'Minuterie : pause dans ${_sleepLabel!.toLowerCase()}'
+                    : 'Minuterie de mise en veille',
+                style: Theme.of(sheetContext).textTheme.titleMedium,
+              ),
+            ),
+            if (active)
+              ListTile(
+                autofocus: true,
+                leading: const Icon(Icons.timer_off_outlined),
+                title: const Text('Désactiver la minuterie'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _cancelSleep();
+                  _notify('Minuterie désactivée');
+                },
+              ),
+            if (canStopAtEnd)
+              ListTile(
+                autofocus: !active,
+                leading: const Icon(Icons.last_page_rounded),
+                title: const Text('À la fin de la vidéo'),
+                trailing: _sleepAtEnd ? const Icon(Icons.check) : null,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _setSleep(atEnd: true);
+                  _notify('Pause à la fin de la vidéo');
+                },
+              ),
+            for (final (i, (duration, label)) in choices.indexed)
+              ListTile(
+                autofocus: !active && !canStopAtEnd && i == 0,
+                leading: const Icon(Icons.timer_outlined),
+                title: Text(label),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _setSleep(after: duration);
+                  _notify('Pause dans $label');
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+    if (mounted) _revealControls();
+  }
+
+  /// System share sheet with the video's public page; the clipboard when the
+  /// platform has no share target.
+  Future<void> _share(Video video) async {
+    final url = video.shareUrl;
+    try {
+      await const MethodChannel(_kDeviceChannel)
+          .invokeMethod<void>('share', {'text': url, 'subject': video.title});
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: url));
+      _notify('Lien copié');
+    }
+  }
+
+  /// Opens the channel of [video] over the player, which keeps playing
+  /// underneath; a video started from there pops back to it ([openPlayer]).
+  Future<void> _openChannel(Video video) async {
+    var channelId = video.channelId;
+    if (channelId.isEmpty) {
+      // Flat playlist entries carry no channel id: ask the details endpoint.
+      channelId = await ref
+              .read(resolvedChannelProvider((video.platform, video.videoId))
+                  .future) ??
+          '';
+    }
+    if (!mounted) return;
+    if (channelId.isEmpty) {
+      _notify('Chaîne introuvable pour cette vidéo');
+      return;
+    }
+    unawaited(context.push(
+        '/channel/${Uri.encodeComponent(channelId)}?platform=${video.platform}'
+        '&title=${Uri.encodeComponent(video.channelTitle)}'));
+  }
+
+  /// Description and details of [video], over the player.
+  void _openDetails(Video video) => unawaited(context.push(
+      '/detail/${Uri.encodeComponent(video.videoId)}?platform=${video.platform}'));
+
   void _nudgeAudioDelay(int deltaMs) => _setAudioDelay(
       (ref.read(audioDelayProvider) + deltaMs).clamp(-1000, 1000));
 
@@ -1094,6 +1356,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   @override
   void dispose() {
+    PlayerPresence.leave();
+    _sleepTimer?.cancel();
+    _sleepTicker?.cancel();
     _heartbeat?.cancel();
     _stallWatchdog?.cancel();
     // Final flush: the 10 s heartbeat would otherwise drop the last seconds
@@ -1109,6 +1374,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _seekDebounce?.cancel();
     _surfaceFocus.dispose();
     _controlsFocus.dispose();
+    _remoteHint.dispose();
     if (_immersive) {
       SystemChrome.setEnabledSystemUIMode(
         SystemUiMode.manual,
@@ -1157,6 +1423,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ),
       );
     }
+    // Suggestions feed the end-of-video autoplay and the TV strip even when
+    // the portrait list (which watches the same provider) is not on screen:
+    // listening keeps the autoDispose provider alive, prefetched, without
+    // rebuilding the player when it lands.
+    if (!_isLiveId(video)) {
+      ref.listen(relatedProvider((video.videoId, video.platform)), (_, __) {});
+    }
     // Landscape → fullscreen video, YouTube-style: fill the screen with the
     // video surface and hide the app chrome + system bars.
     final fullscreen =
@@ -1202,6 +1475,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                     maxHeight: _onCellular
                         ? ref.watch(cellularMaxHeightProvider)
                         : ref.watch(maxHeightProvider),
+                    autoplay: ref.watch(autoplayNextProvider),
+                    // Built here, not in the position-driven builders below:
+                    // the same instance is then skipped on every tick.
+                    upNext: _TvUpNextStrip(
+                      video: video,
+                      queue: queue,
+                      hint: _remoteHint,
+                      onPicked: _revealControls,
+                    ),
                   ),
               ],
             ),
@@ -1368,96 +1650,75 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
                   // Playback controls
                   Container(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: const EdgeInsets.only(top: 4, bottom: 10),
                     decoration: BoxDecoration(
                       color: colors.surfaceContainerLow,
                       borderRadius: const BorderRadius.vertical(
                         bottom: Radius.circular(kRadiusMd),
                       ),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: Column(
                       children: [
-                        IconButton(
-                          icon: Icon(
-                            Icons.skip_previous_rounded,
-                            color: queue.hasPrevious
-                                ? colors.onSurface
-                                : colors.onSurfaceVariant.withValues(alpha: 0.4),
-                          ),
-                          tooltip: 'Précédent',
-                          onPressed: queue.hasPrevious
-                              ? () => ref.read(queueProvider.notifier).previous()
-                              : null,
+                        // Transport stays put and centred; everything else lives
+                        // in the scrollable action bar under it.
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                Icons.skip_previous_rounded,
+                                color: queue.hasPrevious
+                                    ? colors.onSurface
+                                    : colors.onSurfaceVariant.withValues(alpha: 0.4),
+                              ),
+                              tooltip: 'Précédent',
+                              onPressed: queue.hasPrevious
+                                  ? () => ref.read(queueProvider.notifier).previous()
+                                  : null,
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: colors.primaryContainer,
+                                shape: BoxShape.circle,
+                              ),
+                              child: StreamBuilder<bool>(
+                                stream: player.stream.playing,
+                                initialData: player.state.playing,
+                                builder: (context, snapshot) {
+                                  final playing = snapshot.data ?? false;
+                                  return IconButton(
+                                    iconSize: 32,
+                                    icon: Icon(
+                                      playing
+                                          ? Icons.pause_rounded
+                                          : Icons.play_arrow_rounded,
+                                      color: colors.onPrimaryContainer,
+                                    ),
+                                    tooltip: playing ? 'Pause' : 'Lecture',
+                                    onPressed: () => player.playOrPause(),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: Icon(
+                                Icons.skip_next_rounded,
+                                color: queue.hasNext
+                                    ? colors.onSurface
+                                    : colors.onSurfaceVariant.withValues(alpha: 0.4),
+                              ),
+                              tooltip: 'Suivant',
+                              onPressed: queue.hasNext
+                                  ? () => ref.read(queueProvider.notifier).next()
+                                  : null,
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: colors.primaryContainer,
-                            shape: BoxShape.circle,
-                          ),
-                          child: StreamBuilder<bool>(
-                            stream: player.stream.playing,
-                            initialData: player.state.playing,
-                            builder: (context, snapshot) {
-                              final playing = snapshot.data ?? false;
-                              return IconButton(
-                                iconSize: 32,
-                                icon: Icon(
-                                  playing
-                                      ? Icons.pause_rounded
-                                      : Icons.play_arrow_rounded,
-                                  color: colors.onPrimaryContainer,
-                                ),
-                                tooltip: playing ? 'Pause' : 'Lecture',
-                                onPressed: () => player.playOrPause(),
-                              );
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: Icon(
-                            Icons.skip_next_rounded,
-                            color: queue.hasNext
-                                ? colors.onSurface
-                                : colors.onSurfaceVariant.withValues(alpha: 0.4),
-                          ),
-                          tooltip: 'Suivant',
-                          onPressed: queue.hasNext
-                              ? () => ref.read(queueProvider.notifier).next()
-                              : null,
-                        ),
-                        const SizedBox(width: 8),
-                        TextButton(
-                          onPressed: _showSpeedSheet,
-                          child: Text(
-                            _fmtRate(_rate),
-                            style: TextStyle(color: colors.onSurface),
-                          ),
-                        ),
-                        IconButton(
-                          icon: Icon(
-                            _subUrl != null
-                                ? Icons.subtitles
-                                : Icons.subtitles_outlined,
-                          ),
-                          tooltip: 'Sous-titres',
-                          onPressed: (_streams?.subtitles.isEmpty ?? true)
-                              ? null
-                              : _showSubtitleSheet,
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.av_timer_rounded),
-                          tooltip: 'Décalage audio',
-                          onPressed: _showAudioDelaySheet,
-                        ),
-                        TextButton(
-                          onPressed: _showQualitySheet,
-                          child: Text(
-                            '${_onCellular ? ref.watch(cellularMaxHeightProvider) : ref.watch(maxHeightProvider)}p',
-                            style: TextStyle(color: colors.onSurface),
-                          ),
+                        const SizedBox(height: 6),
+                        PlayerActionBar(
+                          actions: _phoneActions(video),
                         ),
                       ],
                     ),
@@ -1502,6 +1763,113 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
+  /// Pills of the portrait action bar ([PlayerActionBar]), most used first.
+  /// It scrolls sideways, so the list may grow past the screen width.
+  List<PlayerAction> _phoneActions(Video video) {
+    final live = _playingIsLive || _isLivePlayback(video);
+    // Composite Twitch/TikTok live ids have no page, details nor bookmark.
+    final liveId = _isLiveId(video);
+    final autoplay = ref.watch(autoplayNextProvider);
+    final cap = _onCellular
+        ? ref.watch(cellularMaxHeightProvider)
+        : ref.watch(maxHeightProvider);
+    final delay = ref.watch(audioDelayProvider);
+    final hasSubtitles = _streams?.subtitles.isNotEmpty ?? false;
+    final sleep = _sleepLabel;
+    return [
+      PlayerAction(
+        icon: Icons.queue_play_next_rounded,
+        label: 'Lecture auto',
+        tooltip: autoplay
+            ? 'Lecture automatique de la suivante : activée'
+            : 'Lecture automatique de la suivante : désactivée',
+        selected: autoplay,
+        toggle: true,
+        onPressed: _toggleAutoplay,
+      ),
+      PlayerAction(
+        icon: _loop && !live
+            ? Icons.repeat_one_on_rounded
+            : Icons.repeat_one_rounded,
+        label: 'Boucle',
+        tooltip: _loop
+            ? 'Lecture en boucle : activée'
+            : 'Lecture en boucle : désactivée',
+        selected: _loop && !live,
+        toggle: true,
+        onPressed: live ? null : _toggleLoop,
+      ),
+      PlayerAction(
+        icon: Icons.speed_rounded,
+        label: _fmtRate(_rate),
+        tooltip: 'Vitesse de lecture',
+        selected: _rate != 1.0,
+        onPressed: _showSpeedSheet,
+      ),
+      PlayerAction(
+        icon: Icons.high_quality_outlined,
+        // Served height when known: a 1440p cap can serve a 360p track.
+        label: _streams?.height != null ? '${_streams!.height}p' : '${cap}p',
+        tooltip: _onCellular
+            ? 'Qualité (plafond données mobiles : ${cap}p)'
+            : 'Qualité (plafond : ${cap}p)',
+        onPressed: _showQualitySheet,
+      ),
+      PlayerAction(
+        icon: _subUrl != null ? Icons.subtitles : Icons.subtitles_outlined,
+        label: 'Sous-titres',
+        tooltip: hasSubtitles
+            ? 'Sous-titres'
+            : 'Pas de sous-titres pour cette vidéo',
+        selected: _subUrl != null,
+        onPressed: hasSubtitles ? _showSubtitleSheet : null,
+      ),
+      PlayerAction(
+        icon: Icons.bedtime_outlined,
+        label: sleep ?? 'Minuterie',
+        tooltip: sleep == null
+            ? 'Minuterie de mise en veille'
+            : 'Minuterie : pause dans $sleep',
+        selected: sleep != null,
+        onPressed: _showSleepSheet,
+      ),
+      PlayerAction(
+        icon: Icons.playlist_add_rounded,
+        label: 'Enregistrer',
+        tooltip: 'Enregistrer dans une playlist',
+        onPressed:
+            liveId ? null : () => showSaveToPlaylistSheet(context, ref, video),
+      ),
+      PlayerAction(
+        icon: Icons.share_outlined,
+        label: 'Partager',
+        tooltip: 'Partager le lien de la vidéo',
+        onPressed: () => _share(video),
+      ),
+      PlayerAction(
+        icon: Icons.account_circle_outlined,
+        label: 'Chaîne',
+        tooltip: video.channelTitle.isEmpty
+            ? 'Ouvrir la chaîne'
+            : 'Ouvrir la chaîne ${video.channelTitle}',
+        onPressed: () => _openChannel(video),
+      ),
+      PlayerAction(
+        icon: Icons.info_outline_rounded,
+        label: 'Détails',
+        tooltip: 'Description et détails de la vidéo',
+        onPressed: liveId ? null : () => _openDetails(video),
+      ),
+      PlayerAction(
+        icon: Icons.av_timer_rounded,
+        label: delay == 0 ? 'Synchro audio' : 'Audio ${_fmtAudioDelay(delay)}',
+        tooltip: 'Décalage audio',
+        selected: delay != 0,
+        onPressed: _showAudioDelaySheet,
+      ),
+    ];
+  }
+
   /// The media_kit video surface, shared by the portrait 16:9 box and the
   /// landscape fullscreen layout.
   Widget _videoSurface() {
@@ -1526,7 +1894,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     required bool hasPrevious,
     required int audioDelayMs,
     required int maxHeight,
+    required bool autoplay,
+    Widget? upNext,
   }) {
+    final live = _playingIsLive || _isLivePlayback(video);
     return StreamBuilder<bool>(
       stream: player.stream.playing,
       initialData: player.state.playing,
@@ -1539,7 +1910,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
               _seekTarget ?? positionSnapshot.data ?? player.state.position,
           duration: player.state.duration,
           playing: playingSnapshot.data ?? false,
-          live: _isLiveId(video),
+          live: live,
           rateLabel: _fmtRate(_rate),
           audioDelayLabel: _fmtAudioDelay(audioDelayMs),
           // Served height when known — the cap alone lies: a 1440p cap can
@@ -1571,6 +1942,31 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           onQuality: _showQualitySheet,
           onInteract: _revealControls,
           entryFocus: _controlsFocus,
+          autoplay: autoplay,
+          onAutoplay: () {
+            _revealControls();
+            _toggleAutoplay();
+          },
+          loop: _loop,
+          onLoop: live
+              ? null
+              : () {
+                  _revealControls();
+                  _toggleLoop();
+                },
+          sleepLabel: _sleepLabel,
+          onSleep: _showSleepSheet,
+          liked: _rating == 'like',
+          // Never nulled while a request runs: the button would vanish from
+          // under the focus.
+          onLike: video.platform == 'youtube'
+              ? () {
+                  _revealControls();
+                  if (!_ratingBusy) _toggleLike(video);
+                }
+              : null,
+          upNext: upNext,
+          hint: _remoteHint,
         ),
       ),
     );
@@ -1636,8 +2032,87 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 }
 
+/// TV "À suivre" strip of the remote overlay: the rest of the queue, then the
+/// suggestions. A projector never leaves the fullscreen layout, so this is the
+/// only way a remote reaches them. OK on a card plays it now.
+class _TvUpNextStrip extends ConsumerWidget {
+  const _TvUpNextStrip({
+    required this.video,
+    required this.queue,
+    required this.hint,
+    required this.onPicked,
+  });
+
+  final Video video;
+  final PlayQueue queue;
+  final ValueNotifier<String?> hint;
+
+  /// Keeps the overlay up while the picked video loads.
+  final VoidCallback onPicked;
+
+  static const _kMaxSuggestions = 20;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(queueProvider.notifier);
+    final upcoming = <(int, Video)>[
+      for (var i = queue.index + 1; i < queue.items.length; i++)
+        (i, queue.items[i]),
+    ];
+    final related = _PlayerScreenState._isLiveId(video)
+        ? const <Video>[]
+        : ref
+                .watch(relatedProvider((video.videoId, video.platform)))
+                .valueOrNull ??
+            const <Video>[];
+    final queued = {for (final v in queue.items) '${v.platform}:${v.videoId}'};
+    final suggestions = related
+        .where((v) =>
+            v.kind == 'video' && !queued.contains('${v.platform}:${v.videoId}'))
+        .take(_kMaxSuggestions)
+        .toList();
+    if (upcoming.isEmpty && suggestions.isEmpty) return const SizedBox.shrink();
+    // "À suivre" marks what the end of this video will play on its own.
+    final autoplay = ref.watch(autoplayNextProvider);
+    final cards = <Widget>[
+      for (final (n, (i, item)) in upcoming.indexed)
+        RemoteVideoCard(
+          key: ValueKey('queue:$i:${item.platform}:${item.videoId}'),
+          title: item.title,
+          thumbnailUrl: item.thumbnailUrl,
+          durationLabel: item.durationLabel,
+          badge: n == 0 && autoplay ? 'À suivre' : 'File',
+          hint: hint,
+          onPressed: () {
+            onPicked();
+            notifier.jumpTo(i);
+          },
+        ),
+      for (final (n, item) in suggestions.indexed)
+        RemoteVideoCard(
+          key: ValueKey('suggestion:${item.platform}:${item.videoId}'),
+          title: item.title,
+          thumbnailUrl: item.thumbnailUrl,
+          durationLabel: item.durationLabel,
+          badge: upcoming.isEmpty && n == 0 && autoplay ? 'À suivre' : null,
+          hint: hint,
+          onPressed: () {
+            onPicked();
+            notifier.enqueue(item);
+            notifier.jumpTo(ref.read(queueProvider).items.length - 1);
+          },
+        ),
+    ];
+    return RemoteCardStrip(
+      title: upcoming.isEmpty ? 'Suggestions' : 'File d\'attente et suggestions',
+      cards: cards,
+    );
+  }
+}
+
 /// YouTube suggestions under the video: the first one is flagged "À suivre"
-/// (played automatically at the end of the queue); tapping any plays it next.
+/// (played automatically at the end of the queue when autoplay is on);
+/// tapping any queues it.
 class _SuggestionsSection extends ConsumerWidget {
   final Video video;
 
@@ -1648,6 +2123,7 @@ class _SuggestionsSection extends ConsumerWidget {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final async = ref.watch(relatedProvider((video.videoId, video.platform)));
+    final autoplay = ref.watch(autoplayNextProvider);
 
     return async.when(
       loading: () => const Padding(
@@ -1673,10 +2149,11 @@ class _SuggestionsSection extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(kGutter, 12, kGutter, 6),
               child: Text(
-                'À suivre',
+                // Off, nothing plays by itself: the first pick is only a hint.
+                autoplay ? 'À suivre' : 'À suivre · lecture auto désactivée',
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w600,
-                  color: colors.primary,
+                  color: autoplay ? colors.primary : colors.onSurfaceVariant,
                 ),
               ),
             ),

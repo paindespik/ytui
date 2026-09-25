@@ -1,6 +1,8 @@
 /// Shared list tile for feed/search/channel/playlist entries.
 library;
 
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +15,7 @@ import '../state/providers.dart';
 import '../state/settings.dart';
 import '../state/queue.dart';
 import '../theme.dart';
+import 'open_player.dart';
 import 'playlist_import.dart';
 
 class VideoTile extends ConsumerWidget {
@@ -20,7 +23,20 @@ class VideoTile extends ConsumerWidget {
   final bool live;
   final VoidCallback? onTap;
 
-  const VideoTile({super.key, required this.video, this.live = false, this.onTap});
+  /// Removes the entry from the list showing it (history, local playlist):
+  /// offered in the actions sheet under [removeLabel]. Lists also bind it to a
+  /// swipe, which a remote cannot do — the sheet is the TV way.
+  final VoidCallback? onRemove;
+  final String removeLabel;
+
+  const VideoTile({
+    super.key,
+    required this.video,
+    this.live = false,
+    this.onTap,
+    this.onRemove,
+    this.removeLabel = 'Retirer',
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -37,8 +53,11 @@ class VideoTile extends ConsumerWidget {
     // focus traversal only considers nodes whose centre lies beyond the current
     // node's edge, so a button nested inside the row is unreachable with
     // D-pad right (focus jumps to the app bar instead).
-    final showActionsButton =
-        video.kind != 'channel' && ref.watch(isTvProvider);
+    final isTv = ref.watch(isTvProvider);
+    final showActionsButton = video.kind != 'channel' && isTv;
+    // Read from a couch across the room: larger thumbnails on TV, in the
+    // wider column ResponsiveCenter grants there.
+    final thumbWidth = isTv ? 176.0 : 120.0;
 
     final tile = InkWell(
       onTap: onTap ?? () => _defaultTap(context, ref),
@@ -59,7 +78,7 @@ class VideoTile extends ConsumerWidget {
             if (video.kind == 'channel')
               // Channel avatar - circular thumbnail centered in same width
               SizedBox(
-                width: 120,
+                width: thumbWidth,
                 child: Center(
                   child: SizedBox(
                     width: 68,
@@ -80,7 +99,7 @@ class VideoTile extends ConsumerWidget {
             else
               // Video/playlist: 16:9 aspect with overlays for LIVE/duration
               SizedBox(
-                width: 120,
+                width: thumbWidth,
                 child: AspectRatio(
                   aspectRatio: 16 / 9,
                   child: ClipRRect(
@@ -315,8 +334,7 @@ class VideoTile extends ConsumerWidget {
         context.push('/ytplaylist/${Uri.encodeComponent(video.videoId)}'
             '?platform=${video.platform}');
       default:
-        ref.read(queueProvider.notifier).play([video]);
-        context.push('/player');
+        openPlayer(context, ref, [video]);
     }
   }
 
@@ -392,7 +410,7 @@ class VideoTile extends ConsumerWidget {
                   label: 'Enregistrer dans une playlist',
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    _pickPlaylist(context, ref);
+                    showSaveToPlaylistSheet(context, ref, video);
                   },
                 ),
               ],
@@ -426,6 +444,16 @@ class VideoTile extends ConsumerWidget {
                         '&title=${Uri.encodeComponent(video.channelTitle)}');
                   },
                 ),
+              if (onRemove != null)
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.delete_outline,
+                  label: removeLabel,
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    onRemove!();
+                  },
+                ),
               if (channelId.isNotEmpty)
                 _sheetTile(
                   sheetContext,
@@ -456,133 +484,154 @@ class VideoTile extends ConsumerWidget {
       },
     );
   }
+}
 
-  /// Rounded list item for the bottom sheet.
-  Widget _sheetTile(
-    BuildContext context, {
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-    bool autofocus = false,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      child: Material(
-        color: Colors.transparent,
+/// Rounded list item for the bottom sheets.
+Widget _sheetTile(
+  BuildContext context, {
+  required IconData icon,
+  required String label,
+  required VoidCallback onTap,
+  bool autofocus = false,
+}) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+    child: Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(kRadiusSm),
+      child: InkWell(
+        onTap: onTap,
+        autofocus: autofocus,
         borderRadius: BorderRadius.circular(kRadiusSm),
-        child: InkWell(
-          onTap: onTap,
-          autofocus: autofocus,
-          borderRadius: BorderRadius.circular(kRadiusSm),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Row(
-              children: [
-                Icon(icon, size: 24),
-                const SizedBox(width: 16),
-                Expanded(child: Text(label)),
-              ],
-            ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(icon, size: 24),
+              const SizedBox(width: 16),
+              Expanded(child: Text(label)),
+            ],
           ),
         ),
       ),
-    );
-  }
-
-  void _pickPlaylist(BuildContext context, WidgetRef ref) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final playlists = await ref.read(apiProvider).playlists();
-    if (!context.mounted) return;
-    showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(kRadiusLg)),
-      ),
-      builder: (sheetContext) {
-        final sheetColors = Theme.of(sheetContext).colorScheme;
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Grab handle
-              Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 8),
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: sheetColors.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              if (playlists.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.all(kGutter),
-                  child: Text(
-                    'Aucune playlist — créez-en une d’abord',
-                    style: Theme.of(sheetContext).textTheme.bodyMedium?.copyWith(
-                          color: sheetColors.onSurfaceVariant,
-                        ),
-                  ),
-                )
-              else
-                ...playlists.map((p) => _sheetTile(
-                      sheetContext,
-                      icon: Icons.playlist_play,
-                      label: '${p.name} · ${pluralize(p.count, 'élément')}',
-                      onTap: () async {
-                        Navigator.pop(sheetContext);
-                        final added =
-                            await ref.read(apiProvider).addPlaylistItem(p.id, video);
-                        messenger.showSnackBar(SnackBar(
-                            content: Text(added
-                                ? 'Ajouté à ${p.name}'
-                                : 'Déjà dans ${p.name}')));
-                      },
-                    )),
-              _sheetTile(
-                sheetContext,
-                icon: Icons.playlist_add,
-                label: 'Nouvelle playlist…',
-                onTap: () async {
-                  Navigator.pop(sheetContext);
-                  final name = await promptNewPlaylistName(context);
-                  if (name == null || !context.mounted) return;
-                  final api = ref.read(apiProvider);
-                  try {
-                    final created = await api.createPlaylist(name);
-                    if (created == null || !context.mounted) {
-                      messenger.showSnackBar(const SnackBar(
-                          content: Text('Ce nom est déjà utilisé')));
-                      return;
-                    }
-                    final added =
-                        await api.addPlaylistItem(created.id, video);
-                    ref.invalidate(playlistsProvider);
-                    messenger.showSnackBar(SnackBar(
-                        content: Text(added
-                            ? 'Ajouté à ${created.name}'
-                            : 'Playlist « ${created.name} » créée')));
-                  } on ApiException catch (e) {
-                    messenger.showSnackBar(SnackBar(
-                        content: Text('Échec de la création : ${e.detail}')));
-                  }
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-  }
+    ),
+  );
 }
 
-/// TV rows registered in list order so a row's ⋮ button can hand vertical
-/// D-pad focus to the neighbouring row's tile: the reading-order policy
-/// alone sticks to the ⋮ column (a DOWN pressed on a button focuses the
-/// next button, never the video content).
+/// "Save to a local playlist" sheet for [video]: existing playlists plus
+/// "Nouvelle playlist…". Shared by the tiles' actions sheet and the player.
+Future<void> showSaveToPlaylistSheet(
+    BuildContext context, WidgetRef ref, Video video) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final List<LocalPlaylist> playlists;
+  try {
+    playlists = await ref.read(apiProvider).playlists();
+  } on ApiException catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    return;
+  }
+  if (!context.mounted) return;
+  // A bottom sheet does not take focus on its own: on TV the first entry
+  // grabs it so the remote can act without a blind D-pad down.
+  final tvFocus = ref.read(isTvProvider);
+  showModalBottomSheet<void>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(kRadiusLg)),
+    ),
+    builder: (sheetContext) {
+      final sheetColors = Theme.of(sheetContext).colorScheme;
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Grab handle
+            Padding(
+              padding: const EdgeInsets.only(top: 12, bottom: 8),
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: sheetColors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            if (playlists.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(kGutter),
+                child: Text(
+                  'Aucune playlist — créez-en une d’abord',
+                  style: Theme.of(sheetContext).textTheme.bodyMedium?.copyWith(
+                        color: sheetColors.onSurfaceVariant,
+                      ),
+                ),
+              )
+            else
+              for (final (i, p) in playlists.indexed)
+                _sheetTile(
+                  sheetContext,
+                  icon: Icons.playlist_play,
+                  label: '${p.name} · ${pluralize(p.count, 'élément')}',
+                  autofocus: tvFocus && i == 0,
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    try {
+                      final added = await ref
+                          .read(apiProvider)
+                          .addPlaylistItem(p.id, video);
+                      messenger.showSnackBar(SnackBar(
+                          content: Text(added
+                              ? 'Ajouté à ${p.name}'
+                              : 'Déjà dans ${p.name}')));
+                    } on ApiException catch (e) {
+                      messenger.showSnackBar(
+                          SnackBar(content: Text(e.toString())));
+                    }
+                  },
+                ),
+            _sheetTile(
+              sheetContext,
+              icon: Icons.playlist_add,
+              label: 'Nouvelle playlist…',
+              autofocus: tvFocus && playlists.isEmpty,
+              onTap: () async {
+                Navigator.pop(sheetContext);
+                final name = await promptNewPlaylistName(context);
+                if (name == null || !context.mounted) return;
+                final api = ref.read(apiProvider);
+                try {
+                  final created = await api.createPlaylist(name);
+                  if (created == null) {
+                    messenger.showSnackBar(const SnackBar(
+                        content: Text('Ce nom est déjà utilisé')));
+                    return;
+                  }
+                  final added =
+                      await api.addPlaylistItem(created.id, video);
+                  ref.invalidate(playlistsProvider);
+                  messenger.showSnackBar(SnackBar(
+                      content: Text(added
+                          ? 'Ajouté à ${created.name}'
+                          : 'Playlist « ${created.name} » créée')));
+                } on ApiException catch (e) {
+                  messenger.showSnackBar(SnackBar(
+                      content: Text('Échec de la création : ${e.detail}')));
+                }
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+/// Mounted TV rows, so a row's ⋮ button can hand vertical D-pad focus to the
+/// neighbouring row's tile: the reading-order policy alone sticks to the ⋮
+/// column (a DOWN pressed on a button focuses the next button, never the
+/// video content). Neighbours are found by position (see _focusSiblingTile).
 final List<_TvTileRowState> _tvTileRows = <_TvTileRowState>[];
 
 /// Intercepts vertical [DirectionalFocusIntent]s issued from a row's ⋮
@@ -641,21 +690,51 @@ class _TvTileRowState extends State<_TvTileRow> {
     super.dispose();
   }
 
-  /// Focuses the tile of the next/previous visible row, if any.
+  /// Focuses the tile of the nearest row below/above this one, if any.
+  ///
+  /// Chosen by on-screen position, not registration order: a lazy list
+  /// registers the rows built while scrolling back up AFTER the others. And
+  /// only among rows of the same list on the same screen: the registry is
+  /// global, and the screen underneath (the home feed under a channel) keeps
+  /// its rows mounted.
   bool _focusSiblingTile(TraversalDirection direction) {
-    final i = _tvTileRows.indexOf(this);
-    if (i < 0) return false;
-    final states = direction == TraversalDirection.down
-        ? _tvTileRows.skip(i + 1).toList()
-        : _tvTileRows.sublist(0, i).reversed.toList();
-    for (final s in states) {
-      final node = s._tileNode;
-      if (node != null) {
-        node.requestFocus();
-        return true;
-      }
+    final mine = context.findRenderObject();
+    if (mine is! RenderBox || !mine.attached) return false;
+    final route = ModalRoute.of(context);
+    final origin = mine.localToGlobal(Offset.zero);
+    final down = direction == TraversalDirection.down;
+    FocusNode? best;
+    double? bestDistance;
+    for (final row in _tvTileRows) {
+      if (identical(row, this) || !row.mounted) continue;
+      if (ModalRoute.of(row.context) != route) continue;
+      final box = row.context.findRenderObject();
+      if (box is! RenderBox || !box.attached) continue;
+      final offset = box.localToGlobal(Offset.zero);
+      if ((offset.dx - origin.dx).abs() > 1) continue; // another column/tab
+      final dy = offset.dy - origin.dy;
+      if (down ? dy <= 0.5 : dy >= -0.5) continue;
+      if (bestDistance != null && dy.abs() >= bestDistance) continue;
+      final node = row._tileNode;
+      if (node == null) continue;
+      best = node;
+      bestDistance = dy.abs();
     }
-    return false;
+    if (best == null) return false;
+    best.requestFocus();
+    // requestFocus does not scroll (directional traversal would have): bring
+    // a row sitting in the list's cache area into view.
+    final target = best.context;
+    if (target != null) {
+      unawaited(Scrollable.ensureVisible(
+        target,
+        duration: const Duration(milliseconds: 150),
+        alignmentPolicy: down
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtEnd
+            : ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+      ));
+    }
+    return true;
   }
 
   @override

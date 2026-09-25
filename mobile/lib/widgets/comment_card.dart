@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../api/models.dart';
+import '../format.dart';
 import '../theme.dart';
 
 class CommentCard extends StatelessWidget {
@@ -149,7 +150,7 @@ class CommentCard extends StatelessWidget {
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
-                                    '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
+                                    pluralize(comment.replies, 'réponse'),
                                     style: theme.textTheme.labelSmall?.copyWith(
                                       color: colors.onSurfaceVariant,
                                     ),
@@ -166,7 +167,7 @@ class CommentCard extends StatelessWidget {
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            '${comment.replies} ${comment.replies == 1 ? 'reply' : 'replies'}',
+                            pluralize(comment.replies, 'réponse'),
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: colors.onSurfaceVariant,
                             ),
@@ -187,11 +188,11 @@ class CommentCard extends StatelessWidget {
   static String _relativeDate(int epochSeconds) {
     final date = DateTime.fromMillisecondsSinceEpoch(epochSeconds * 1000);
     final diff = DateTime.now().difference(date);
-    if (diff.inDays >= 365) return '${diff.inDays ~/ 365}y ago';
-    if (diff.inDays >= 30) return '${diff.inDays ~/ 30}mo ago';
-    if (diff.inDays >= 1) return '${diff.inDays}d ago';
-    if (diff.inHours >= 1) return '${diff.inHours}h ago';
-    if (diff.inMinutes >= 1) return '${diff.inMinutes}m ago';
-    return 'just now';
+    if (diff.inDays >= 365) return 'il y a ${diff.inDays ~/ 365} an${diff.inDays >= 730 ? 's' : ''}';
+    if (diff.inDays >= 30) return 'il y a ${diff.inDays ~/ 30} mois';
+    if (diff.inDays >= 1) return 'il y a ${diff.inDays} j';
+    if (diff.inHours >= 1) return 'il y a ${diff.inHours} h';
+    if (diff.inMinutes >= 1) return 'il y a ${diff.inMinutes} min';
+    return 'à l\'instant';
   }
 }
