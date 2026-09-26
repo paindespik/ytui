@@ -1441,7 +1441,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       if (!ref.watch(isTvProvider)) {
         return Scaffold(
           backgroundColor: Colors.black,
-          body: SizedBox.expand(child: _videoSurface()),
+          body: SizedBox.expand(
+            // A live has nothing to seek into (same rule as [_seekBy]).
+            child: _videoSurface(
+              seekOnDoubleTap: !(_playingIsLive || _isLivePlayback(video)),
+            ),
+          ),
         );
       }
       // TV/projector: no touchscreen, so the remote drives playback and the
@@ -1870,10 +1875,38 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     ];
   }
 
+  /// Touch controls of the landscape fullscreen layout: YouTube-style
+  /// double-tap seek — right third +10 s, left third −10 s, each extra tap
+  /// adds 10 s. Everything else keeps media_kit's defaults.
+  static const _kDoubleTapSeekControls = mkv.MaterialVideoControlsThemeData(
+    seekOnDoubleTap: true,
+    seekOnDoubleTapForwardDuration: Duration(seconds: 10),
+    seekOnDoubleTapBackwardDuration: Duration(seconds: 10),
+  );
+
   /// The media_kit video surface, shared by the portrait 16:9 box and the
   /// landscape fullscreen layout.
-  Widget _videoSurface() {
+  ///
+  /// Our fullscreen is the landscape layout, not media_kit's fullscreen route,
+  /// so its controls read the `normal` theme: [seekOnDoubleTap] swaps it.
+  Widget _videoSurface({bool seekOnDoubleTap = false}) {
+    return mkv.MaterialVideoControlsTheme(
+      normal: seekOnDoubleTap
+          ? _kDoubleTapSeekControls
+          : mkv.kDefaultMaterialVideoControlsThemeData,
+      fullscreen: mkv.kDefaultMaterialVideoControlsThemeDataFullscreen,
+      child: _video(
+        // media_kit 1.3.x inverts MaterialVideoControlsTheme.updateShouldNotify
+        // (it notifies only when the data is *identical*): a flipped flag would
+        // never reach mounted controls, so the key remounts them instead.
+        key: ValueKey(seekOnDoubleTap),
+      ),
+    );
+  }
+
+  Widget _video({Key? key}) {
     return mkv.Video(
+      key: key,
       controller: controller,
       // On TV the touch overlay is dead weight (and its buttons would compete
       // for D-pad focus): [RemotePlayerControls] replaces it.
