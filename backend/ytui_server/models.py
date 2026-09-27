@@ -170,6 +170,7 @@ class VideoDetails(BaseModel):
     like_count: int | None = None
     duration: int | None = None
     upload_date: str = ""
+    thumbnail_url: str = ""
 
 
 class SubtitleTrackOut(BaseModel):
@@ -241,6 +242,9 @@ class ResumeOut(BaseModel):
 
 class WatchedIdsOut(BaseModel):
     ids: list[str]
+    # Additive: watched fraction (0-1) per id of `ids` whose position and
+    # duration are known — the web grid draws a progress bar from it.
+    progress: dict[str, float] = {}
 
 
 class PlaylistOut(BaseModel):

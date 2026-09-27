@@ -26,7 +26,32 @@ _PASSTHROUGH_HEADERS = ("content-type", "content-length", "content-range", "acce
 # Tags whose URI="..." attribute points at another playlist (vs raw bytes).
 _PLAYLIST_URI_TAGS = ("#EXT-X-MEDIA", "#EXT-X-I-FRAME-STREAM-INF")
 _URI_ATTR_RE = re.compile(r'URI="([^"]+)"')
-_BASE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+# Proxied bytes are served from OUR origin, where the session cookie grants
+# the whole API: a document among them (an HTML/SVG file uploaded to an
+# allowlisted CDN) must never run as a page. nosniff + a sandboxing CSP keep
+# any response inert when navigated to; they have no effect on media playback.
+_BASE_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Accel-Buffering": "no",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+}
+# Content types relayed as-is; anything else (text/html, SVG, XML, scripts
+# "stored" on a CDN) is downgraded to an opaque download.
+_MEDIA_TYPE_PREFIXES = (
+    "video/",
+    "audio/",
+    "image/",
+    "text/vtt",
+    "text/plain",
+    "application/octet-stream",
+    "binary/octet-stream",
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "application/mp4",
+    "application/dash+xml",
+)
+_MAX_REDIRECTS = 5
 
 
 # Media CDNs of the supported platforms. A same-origin proxy without a
@@ -83,6 +108,41 @@ def _check_url(url: str, settings) -> None:
     if any(host == extra or host.endswith(f".{extra}") for extra in _extra_domains(settings)):
         return
     raise HTTPException(status_code=403, detail="Domain not allowed through the proxy")
+
+
+def _safe_content_type(value: str) -> str:
+    base = value.split(";", 1)[0].strip().lower()
+    if base == "image/svg+xml" or not base.startswith(_MEDIA_TYPE_PREFIXES):
+        return "application/octet-stream"
+    return value
+
+
+def _relay_headers(upstream: httpx.Response) -> dict[str, str]:
+    headers = dict(_BASE_HEADERS)
+    for name in _PASSTHROUGH_HEADERS:
+        value = upstream.headers.get(name)
+        if value:
+            headers[name] = _safe_content_type(value) if name == "content-type" else value
+    return headers
+
+
+async def _send_allowlisted(
+    client: httpx.AsyncClient, request: httpx.Request, settings, *, stream: bool
+) -> httpx.Response:
+    """Send, following redirects by hand so every hop passes the allowlist.
+
+    The shared client follows redirects on its own, which would let an
+    allowlisted host bounce the proxy anywhere (internal services included).
+    """
+    for _ in range(_MAX_REDIRECTS + 1):
+        response = await client.send(request, stream=stream, follow_redirects=False)
+        target = response.next_request
+        if target is None:
+            return response
+        await response.aclose()
+        _check_url(str(target.url), settings)
+        request = target
+    raise HTTPException(status_code=502, detail="Too many upstream redirects")
 
 
 def _proxied(url: str, *, playlist: bool) -> str:
@@ -145,10 +205,12 @@ async def live_playlist(
     request: Request,
     max_height: int = 1440,
 ) -> Response:
-    session = livehls.get_session(f"{_YT_WATCH}{video_id}", max_height)
+    # One session per live whatever the cap: two devices watching the same
+    # live at different qualities share its extraction and itag map.
+    session = livehls.get_session(f"{_YT_WATCH}{video_id}")
     client: httpx.AsyncClient = request.app.state.proxy_client
     try:
-        return _m3u8(await session.entry_playlist(client))
+        return _m3u8(await session.entry_playlist(client, max_height))
     except _LIVE_ERRORS as exc:
         raise HTTPException(status_code=502, detail=f"Live resolve failed: {exc}") from exc
 
@@ -191,15 +253,10 @@ async def live_segment(
                 ) from exc
             continue
         session.refresh_soon(client)
-        headers = dict(_BASE_HEADERS)
-        for name in _PASSTHROUGH_HEADERS:
-            value = upstream.headers.get(name)
-            if value:
-                headers[name] = value
         return StreamingResponse(
             upstream.aiter_bytes(),
             status_code=upstream.status_code,
-            headers=headers,
+            headers=_relay_headers(upstream),
             background=BackgroundTask(upstream.aclose),
         )
     raise HTTPException(status_code=502, detail="Live segment kept answering 403")
@@ -208,7 +265,8 @@ async def live_segment(
 @router.get("/proxy")
 async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
     """Stream upstream bytes as-is, forwarding Range for seekable media."""
-    _check_url(url, request.app.state.settings)
+    settings = request.app.state.settings
+    _check_url(url, settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
     upstream_headers = {"Accept-Encoding": "identity"}
     range_header = request.headers.get("Range")
@@ -216,7 +274,7 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
         upstream_headers["Range"] = range_header
     req = client.build_request("GET", url, headers=upstream_headers)
     try:
-        upstream = await client.send(req, stream=True)
+        upstream = await _send_allowlisted(client, req, settings, stream=True)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Proxy fetch failed: {exc}") from exc
     if upstream.status_code == 403:
@@ -224,15 +282,10 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
         # (PO-token bucket, expiry): drop the cached extraction so the
         # player's retry re-resolves instead of replaying the same corpse.
         ytdlp.forget_dead_stream(url)
-    headers = dict(_BASE_HEADERS)
-    for name in _PASSTHROUGH_HEADERS:
-        value = upstream.headers.get(name)
-        if value:
-            headers[name] = value
     return StreamingResponse(
         upstream.aiter_bytes(),
         status_code=upstream.status_code,
-        headers=headers,
+        headers=_relay_headers(upstream),
         background=BackgroundTask(upstream.aclose),
     )
 
@@ -240,10 +293,13 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
 @router.get("/proxy/hls")
 async def proxy_hls(url: str, request: Request) -> Response:
     """Fetch an m3u8 playlist and rewrite its URIs through the proxy."""
-    _check_url(url, request.app.state.settings)
+    settings = request.app.state.settings
+    _check_url(url, settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
     try:
-        upstream = await client.get(url)
+        upstream = await _send_allowlisted(
+            client, client.build_request("GET", url), settings, stream=False
+        )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Proxy fetch failed: {exc}") from exc
     if upstream.status_code >= 400:

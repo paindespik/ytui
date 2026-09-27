@@ -348,6 +348,7 @@ async def video_details(video_id: str) -> VideoDetails:
         like_count=None,
         duration=int(duration) if duration else None,
         upload_date=upload_date,
+        thumbnail_url=(value.get("thumbnail") or {}).get("url") or "",
     )
 
 

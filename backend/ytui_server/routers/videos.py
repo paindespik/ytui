@@ -28,6 +28,7 @@ from ..models import (
     VideoDetails,
 )
 from ..services import crowdbunker, dash, odysee, tiktok, twitch, ytdlp
+from ..services.live import live_key
 from ..services.youtube import ApiError, AuthError
 
 router = APIRouter()
@@ -217,7 +218,7 @@ async def video_streams(
                 )
             if resolved is not None:
                 playlist, height = resolved
-                entry = request.app.state.live_monitor.lives.get(login)
+                entry = request.app.state.live_monitor.lives.get(live_key("twitch", login))
                 return StreamInfo(
                     kind="hls",
                     url=playlist,

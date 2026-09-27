@@ -1215,3 +1215,79 @@ def test_split_prefers_direct_file_over_m3u8_at_equal_height(client):
     body = resp.json()
     assert body["kind"] == "split"
     assert body["video_url"] == "https://x/video.mp4"
+
+
+# ─── concurrent callers share one extraction ───
+
+
+def test_concurrent_callers_share_one_extraction():
+    """/streams and /mpd land together: one yt-dlp run must serve both."""
+    import threading
+    import time as _time
+
+    import yt_dlp
+
+    calls = []
+    release = threading.Event()
+
+    class SlowYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            calls.append(url)
+            release.wait(2)
+            return {"title": "t", "formats": []}
+
+    results = []
+    with patch.object(yt_dlp, "YoutubeDL", SlowYDL(None)):
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(
+                    ytdlp._extract_info_cached("https://www.youtube.com/watch?v=shared")
+                )
+            )
+            for _ in range(3)
+        ]
+        for t in threads:
+            t.start()
+        _time.sleep(0.1)
+        release.set()
+        for t in threads:
+            t.join(5)
+    assert len(calls) == 1
+    assert len(results) == 3 and all(r is results[0] for r in results)
+    assert not ytdlp._INFLIGHT
+
+
+def test_concurrent_callers_share_the_failure():
+    import threading
+    import time as _time
+
+    import yt_dlp
+
+    calls = []
+    release = threading.Event()
+
+    class FailingYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            calls.append(url)
+            release.wait(2)
+            raise RuntimeError("video unavailable")
+
+    errors = []
+
+    def run():
+        try:
+            ytdlp._extract_info_cached("https://www.youtube.com/watch?v=gone")
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    with patch.object(yt_dlp, "YoutubeDL", FailingYDL(None)):
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for t in threads:
+            t.start()
+        _time.sleep(0.1)
+        release.set()
+        for t in threads:
+            t.join(5)
+    assert len(calls) == 1
+    assert errors == ["video unavailable"] * 2
+    assert not ytdlp._INFLIGHT

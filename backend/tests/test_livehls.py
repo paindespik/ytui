@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -86,8 +88,8 @@ def _transport(dead_bases: frozenset[str] = frozenset()):
 
 async def test_master_rewritten_with_cap(resolved):
     client = httpx.AsyncClient(transport=_transport())
-    sess = livehls.get_session(WATCH, 720)
-    text = await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    text = await sess.entry_playlist(client, 720)
     assert "media/229.m3u8" in text and "media/232.m3u8" in text
     assert "270" not in text  # above the cap: dropped
     assert 'URI="media/233.m3u8"' in text  # audio rendition kept and rewritten
@@ -97,16 +99,16 @@ async def test_master_rewritten_with_cap(resolved):
 
 async def test_master_keeps_lowest_when_nothing_fits(resolved):
     client = httpx.AsyncClient(transport=_transport())
-    sess = livehls.get_session(WATCH, 144)
-    text = await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    text = await sess.entry_playlist(client, 144)
     assert "media/229.m3u8" in text
     assert "media/232.m3u8" not in text and "media/270.m3u8" not in text
 
 
 async def test_media_playlist_rewrites_segments(resolved):
     client = httpx.AsyncClient(transport=_transport())
-    sess = livehls.get_session(WATCH, 720)
-    await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    await sess.entry_playlist(client, 720)
     text = await sess.media_playlist(client, 232)
     assert "232/50" in text and "232/52" in text
     assert "googlevideo" not in text
@@ -118,8 +120,8 @@ async def test_media_playlist_rewrites_segments(resolved):
 
 async def test_segment_reresolves_on_403(resolved):
     client = httpx.AsyncClient(transport=_transport(dead_bases={BASE_A}))
-    sess = livehls.get_session(WATCH, 720)
-    await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    await sess.entry_playlist(client, 720)
     await sess.media_playlist(client, 232)
 
     url = await sess.segment_upstream(client, 232, 51)
@@ -136,8 +138,8 @@ async def test_segment_reresolves_on_403(resolved):
 
 async def test_reresolve_dedupes_by_generation(resolved):
     client = httpx.AsyncClient(transport=_transport())
-    sess = livehls.get_session(WATCH, 720)
-    await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    await sess.entry_playlist(client, 720)
     gen = sess.generation
     await sess._reresolve(client, gen)
     # A caller holding the old generation does not trigger a second extraction.
@@ -147,8 +149,8 @@ async def test_reresolve_dedupes_by_generation(resolved):
 
 async def test_segment_synthesized_for_old_sq(resolved):
     client = httpx.AsyncClient(transport=_transport())
-    sess = livehls.get_session(WATCH, 720)
-    await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    await sess.entry_playlist(client, 720)
     await sess.media_playlist(client, 232)
     url = await sess.segment_upstream(client, 232, 40)  # older than the window
     assert url is not None and "/sq/40/" in url and "/itag/232/" in url
@@ -166,18 +168,64 @@ async def test_single_media_live_serves_directly(resolved, monkeypatch):
         return httpx.Response(200, text=_media(BASE_A, 95, 60))
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    sess = livehls.get_session(WATCH, 720)
-    text = await sess.entry_playlist(client)
+    sess = livehls.get_session(WATCH)
+    text = await sess.entry_playlist(client, 720)
     assert "95/60" in text
     assert (95, 61) in sess.segments
 
 
-def test_get_session_keeps_cap_for_segment_requests():
-    sess = livehls.get_session(WATCH, 720)
+async def test_two_caps_share_one_session(resolved):
+    """Two devices at different caps: one extraction, neither resets the other."""
+    client = httpx.AsyncClient(transport=_transport())
+    sess = livehls.get_session(WATCH)
+    low = await sess.entry_playlist(client, 240)
     assert livehls.get_session(WATCH) is sess
-    assert sess.max_height == 720
-    # An explicit new cap resets the session's resolution.
-    sess.media_urls = {232: "https://x"}
-    livehls.get_session(WATCH, 1080)
-    assert sess.max_height == 1080
-    assert sess.media_urls == {}
+    high = await sess.entry_playlist(client, 1080)
+    assert "media/229.m3u8" in low and "media/270.m3u8" not in low
+    assert "media/270.m3u8" in high
+    # Every itag stays mapped: the low-cap client's playlists keep working.
+    assert {229, 232, 233, 270} <= set(sess.media_urls)
+    text = await sess.media_playlist(client, 229)
+    assert "229/50" in text
+    assert resolved["n"] == 1
+
+
+async def test_extraction_asks_for_every_variant(monkeypatch):
+    """The session extracts uncapped: caps only filter the rendered entry."""
+    asked = []
+
+    async def fake_resolve(url, max_height=1440, **kwargs):
+        asked.append(max_height)
+        return StreamInfo(kind="hls", url=f"{BASE_A}/master.m3u8", is_live=True)
+
+    monkeypatch.setattr(livehls.ytdlp, "resolve_streams", fake_resolve)
+    monkeypatch.setattr(livehls.ytdlp, "evict_cached_info", lambda url: None)
+    client = httpx.AsyncClient(transport=_transport())
+    await livehls.get_session(WATCH).entry_playlist(client, 360)
+    assert asked == [livehls._RESOLVE_CAP]
+
+
+async def test_old_segments_are_forgotten(resolved):
+    client = httpx.AsyncClient(transport=_transport())
+    sess = livehls.get_session(WATCH)
+    await sess.entry_playlist(client, 720)
+    stale = livehls._SEGMENT_KEEP_BEHIND + 100
+    sess.segments[(232, 50 - stale)] = f"{BASE_A}/itag/232/index.m3u8/sq/1/x"
+    await sess.media_playlist(client, 232)
+    assert (232, 50 - stale) not in sess.segments
+    assert (232, 50) in sess.segments
+
+
+async def test_idle_session_is_dropped_and_its_refresh_cancelled():
+    sess = livehls.get_session(WATCH)
+
+    async def forever():
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(forever())
+    sess._refresh_task = task
+    sess.last_used -= livehls._SESSION_IDLE_TTL + 1
+    other = livehls.get_session(WATCH)
+    assert other is not sess
+    await asyncio.sleep(0)
+    assert task.cancelled()

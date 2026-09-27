@@ -126,3 +126,21 @@ def test_history_odysee_platform(client):
     entry = client.get("/api/history").json()[0]
     assert entry["video"]["platform"] == "odysee"
     assert entry["video"]["url"] == "https://odysee.com/my-video:ab12"
+
+
+def test_watched_ids_carry_progress(client):
+    _record(client)
+    _record(client, "other0000001")
+    client.put(
+        "/api/history/abc123def45/position", json={"position": 150.0, "duration": 600.0}
+    )
+    body = client.get("/api/history/watched-ids").json()
+    assert set(body["ids"]) == {"youtube:abc123def45", "youtube:other0000001"}
+    assert body["progress"] == {"youtube:abc123def45": 0.25}
+
+
+def test_bare_link_record_keeps_title(client):
+    _record(client, title="Known title")
+    bare = {"video_id": "abc123def45", "title": "", "platform": "youtube"}
+    assert client.post("/api/history", json={"video": bare}).status_code == 204
+    assert client.get("/api/history").json()[0]["video"]["title"] == "Known title"

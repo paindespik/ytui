@@ -74,6 +74,11 @@ async def check_channel_live(
     return parse_live_page(resp.text, channel_id, channel_title)
 
 
+def live_key(platform: str, channel_id: str) -> str:
+    """Key of a channel's entry in LiveMonitor.lives."""
+    return f"{platform}:{channel_id}"
+
+
 class LiveMonitor:
     """In-memory map of currently-live videos, refreshed periodically.
 
@@ -82,6 +87,9 @@ class LiveMonitor:
     channels are a single batched GQL request and TikTok channels one light
     unsigned GET each, both polled much faster (twitch/tiktok_check_seconds)
     so lives are caught soon after they start.
+
+    `lives` is keyed by '{platform}:{channel_id}': the same login can be a
+    Twitch channel and a TikTok account, and neither must hide the other.
     """
 
     def __init__(
@@ -132,13 +140,14 @@ class LiveMonitor:
         for channel_id, _title, video in results:
             if video is None:
                 continue
-            previous = self.lives.get(channel_id)
+            key = live_key("youtube", channel_id)
+            previous = self.lives.get(key)
             detected_at = (
                 previous[1]
                 if previous and previous[0].video_id == video.video_id
                 else datetime.now(tz=timezone.utc)
             )
-            current[channel_id] = (video, detected_at)
+            current[key] = (video, detected_at)
         self._replace_platform("youtube", current)
 
     async def check_twitch_once(self) -> None:
@@ -156,13 +165,14 @@ class LiveMonitor:
                 return  # keep last known state on a transient failure
         current: dict[str, tuple[Video, datetime]] = {}
         for login, video in live.items():
-            previous = self.lives.get(login)
+            key = live_key("twitch", login)
+            previous = self.lives.get(key)
             detected_at = (
                 previous[1]
                 if previous and previous[0].video_id == video.video_id
                 else datetime.now(tz=timezone.utc)
             )
-            current[login] = (video, detected_at)
+            current[key] = (video, detected_at)
         self._replace_platform("twitch", current)
 
     async def check_tiktok_once(self) -> None:
@@ -191,13 +201,14 @@ class LiveMonitor:
         for username, video in results:
             if video is None:
                 continue
-            previous = self.lives.get(username)
+            key = live_key("tiktok", username)
+            previous = self.lives.get(key)
             detected_at = (
                 previous[1]
                 if previous and previous[0].video_id == video.video_id
                 else datetime.now(tz=timezone.utc)
             )
-            current[username] = (video, detected_at)
+            current[key] = (video, detected_at)
         self._replace_platform("tiktok", current)
 
     async def _loop(self) -> None:

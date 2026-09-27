@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
@@ -9,6 +11,8 @@ from ..models import ChannelIn, FollowedChannel
 from ..services.twitch import TwitchError
 
 router = APIRouter()
+
+Platform = Literal["youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"]
 
 
 @router.get("/channels", response_model=list[FollowedChannel])
@@ -37,6 +41,12 @@ async def add_channel(body: ChannelIn, request: Request) -> FollowedChannel:
 
 
 @router.delete("/channels/{channel_id}", status_code=204)
-async def remove_channel(channel_id: str, request: Request) -> None:
-    if not request.app.state.db.remove_channel(channel_id):
+async def remove_channel(
+    channel_id: str,
+    request: Request,
+    # Optional: the same id can be followed on several platforms (a Twitch
+    # and a TikTok login); clients that omit it unfollow every one.
+    platform: Platform | None = None,
+) -> None:
+    if not request.app.state.db.remove_channel(channel_id, platform):
         raise HTTPException(status_code=404, detail="Channel not followed")

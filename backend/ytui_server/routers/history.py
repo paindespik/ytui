@@ -27,7 +27,8 @@ async def record_watch(body: HistoryIn, request: Request) -> None:
 
 @router.get("/history/watched-ids", response_model=WatchedIdsOut)
 async def watched_ids(request: Request) -> WatchedIdsOut:
-    return WatchedIdsOut(ids=request.app.state.db.watched_ids())
+    db = request.app.state.db
+    return WatchedIdsOut(ids=db.watched_ids(), progress=db.watch_progress())
 
 
 @router.put("/history/{video_id}/position", status_code=204)

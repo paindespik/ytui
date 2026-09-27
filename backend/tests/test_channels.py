@@ -246,3 +246,17 @@ def test_list_backfills_title_from_channel_names(app, client):
     assert client.get("/api/channels").json()[0]["title"] == ""
     app.state.db.set_channel_name("UCtest000000000000000000", "Test Channel")
     assert client.get("/api/channels").json()[0]["title"] == "Test Channel"
+
+
+def test_delete_channel_scoped_to_platform(app, client):
+    from ytui_server.models import FollowedChannel
+
+    db = app.state.db
+    db.add_channel(FollowedChannel(ref="twitch:samelogin", channel_id="samelogin", platform="twitch"))
+    db.add_channel(FollowedChannel(ref="tiktok:samelogin", channel_id="samelogin", platform="tiktok"))
+    resp = client.delete("/api/channels/samelogin", params={"platform": "tiktok"})
+    assert resp.status_code == 204
+    assert [c["platform"] for c in client.get("/api/channels").json()] == ["twitch"]
+    resp = client.delete("/api/channels/samelogin", params={"platform": "tiktok"})
+    assert resp.status_code == 404
+    assert client.delete("/api/channels/samelogin", params={"platform": "nope"}).status_code == 422

@@ -240,3 +240,138 @@ def test_migration4_adds_playlist_thumbnail_column(tmp_path: Path) -> None:
         assert "thumbnail_url" in cols
     finally:
         db.close()
+
+
+# ─── review fixes (2026-09) ───
+
+
+def test_rerecord_without_title_keeps_known_title(tmp_path: Path) -> None:
+    """A bare link records the video before its title is known."""
+    from ytui_server.models import Video
+
+    db = Database(tmp_path / "meta.sqlite")
+    try:
+        db.record_watch(make_video("abcdefghijk", title="Real title"))
+        db.record_watch(Video(video_id="abcdefghijk", title="", channel_title=""))
+        video, _, _ = db.watch_history(limit=10)[0]
+        assert video.title == "Real title"
+        assert video.channel_title == "Test Channel"
+        # A real new title still wins.
+        db.record_watch(make_video("abcdefghijk", title="Renamed"))
+        assert db.watch_history(limit=10)[0][0].title == "Renamed"
+    finally:
+        db.close()
+
+
+def test_prune_never_drops_same_id_on_another_platform(tmp_path: Path) -> None:
+    import time
+
+    from ytui_server.models import Video
+
+    db = Database(tmp_path / "meta.sqlite", history_max_rows=2)
+    try:
+        db.record_watch(Video(video_id="SAMEID12345", title="yt", platform="youtube"))
+        time.sleep(0.01)
+        db.record_watch(make_video("other000001"))
+        time.sleep(0.01)
+        db.record_watch(Video(video_id="SAMEID12345", title="cb", platform="crowdbunker"))
+        kept = {(v.platform, v.video_id) for v, _, _ in db.watch_history(limit=10)}
+        assert kept == {("crowdbunker", "SAMEID12345"), ("youtube", "other000001")}
+    finally:
+        db.close()
+
+
+def test_same_login_followed_on_two_platforms(tmp_path: Path) -> None:
+    from ytui_server.models import FollowedChannel
+
+    db = Database(tmp_path / "meta.sqlite")
+    try:
+        twitch = FollowedChannel(ref="twitch:xqcow", channel_id="xqcow", platform="twitch")
+        tiktok = FollowedChannel(ref="tiktok:xqcow", channel_id="xqcow", platform="tiktok")
+        assert db.add_channel(twitch)
+        assert db.add_channel(tiktok)
+        assert not db.add_channel(twitch)  # still one follow per platform
+        assert db.remove_channel("xqcow", "tiktok")
+        assert [c.platform for c in db.list_channels()] == ["twitch"]
+        # Without a platform (old clients) every follow of the id goes.
+        db.add_channel(tiktok)
+        assert db.remove_channel("xqcow")
+        assert db.list_channels() == []
+    finally:
+        db.close()
+
+
+def test_migration5_keeps_followed_channels(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "meta.sqlite"
+    Database(path).close()
+    conn = sqlite3.connect(path)
+    # Roll back to a v4 database with the old single-column UNIQUE.
+    conn.executescript(
+        """
+        DROP TABLE channels;
+        CREATE TABLE channels (
+            ref TEXT PRIMARY KEY,
+            channel_id TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL DEFAULT 'youtube',
+            added_at REAL NOT NULL
+        );
+        INSERT INTO channels VALUES ('@chan', 'UCchan', 'Chan', 'youtube', 1.0);
+        INSERT INTO channels VALUES ('twitch:foo', 'foo', 'Foo', 'twitch', 2.0);
+        PRAGMA user_version = 4;
+        """
+    )
+    conn.close()
+    db = Database(path)
+    try:
+        assert db._conn.execute("PRAGMA user_version").fetchone()[0] == len(_MIGRATIONS)
+        assert [(c.ref, c.platform) for c in db.list_channels()] == [
+            ("@chan", "youtube"),
+            ("twitch:foo", "twitch"),
+        ]
+        from ytui_server.models import FollowedChannel
+
+        assert db.add_channel(
+            FollowedChannel(ref="tiktok:foo", channel_id="foo", platform="tiktok")
+        )
+    finally:
+        db.close()
+
+
+def test_watch_progress(tmp_path: Path) -> None:
+    db = Database(tmp_path / "meta.sqlite")
+    try:
+        db.record_watch(make_video("half0000001"))
+        db.record_watch(make_video("unknown0001"))
+        db.record_watch(make_video("over0000001"))
+        db.save_position("youtube", "half0000001", 30.0, 60.0)
+        db.save_position("youtube", "unknown0001", 30.0, None)
+        db.save_position("youtube", "over0000001", 70.0, 60.0)
+        assert db.watch_progress() == {
+            "youtube:half0000001": 0.5,
+            "youtube:over0000001": 1.0,
+        }
+    finally:
+        db.close()
+
+
+def test_playlist_same_id_on_two_platforms(tmp_path: Path) -> None:
+    from ytui_server.models import Video
+
+    db = Database(tmp_path / "meta.sqlite")
+    try:
+        pid = db.create_playlist("mix")
+        assert pid is not None
+        assert db.add_playlist_item(pid, make_video("SAMEID12345"))
+        cb = Video(video_id="SAMEID12345", title="cb", platform="crowdbunker")
+        assert db.add_playlist_item(pid, cb)
+        assert not db.add_playlist_item(pid, cb)
+        added, skipped = db.add_playlist_items(
+            pid, [Video(video_id="SAMEID12345", title="bc", platform="bitchute"), cb]
+        )
+        assert (added, skipped) == (1, 1)
+        assert len(db.playlist_items(pid)) == 3
+    finally:
+        db.close()

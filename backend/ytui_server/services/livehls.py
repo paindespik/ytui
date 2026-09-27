@@ -17,6 +17,11 @@ rewrites the segments to ``{itag}/{sq}``. When an upstream segment answers
 re-extracts and remaps the same itags and sequence numbers onto the fresh
 URLs. The player never sees the swap: its buffer keeps draining while the
 session heals underneath.
+
+A session is shared by every client of the live: the extraction always keeps
+every variant, and each client's quality cap only filters the entry playlist
+it is served. Two devices at different caps therefore never reset each
+other's itag map.
 """
 
 from __future__ import annotations
@@ -42,6 +47,13 @@ _URI_ATTR_RE = re.compile(r'URI="([^"]+)"')
 REFRESH_AFTER = 15.0
 # An untouched session is a closed player: drop it.
 _SESSION_IDLE_TTL = 300.0
+# Extraction cap: the highest the API accepts, so the master (every variant)
+# comes back and per-client caps are applied when rendering the entry.
+_RESOLVE_CAP = 4320
+# Segments older than the current playlist window by more than this are
+# forgotten (a long live would otherwise grow the map without bound).
+# Older requests still work: they are synthesized from a same-itag template.
+_SEGMENT_KEEP_BEHIND = 60
 
 
 class LiveHlsError(Exception):
@@ -49,12 +61,11 @@ class LiveHlsError(Exception):
 
 
 class LiveHlsSession:
-    """One proxied live: rewritten master + per-itag playlists and segments."""
+    """One proxied live: master + per-itag playlists and segments."""
 
-    def __init__(self, video_url: str, max_height: int) -> None:
+    def __init__(self, video_url: str) -> None:
         self.video_url = video_url
-        self.max_height = max_height
-        self.entry_text: str | None = None  # rewritten master (or single media)
+        self.master_text: str | None = None  # upstream master (None: single media)
         self.media_urls: dict[int, str] = {}  # itag -> upstream media playlist
         self.segments: dict[tuple[int, int], str] = {}  # (itag, sq) -> upstream
         self.resolved_at = 0.0
@@ -68,20 +79,21 @@ class LiveHlsSession:
     async def _resolve(self, client: httpx.AsyncClient) -> None:
         """Fresh extraction -> master/media playlists -> itag + segment maps."""
         ytdlp.evict_cached_info(self.video_url)
-        info = await ytdlp.resolve_streams(self.video_url, max_height=self.max_height)
+        info = await ytdlp.resolve_streams(self.video_url, max_height=_RESOLVE_CAP)
         if not info.is_live:
             raise LiveHlsError("not a live stream")
         resp = await client.get(info.url)
         resp.raise_for_status()
         text = resp.text
         if "#EXT-X-STREAM-INF" in text:
-            self.entry_text = self._rewrite_master(text)
+            self._ingest_master(text)
         else:
             # A single media playlist (muxed variant): serve it as the entry,
             # its segments already rewritten to {itag}/{sq}.
             itag = self._itag_of(str(resp.url))
             self.media_urls = {itag: str(resp.url)}
-            self.entry_text = None
+            self.master_text = None
+            self.segments = {}
             self._ingest(itag, text)
         self.resolved_at = time.monotonic()
         self.generation += 1
@@ -99,28 +111,42 @@ class LiveHlsSession:
             raise LiveHlsError(f"no itag in playlist URL: {url[:120]}")
         return int(m.group(1))
 
-    def _rewrite_master(self, text: str) -> str:
-        """Filter video variants by the cap and point every URI at media/{itag}.
+    def _ingest_master(self, text: str) -> None:
+        """Register every playlist of the master (all variants, all renditions)."""
+        media_urls: dict[int, str] = {}
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                media_urls[self._itag_of(stripped)] = stripped
+            elif 'URI="' in stripped:
+                for uri in _URI_ATTR_RE.findall(stripped):
+                    media_urls[self._itag_of(uri)] = uri
+        if not media_urls:
+            raise LiveHlsError("master manifest lists no playable playlists")
+        self.master_text = text
+        self.media_urls = media_urls
+        # Old generations' segment maps die with their URLs.
+        self.segments = {}
+
+    def render_entry(self, max_height: int) -> str:
+        """The master filtered by a client's cap, every URI -> media/{itag}.
 
         Audio renditions (``EXT-X-MEDIA``) are all kept — the cap only applies
         to video. When no variant fits the cap, the lowest one stays: a cap
         must never make a live unplayable.
         """
-        lines = text.splitlines()
+        assert self.master_text is not None
+        lines = self.master_text.splitlines()
         heights: list[int] = []
         for line in lines:
             if line.startswith("#EXT-X-STREAM-INF"):
                 m = _RESOLUTION_RE.search(line)
                 heights.append(int(m.group(1)) if m else 0)
-        fitting = [h for h in heights if h <= self.max_height]
+        fitting = [h for h in heights if h <= max_height]
         floor = min(heights) if heights and not fitting else 0
 
-        media_urls: dict[int, str] = {}
-
-        def _register(upstream: str) -> str:
-            itag = self._itag_of(upstream)
-            media_urls[itag] = upstream
-            return f"media/{itag}.m3u8"
+        def _local(upstream: str) -> str:
+            return f"media/{self._itag_of(upstream)}.m3u8"
 
         out: list[str] = []
         skip_next_uri = False
@@ -129,7 +155,7 @@ class LiveHlsSession:
             if stripped.startswith("#EXT-X-STREAM-INF"):
                 m = _RESOLUTION_RE.search(stripped)
                 height = int(m.group(1)) if m else 0
-                keep = height <= self.max_height if fitting else height == floor
+                keep = height <= max_height if fitting else height == floor
                 if not keep:
                     skip_next_uri = True
                     continue
@@ -138,23 +164,17 @@ class LiveHlsSession:
                 if skip_next_uri:
                     skip_next_uri = False
                     continue
-                out.append(_register(stripped))
+                out.append(_local(stripped))
             elif 'URI="' in stripped:
-                out.append(
-                    _URI_ATTR_RE.sub(lambda m: f'URI="{_register(m.group(1))}"', line)
-                )
+                out.append(_URI_ATTR_RE.sub(lambda m: f'URI="{_local(m.group(1))}"', line))
             else:
                 out.append(line)
-        if not media_urls:
-            raise LiveHlsError("master manifest lists no playable playlists")
-        self.media_urls = media_urls
-        # Old generations' segment maps die with their URLs.
-        self.segments = {}
         return "\n".join(out) + "\n"
 
     def _ingest(self, itag: int, text: str) -> str:
         """Map (itag, sq) -> upstream URL, rewrite segment lines to {itag}/{sq}."""
         out: list[str] = []
+        seen: list[int] = []
         for line in text.splitlines():
             stripped = line.strip()
             if stripped and not stripped.startswith("#"):
@@ -163,10 +183,15 @@ class LiveHlsSession:
                     out.append(line)
                     continue
                 sq = int(m.group(1))
+                seen.append(sq)
                 self.segments[(itag, sq)] = stripped
                 out.append(f"{itag}/{sq}")
             else:
                 out.append(line)
+        if seen:
+            horizon = min(seen) - _SEGMENT_KEEP_BEHIND
+            for key in [k for k in self.segments if k[0] == itag and k[1] < horizon]:
+                del self.segments[key]
         return "\n".join(out) + "\n"
 
     async def _reresolve(self, client: httpx.AsyncClient, seen_generation: int) -> None:
@@ -193,17 +218,23 @@ class LiveHlsSession:
 
         self._refresh_task = asyncio.create_task(_refresh())
 
+    def close(self) -> None:
+        """Stop the background refresh of an abandoned session."""
+        task, self._refresh_task = self._refresh_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
     # -- serving ------------------------------------------------------------
 
-    async def entry_playlist(self, client: httpx.AsyncClient) -> str:
-        """The rewritten master (or single media playlist), resolving as needed."""
+    async def entry_playlist(self, client: httpx.AsyncClient, max_height: int = 1440) -> str:
+        """The master rendered for ``max_height`` (or the single media playlist)."""
         self.last_used = time.monotonic()
         async with self.lock:
             if not self.media_urls:
                 await self._resolve(client)
-        if self.entry_text is not None:
+        if self.master_text is not None:
             self.refresh_soon(client)
-            return self.entry_text
+            return self.render_entry(max_height)
         # Single-media live: the entry is the media playlist itself.
         itag = next(iter(self.media_urls))
         return await self.media_playlist(client, itag)
@@ -272,23 +303,15 @@ class LiveHlsSession:
 _sessions: dict[str, LiveHlsSession] = {}
 
 
-def get_session(video_url: str, max_height: int | None = None) -> LiveHlsSession:
-    """The session for a live, pruning idle ones on the way.
-
-    ``max_height=None`` keeps the session's current cap (media/segment
-    requests carry no quality; the entry playlist request set it).
-    """
+def get_session(video_url: str) -> LiveHlsSession:
+    """The shared session for a live, pruning idle ones on the way."""
     now = time.monotonic()
     for key, sess in list(_sessions.items()):
         if now - sess.last_used > _SESSION_IDLE_TTL:
+            sess.close()
             del _sessions[key]
     sess = _sessions.get(video_url)
     if sess is None:
-        sess = _sessions[video_url] = LiveHlsSession(video_url, max_height or 1440)
-    elif max_height is not None and sess.max_height != max_height:
-        # Quality change: next resolution applies the new cap.
-        sess.max_height = max_height
-        sess.media_urls = {}
-        sess.entry_text = None
+        sess = _sessions[video_url] = LiveHlsSession(video_url)
     sess.last_used = now
     return sess

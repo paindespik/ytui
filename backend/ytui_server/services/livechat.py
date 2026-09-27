@@ -2,7 +2,9 @@
 
 Each `platform:video_id` gets one upstream session feeding a monotonic ring
 buffer; clients poll `GET /api/lives/{video_id}/chat` with a cursor. Rooms are
-spawned on first poll and reaped after `CHAT_ROOM_IDLE_SECONDS` with no poll.
+spawned on first poll and reaped after `CHAT_ROOM_IDLE_SECONDS` with no poll —
+by their own supervisor, so the last client leaving is enough (no later poll
+of another room is needed to close the upstream connection).
 
 YouTube uses the continuation flow (watch page -> live_chat GET -> get_live_chat
 POST with the full INNERTUBE_CONTEXT). Twitch uses anonymous IRC-over-WebSocket
@@ -24,6 +26,7 @@ import websockets
 
 from ..models import ChatMessage, ChatResponse
 from ..routers.proxy import PROXY_UA
+from . import twitch
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +35,11 @@ CHAT_ROOM_IDLE_SECONDS = 45    # reap a room after this long with no client poll
 YT_DEFAULT_TIMEOUT_MS = 5000   # fallback poll gap when upstream omits timeoutMs
 TWITCH_WS_URL = "wss://irc-ws.chat.twitch.tv:443"
 _HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")  # Twitch color tag; reject junk
+_YT_VIDEO_ID_RE = re.compile(r"[\w-]{11}")
+# How often a room's supervisor checks whether its clients are gone.
+IDLE_CHECK_SECONDS = 10.0
+# Twitch IRC: consecutive failed connections before the room gives up.
+TWITCH_MAX_FAILURES = 5
 
 
 def _extract_json_after(s: str, anchor: str, start: int = 0) -> str | None:
@@ -155,6 +163,17 @@ def _parse_privmsg(line: str) -> ChatMessage | None:
     return ChatMessage(id=mid, author=author, text=text, color=color, timestamp=ts)
 
 
+def _irc_command(line: str) -> str:
+    """The command of an IRC line (after optional @tags and :prefix)."""
+    parts = line.split(" ")
+    i = 0
+    if i < len(parts) and parts[i].startswith("@"):
+        i += 1
+    if i < len(parts) and parts[i].startswith(":"):
+        i += 1
+    return parts[i] if i < len(parts) else ""
+
+
 class _Room:
     """Per-session ring buffer + upstream task state."""
 
@@ -187,13 +206,30 @@ class ChatManager:
         if room is None:
             room = self._rooms[key] = _Room()
             room.task = asyncio.get_running_loop().create_task(
-                self._run(platform, video_id, room)
+                self._supervise(key, platform, video_id, room)
             )
         room.last_poll = time.monotonic()
         if cursor < 0 or cursor > room.max_seq:  # stale cursor -> serve backlog
             cursor = 0
         messages = [m for seq, m in room.buffer if seq > cursor]
         return ChatResponse(messages=messages, cursor=room.max_seq, active=room.active)
+
+    async def _supervise(
+        self, key: str, platform: str, video_id: str, room: _Room
+    ) -> None:
+        """Run the upstream session until no client has polled for a while."""
+        upstream = asyncio.ensure_future(self._run(platform, video_id, room))
+        try:
+            while time.monotonic() - room.last_poll <= CHAT_ROOM_IDLE_SECONDS:
+                if upstream.done():
+                    await asyncio.sleep(IDLE_CHECK_SECONDS)
+                else:
+                    await asyncio.wait({upstream}, timeout=IDLE_CHECK_SECONDS)
+        finally:
+            upstream.cancel()
+            if self._rooms.get(key) is room:
+                del self._rooms[key]
+            await asyncio.gather(upstream, return_exceptions=True)
 
     async def _run(self, platform: str, video_id: str, room: _Room) -> None:
         try:
@@ -220,12 +256,16 @@ class ChatManager:
                 room.task.cancel()
 
     async def shutdown(self) -> None:
-        for room in self._rooms.values():
-            if room.task:
-                room.task.cancel()
+        tasks = [room.task for room in self._rooms.values() if room.task]
+        for task in tasks:
+            task.cancel()
         self._rooms.clear()
+        # Let each supervisor's `finally` cancel its upstream session.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_youtube(self, video_id: str, room: _Room) -> None:
+        if not _YT_VIDEO_ID_RE.fullmatch(video_id):
+            return  # not a YouTube id: nothing to join
         headers = {
             "User-Agent": PROXY_UA,
             "Accept-Language": "en-US,en",
@@ -306,7 +346,28 @@ class ChatManager:
                 await asyncio.sleep(timeout / 1000)
 
     async def _run_twitch(self, video_id: str, room: _Room) -> None:
-        login = video_id.split(":", 1)[0]
+        """Stay joined, reconnecting when Twitch asks to or the socket drops.
+
+        Twitch restarts its IRC edges routinely (RECONNECT); without this the
+        chat went silent for good mid-live. Gives up after a few consecutive
+        connections that never got the server's welcome.
+        """
+        login = video_id.split(":", 1)[0].lower()
+        if not twitch.LOGIN_RE.fullmatch(login):
+            return  # would inject into the JOIN line otherwise
+        failures = 0
+        while failures < TWITCH_MAX_FAILURES:
+            try:
+                welcomed = await self._twitch_session(login, room)
+            except (OSError, websockets.WebSocketException) as exc:
+                log.info("twitch chat %s: connection lost: %s", login, exc)
+                welcomed = False
+            failures = 0 if welcomed else failures + 1
+            await asyncio.sleep(min(30, 2**failures))
+
+    async def _twitch_session(self, login: str, room: _Room) -> bool:
+        """One IRC connection; True when the server welcomed us (healthy)."""
+        welcomed = False
         async with websockets.connect(TWITCH_WS_URL) as ws:
             await ws.send("CAP REQ :twitch.tv/tags")
             await ws.send(f"NICK justinfan{random.randint(10000, 99999)}")
@@ -317,9 +378,15 @@ class ChatManager:
                 for line in raw.split("\r\n"):
                     if not line:
                         continue
-                    if line.startswith("PING"):
+                    command = _irc_command(line)
+                    if command == "PING":
                         await ws.send("PONG :tmi.twitch.tv")
-                    elif " PRIVMSG " in line:
+                    elif command == "001":
+                        welcomed = True
+                    elif command == "RECONNECT":
+                        return True
+                    elif command == "PRIVMSG":
                         msg = _parse_privmsg(line)
                         if msg:
                             room.add(msg)
+        return welcomed

@@ -433,13 +433,57 @@ def forget_dead_stream(media_url: str) -> bool:
     return evicted
 
 
+class _Inflight:
+    """One extraction in progress, awaited by every concurrent caller."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.info: dict | None = None
+        self.error: BaseException | None = None
+
+
+# The web player asks for /streams and /mpd of the same video at once: without
+# this, both miss the (not yet filled) cache and pay a full extraction each.
+_INFLIGHT: dict[str, _Inflight] = {}
+
+
 def _extract_info_cached(url: str) -> dict:
-    """extract_info with a small module-level TTL cache (thread-safe)."""
+    """extract_info with a small module-level TTL cache (thread-safe).
+
+    Concurrent callers for the same URL share one extraction: the first runs
+    it, the others wait for its result (or its exception).
+    """
     now = time.monotonic()
     with _INFO_CACHE_LOCK:
         cached = _INFO_CACHE.get(url)
         if cached is not None and now - cached[0] < _info_cache_ttl(cached[1]):
             return cached[1]
+        pending = _INFLIGHT.get(url)
+        owner = pending is None
+        if owner:
+            pending = _INFLIGHT[url] = _Inflight()
+    assert pending is not None
+    if not owner:
+        pending.done.wait()
+        if pending.error is not None:
+            raise pending.error
+        assert pending.info is not None
+        return pending.info
+    try:
+        pending.info = _extract_info_fresh(url)
+        return pending.info
+    except BaseException as exc:
+        pending.error = exc
+        raise
+    finally:
+        with _INFO_CACHE_LOCK:
+            if _INFLIGHT.get(url) is pending:
+                del _INFLIGHT[url]
+        pending.done.set()
+
+
+def _extract_info_fresh(url: str) -> dict:
+    """One full extraction (with the truncation guard), stored in the cache."""
     import yt_dlp
 
     bitchute = "bitchute.com" in url
@@ -629,8 +673,14 @@ def _extract_details(url: str) -> VideoDetails:
     if len(upload_date) == 8:
         upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
     duration = info.get("duration")
+    video_id = info.get("id") or ""
+    thumbnail = info.get("thumbnail") or ""
+    if "youtube.com" in url and video_id:
+        # Same small derived thumbnail as every YouTube listing (yt-dlp's
+        # pick is the multi-hundred-KB maxres one).
+        thumbnail = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
     return VideoDetails(
-        video_id=info.get("id") or "",
+        video_id=video_id,
         title=info.get("title") or "",
         channel_id=info.get("channel_id") or "",
         channel_title=info.get("channel") or info.get("uploader") or "",
@@ -639,6 +689,7 @@ def _extract_details(url: str) -> VideoDetails:
         like_count=info.get("like_count"),
         duration=int(duration) if duration else None,
         upload_date=upload_date,
+        thumbnail_url=thumbnail,
     )
 
 

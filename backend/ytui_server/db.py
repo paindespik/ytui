@@ -114,6 +114,23 @@ _MIGRATIONS: list[str] = [
     """
     ALTER TABLE local_playlist_items ADD COLUMN thumbnail_url TEXT NOT NULL DEFAULT '';
     """,
+    # 5: followed channels unique per (platform, channel_id). A bare
+    # `channel_id UNIQUE` refused to follow the same login on Twitch and on
+    # TikTok (and would have made them unfollow each other).
+    """
+    CREATE TABLE channels_new (
+        ref TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        platform TEXT NOT NULL DEFAULT 'youtube',
+        added_at REAL NOT NULL,
+        UNIQUE (platform, channel_id)
+    );
+    INSERT INTO channels_new (ref, channel_id, title, platform, added_at)
+        SELECT ref, channel_id, title, platform, added_at FROM channels;
+    DROP TABLE channels;
+    ALTER TABLE channels_new RENAME TO channels;
+    """,
 ]
 
 
@@ -342,11 +359,19 @@ class Database:
             self._conn.commit()
         return True
 
-    def remove_channel(self, channel_id: str) -> bool:
+    def remove_channel(self, channel_id: str, platform: str | None = None) -> bool:
+        """Unfollow a channel. Without `platform` every platform's follow of
+        this id goes (what old clients, which only send the id, expect)."""
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM channels WHERE channel_id = ?", (channel_id,)
-            )
+            if platform is None:
+                cur = self._conn.execute(
+                    "DELETE FROM channels WHERE channel_id = ?", (channel_id,)
+                )
+            else:
+                cur = self._conn.execute(
+                    "DELETE FROM channels WHERE channel_id = ? AND platform = ?",
+                    (channel_id, platform),
+                )
             self._conn.commit()
         return cur.rowcount > 0
 
@@ -360,8 +385,12 @@ class Database:
                 "playlist_id, channel_id, thumbnail_url) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(platform, video_id) DO UPDATE SET "
-                "title = excluded.title, "
-                "channel_title = excluded.channel_title, "
+                # A client opening a bare link records the video before it
+                # knows its title: an empty value must never erase a known one.
+                "title = CASE WHEN excluded.title != '' "
+                "THEN excluded.title ELSE title END, "
+                "channel_title = CASE WHEN excluded.channel_title != '' "
+                "THEN excluded.channel_title ELSE channel_title END, "
                 "kind = excluded.kind, "
                 "watched_at = excluded.watched_at, "
                 "playlist_id = CASE WHEN excluded.playlist_id != '' "
@@ -383,9 +412,11 @@ class Database:
                 ),
             )
             if self.history_max_rows > 0:
+                # By rowid: a bare video_id also matched the same id on
+                # another platform, pruning the video just watched with it.
                 self._conn.execute(
-                    "DELETE FROM watch_history WHERE video_id IN ("
-                    "SELECT video_id FROM watch_history "
+                    "DELETE FROM watch_history WHERE rowid IN ("
+                    "SELECT rowid FROM watch_history "
                     "ORDER BY watched_at DESC LIMIT -1 OFFSET ?)",
                     (self.history_max_rows,),
                 )
@@ -420,6 +451,19 @@ class Database:
         with self._lock:
             rows = self._conn.execute("SELECT platform, video_id FROM watch_history").fetchall()
         return [f"{platform}:{video_id}" for platform, video_id in rows]
+
+    def watch_progress(self) -> dict[str, float]:
+        """Watched fraction (0-1) per '{platform}:{video_id}', for rows whose
+        position and duration are both known (thumbnail progress bars)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT platform, video_id, position, duration FROM watch_history "
+                "WHERE position > 0 AND duration > 0"
+            ).fetchall()
+        return {
+            f"{platform}:{video_id}": round(min(1.0, position / duration), 3)
+            for platform, video_id, position, duration in rows
+        }
 
     def watch_history(self, limit: int = 200) -> list[tuple[Video, float, float]]:
         """Most recent watches first, as (video, watched_at, position) tuples."""
@@ -521,8 +565,9 @@ class Database:
         """Append an item. Returns False if already present."""
         with self._lock:
             exists = self._conn.execute(
-                "SELECT 1 FROM local_playlist_items WHERE playlist_id = ? AND video_id = ?",
-                (playlist_id, video.video_id),
+                "SELECT 1 FROM local_playlist_items "
+                "WHERE playlist_id = ? AND video_id = ? AND platform = ?",
+                (playlist_id, video.video_id, video.platform),
             ).fetchone()
             if exists:
                 return False
@@ -559,10 +604,12 @@ class Database:
         """
         added = 0
         with self._lock:
+            # (platform, video_id): the bare id collides across platforms.
             known = {
-                row[0]
+                (row[0], row[1])
                 for row in self._conn.execute(
-                    "SELECT video_id FROM local_playlist_items WHERE playlist_id = ?",
+                    "SELECT platform, video_id FROM local_playlist_items "
+                    "WHERE playlist_id = ?",
                     (playlist_id,),
                 )
             }
@@ -573,9 +620,10 @@ class Database:
             ).fetchone()
             position = row[0]
             for video in videos:
-                if video.video_id in known:
+                key = (video.platform, video.video_id)
+                if key in known:
                     continue
-                known.add(video.video_id)
+                known.add(key)
                 self._conn.execute(
                     "INSERT INTO local_playlist_items "
                     "(playlist_id, position, video_id, title, channel_title, url, kind, "

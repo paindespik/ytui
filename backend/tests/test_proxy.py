@@ -242,3 +242,72 @@ def test_proxy_upstream_403_evicts_dead_extraction(proxied):
 
     assert resp.status_code == 403
     assert not ytdlp._INFO_CACHE
+
+
+# ─── hardening: inert documents, redirect allowlist ───
+
+
+def test_proxy_downgrades_active_content_types(proxied):
+    """An HTML/SVG file on an allowlisted CDN must not render on our origin."""
+    served = {"type": "text/html; charset=utf-8"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<script>x</script>", headers={"Content-Type": served["type"]})
+
+    client = proxied(handler)
+    for bad in ("text/html; charset=utf-8", "image/svg+xml", "application/xhtml+xml"):
+        served["type"] = bad
+        resp = client.get("/api/proxy", params={"url": "https://cdn.example/f"})
+        assert resp.headers["content-type"] == "application/octet-stream", bad
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert "sandbox" in resp.headers["content-security-policy"]
+    for good in ("video/mp4", "text/vtt; charset=utf-8", "video/mp2t", "image/jpeg"):
+        served["type"] = good
+        resp = client.get("/api/proxy", params={"url": "https://cdn.example/f"})
+        assert resp.headers["content-type"] == good
+
+
+def test_proxy_follows_allowlisted_redirects(proxied):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "cdn.example":
+            return httpx.Response(302, headers={"Location": "https://other.example/real.mp4"})
+        assert request.headers["Range"] == "bytes=0-9"  # Range survives the hop
+        return httpx.Response(206, content=b"0123456789", headers={"Content-Type": "video/mp4"})
+
+    client = proxied(handler)
+    resp = client.get(
+        "/api/proxy",
+        params={"url": "https://cdn.example/x.mp4"},
+        headers={"Range": "bytes=0-9"},
+    )
+    assert resp.status_code == 206
+    assert resp.content == b"0123456789"
+
+
+def test_proxy_refuses_redirect_off_the_allowlist(proxied):
+    hits = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(request.url.host)
+        if request.url.host == "cdn.example":
+            return httpx.Response(302, headers={"Location": "http://127.0.0.1:8776/api/status"})
+        return httpx.Response(200, content=b"secret")
+
+    client = proxied(handler)
+    for path in ("/api/proxy", "/api/proxy/hls"):
+        hits.clear()
+        resp = client.get(path, params={"url": "https://cdn.example/x"})
+        assert resp.status_code == 403, path
+        assert hits == ["cdn.example"], "the off-list hop must never be requested"
+
+
+def test_proxy_hls_rewrites_against_final_url(proxied):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start.m3u8":
+            return httpx.Response(302, headers={"Location": "https://other.example/v/real.m3u8"})
+        return httpx.Response(200, text="#EXTM3U\n#EXTINF:6.0,\nseg.ts\n")
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy/hls", params={"url": "https://cdn.example/start.m3u8"})
+    assert resp.status_code == 200
+    assert _enc("https://other.example/v/seg.ts") in resp.text
