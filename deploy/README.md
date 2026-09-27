@@ -79,7 +79,12 @@ Vérifier : `systemctl --user list-timers`.
 ## Session YouTube (suggestions personnalisées)
 
 `GET /api/suggestions` sert la page d'accueil YouTube du compte quand des
-cookies de session sont présents. Ces cookies ne peuvent pas être entretenus par
+cookies de session sont présents. La même session sert `GET /api/music` :
+l'accueil YouTube Music du compte (étagères de music.youtube.com via InnerTube
+`WEB_REMIX`, cache mémoire `YTUI_MUSIC_TTL_MINUTES`, 30 min par défaut), ainsi
+que le listage des mixes personnels (`RDTMAK…`) et de la playlist « J'aime »
+(`LM`), qu'yt-dlp anonyme ne voit pas ou voit génériques. Le fichier de cookies
+n'y est jamais réécrit. Ces cookies ne peuvent pas être entretenus par
 le backend : YouTube lie la session à un cookie `__Secure-1PSIDTS` que seul son
 détenteur peut renouveler — youtube.com ne le renvoie jamais (il ne rafraîchit
 que `SIDCC`/`__Secure-*PSIDCC`) et l'endpoint de rotation de Google refuse les

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     suggestions_ttl_minutes: int = Field(
         default=30, validation_alias="YTUI_SUGGESTIONS_TTL_MINUTES"
     )
+    music_ttl_minutes: int = Field(default=30, validation_alias="YTUI_MUSIC_TTL_MINUTES")
     # Periodic authenticated ping that keeps the pushed cookie session alive
     # (yt-dlp rewrites the rotated cookies on each use). 0 disables.
     suggestions_keepalive_hours: int = Field(

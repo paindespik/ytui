@@ -62,7 +62,7 @@ class VideoTile extends ConsumerWidget {
     final tile = InkWell(
       onTap: onTap ?? () => _defaultTap(context, ref),
       onLongPress:
-          video.kind == 'channel' ? null : () => _showActions(context, ref),
+          video.kind == 'channel' ? null : () => showActions(context, ref),
       borderRadius: BorderRadius.circular(kRadiusSm),
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -251,7 +251,7 @@ class VideoTile extends ConsumerWidget {
     if (!showActionsButton) return tile;
     return _TvTileRow(
       tile: tile,
-      onActions: () => _showActions(context, ref),
+      onActions: () => showActions(context, ref),
     );
   }
 
@@ -338,7 +338,9 @@ class VideoTile extends ConsumerWidget {
     }
   }
 
-  Future<void> _showActions(BuildContext context, WidgetRef ref) async {
+  /// The actions sheet (queue, details, save, open/follow channel\u2026). Public
+  /// so other item widgets (the music shelves' cards) offer the same sheet.
+  Future<void> showActions(BuildContext context, WidgetRef ref) async {
     // Flat-extracted playlist videos carry no channel id on the server: ask
     // the details endpoint for it so "Open/Follow channel" stay available
     // (graceful fallback to the short sheet on error).

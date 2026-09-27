@@ -20,6 +20,7 @@ from .ui.screens.history import HistoryScreen
 from .ui.screens.home import HomeFeedScreen
 from .ui.screens.livechat import LiveChatScreen
 from .ui.screens.local_playlists import LocalPlaylistsScreen
+from .ui.screens.music import MusicScreen
 from .ui.screens.playlist import PlaylistScreen
 from .ui.screens.search import SearchScreen
 from .ui.screens.settings import SettingsScreen
@@ -49,7 +50,8 @@ class YtuiApp(App):
     #warning-banner.hidden {
         display: none;
     }
-    #feed-loading, #search-loading, #channel-loading, #playlist-loading, #detail-loading {
+    #feed-loading, #search-loading, #channel-loading, #playlist-loading, #detail-loading,
+    #music-loading {
         height: 1;
     }
     Horizontal > VideoList {
@@ -83,6 +85,7 @@ class YtuiApp(App):
         "settings": SettingsScreen,
         "local_playlists": LocalPlaylistsScreen,
         "suggestions": SuggestionsScreen,
+        "music": MusicScreen,
     }
 
     def __init__(self, config: Config) -> None:
@@ -413,6 +416,19 @@ class YtuiApp(App):
             return
         for video in playable:
             self._record_watch(video)
+        self.run_worker(self._play_all_async(playable), group="player")
+
+    def play_listed(self, videos: list[Video]) -> None:
+        """Play a listed playlist as an mpv queue, recording only the first item.
+
+        Unlike play_all (explicit picks), the rest is merely queued, so it must
+        not all land in the watch history up front.
+        """
+        playable = [v for v in videos if v.kind != "channel"]
+        if not playable:
+            self.notify("Nothing to play.", timeout=4)
+            return
+        self._record_watch(playable[0])
         self.run_worker(self._play_all_async(playable), group="player")
 
     async def _play_all_async(self, videos: list[Video]) -> None:

@@ -8,7 +8,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from ytui.api_client import FeedResult, FollowedChannel, LocalPlaylist, PlaylistItem
+from ytui.api_client import (
+    FeedResult,
+    FollowedChannel,
+    LocalPlaylist,
+    MusicHome,
+    MusicShelf,
+    PlaylistItem,
+)
 from ytui.config import Config
 from ytui.models import Comment, CommentPage, Video, VideoDetails
 
@@ -21,6 +28,8 @@ VIDEO = Video(
 )
 PLAYLIST = Video(video_id="PLabc", title="A playlist", kind="playlist")
 CHANNEL = Video(video_id="UCabc", title="A channel", kind="channel")
+TRACK = Video(video_id="trackAAAAAA", title="A track", channel_title="An artist")
+MIX = Video(video_id="RDTMAK5uy_mix", title="My supermix", kind="playlist")
 ODYSEE_VIDEO = Video(
     video_id="ma-video:abc123",
     title="An Odysee video",
@@ -50,6 +59,16 @@ class FakeClient:
 
     async def feed(self, refresh: bool = False) -> FeedResult:
         return FeedResult([VIDEO], [])
+
+    async def music(self, refresh: bool = False) -> MusicHome:
+        return MusicHome(
+            [
+                MusicShelf("Quick picks", [VIDEO, TRACK]),
+                MusicShelf("Mixed for you", [MIX], strapline="FOR YOU"),
+                MusicShelf("Related", [CHANNEL]),
+            ],
+            [],
+        )
 
     async def search(self, query: str, limit: int = 20, source: str = "youtube") -> list[Video]:
         self.last_search_source = source
@@ -602,3 +621,90 @@ async def test_detail_ctrl_enter_play_also(app, monkeypatch):
         await pilot.press("ctrl+enter")
         await app.workers.wait_for_complete()
     assert launched == [(VIDEO.url, None)]
+
+
+async def _open_music(app, pilot):
+    await pilot.pause()
+    app.push_screen("music")
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+    from ytui.ui.widgets.shelf_list import ShelfList
+
+    return app.screen.query_one("#music-list", ShelfList)
+
+
+async def test_music_screen_lists_shelves_with_header_rows(app):
+    async with app.run_test() as pilot:
+        shelf_list = await _open_music(app, pilot)
+        assert app.screen.__class__.__name__ == "MusicScreen"
+        # 3 headers + 4 items; the cursor starts on the first item, not a header.
+        assert shelf_list.row_count == 7
+        assert str(shelf_list.get_row_at(0)[1]) == "♪ Quick picks"
+        assert str(shelf_list.get_row_at(3)[2]) == "for you"
+        assert shelf_list.cursor_row == 1
+        assert shelf_list.video_at_cursor() == VIDEO
+
+
+async def test_music_cursor_skips_headers_and_jumps_shelves(app):
+    async with app.run_test() as pilot:
+        shelf_list = await _open_music(app, pilot)
+        await pilot.press("down", "down")  # TRACK, then over the header onto MIX
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == MIX
+        await pilot.press("up")  # back over the header onto TRACK
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == TRACK
+        await pilot.press("J")
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == MIX
+        await pilot.press("J")
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == CHANNEL
+        await pilot.press("K")
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == MIX
+        await pilot.press("g")  # top is a header: lands on the first item
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == VIDEO
+
+
+async def test_music_enter_opens_mix_and_p_plays_the_signed_in_listing(app, monkeypatch):
+    played: list[list[Video]] = []
+    direct: list[Video] = []
+    monkeypatch.setattr(app, "play_listed", lambda videos: played.append(videos))
+    monkeypatch.setattr(app, "play_video", lambda video, audio_only=None: direct.append(video))
+    async with app.run_test() as pilot:
+        shelf_list = await _open_music(app, pilot)
+        await pilot.press("J")
+        await pilot.pause()
+        assert shelf_list.video_at_cursor() == MIX
+        await pilot.press("enter")
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "PlaylistScreen"
+        assert app.screen.playlist == MIX
+        assert direct == []  # opened, not played through mpv's anonymous listing
+        await pilot.press("p")
+        await pilot.pause()
+        assert [v.video_id for v in played[0]] == [VIDEO.video_id]
+        assert direct == []
+
+
+async def test_music_enter_plays_a_track(app, monkeypatch):
+    played: list[Video] = []
+    monkeypatch.setattr(app, "play_video", lambda video, audio_only=None: played.append(video))
+    async with app.run_test() as pilot:
+        await _open_music(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert [v.video_id for v in played] == [VIDEO.video_id]  # once, not per base handler
+
+
+async def test_home_m_opens_music(app):
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("M")
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "MusicScreen"

@@ -19,6 +19,7 @@ from .routers import (
     feed,
     history,
     lives,
+    music,
     playlists,
     proxy,
     session,
@@ -31,6 +32,7 @@ from .services.cookies import CookieStore
 from .services.feed import FeedService
 from .services.live import LiveMonitor
 from .services.livechat import ChatManager
+from .services.music import MusicService
 from .services.sponsorblock import SponsorBlockService
 from .services.suggestions import SuggestionsService
 from .services.youtube import YouTubeService
@@ -93,6 +95,9 @@ def create_app(settings: Settings | None = None, start_pollers: bool = True) -> 
             cookies=app.state.youtube_cookies,
             keepalive_hours=settings.suggestions_keepalive_hours,
         )
+        app.state.music_service = MusicService(
+            app.state.youtube_cookies, ttl_seconds=settings.music_ttl_minutes * 60
+        )
         app.state.youtube_service = YouTubeService(settings.data_dir)
         app.state.sponsorblock = SponsorBlockService(
             db,
@@ -133,6 +138,7 @@ def create_app(settings: Settings | None = None, start_pollers: bool = True) -> 
     for router in (
         feed,
         suggestions,
+        music,
         videos,
         channels,
         history,

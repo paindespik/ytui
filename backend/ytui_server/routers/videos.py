@@ -140,6 +140,7 @@ async def channel_videos(
 @router.get("/ytplaylists/{playlist_id}/videos", response_model=PlaylistVideosResponse)
 async def playlist_videos(
     playlist_id: str,
+    request: Request,
     limit: int = Query(default=200, ge=1, le=500),
     platform: Platform = "youtube",
 ) -> PlaylistVideosResponse:
@@ -149,9 +150,15 @@ async def playlist_videos(
     if platform == "twitch":
         # Twitch collections have no stable public URL form nor yt-dlp support
         raise HTTPException(status_code=400, detail="Twitch playlists are not supported")
-    url = Video(video_id=playlist_id, title="", kind="playlist", platform=platform).url
     try:
-        items, title = await ytdlp.playlist_videos(url, limit=limit)
+        if platform == "youtube":
+            # Personal mixes and liked music need the signed-in session.
+            items, title = await request.app.state.music_service.youtube_playlist(
+                playlist_id, limit=limit
+            )
+        else:
+            url = Video(video_id=playlist_id, title="", kind="playlist", platform=platform).url
+            items, title = await ytdlp.playlist_videos(url, limit=limit)
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Playlist listing failed: {exc}") from exc
     return PlaylistVideosResponse(items=items, title=title)

@@ -41,6 +41,19 @@ class SuggestionsNotifier extends AsyncNotifier<FeedResult> {
   }
 }
 
+final musicProvider =
+    AsyncNotifierProvider<MusicNotifier, MusicHome>(MusicNotifier.new);
+
+class MusicNotifier extends AsyncNotifier<MusicHome> {
+  @override
+  Future<MusicHome> build() => ref.watch(apiProvider).music();
+
+  Future<void> refresh() async {
+    state =
+        await AsyncValue.guard(() => ref.read(apiProvider).music(refresh: true));
+  }
+}
+
 final searchProvider = FutureProvider.autoDispose
     .family<List<Video>, (String, String)>((ref, arg) =>
         ref.watch(apiProvider).search(arg.$1, source: arg.$2));

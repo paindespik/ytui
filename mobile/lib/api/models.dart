@@ -105,6 +105,48 @@ class FeedResult {
       );
 }
 
+/// One YouTube Music home shelf ("Sélection rapide", "Mixés pour vous"…).
+class MusicShelf {
+  final String title;
+
+  /// Small caption above the title on the site ("EN RAPPORT AVEC", "RADIO").
+  final String strapline;
+  final List<Video> items;
+
+  const MusicShelf({
+    required this.title,
+    this.strapline = '',
+    this.items = const [],
+  });
+
+  factory MusicShelf.fromJson(Map<String, dynamic> json) => MusicShelf(
+        title: json['title'] as String? ?? '',
+        strapline: json['strapline'] as String? ?? '',
+        items: (json['items'] as List<dynamic>? ?? const [])
+            .map((e) => Video.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// The account's YouTube Music home, plus non-fatal warnings (no cookies,
+/// stale session).
+class MusicHome {
+  final List<MusicShelf> shelves;
+  final List<String> warnings;
+
+  const MusicHome({required this.shelves, this.warnings = const []});
+
+  factory MusicHome.fromJson(Map<String, dynamic> json) => MusicHome(
+        shelves: (json['shelves'] as List<dynamic>? ?? const [])
+            .map((e) => MusicShelf.fromJson(e as Map<String, dynamic>))
+            .where((s) => s.items.isNotEmpty)
+            .toList(),
+        warnings: (json['warnings'] as List<dynamic>? ?? [])
+            .map((e) => e as String)
+            .toList(),
+      );
+}
+
 class VideoDetails {
   final String videoId;
   final String title;

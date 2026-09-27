@@ -496,3 +496,25 @@ def test_resume_start():
     assert resume_start(590.0, 600.0) == 0.0  # within 5% of the end
     assert resume_start(50.0, None) == 0.0
     assert resume_start(50.0, 0.0) == 0.0
+
+
+@respx.mock
+async def test_music_parses_shelves_and_warnings(client):
+    route = respx.get(f"{BASE}/api/music").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "shelves": [
+                    {"title": "Quick picks", "strapline": "", "items": [VIDEO_JSON]},
+                    {"title": "Artist", "strapline": "RELATED", "items": []},
+                ],
+                "warnings": ["stale cookies"],
+            },
+        )
+    )
+    home = await client.music(refresh=True)
+    assert [s.title for s in home.shelves] == ["Quick picks", "Artist"]
+    assert home.shelves[0].items[0].video_id == "dQw4w9WgXcQ"
+    assert home.shelves[1].strapline == "RELATED"
+    assert home.warnings == ["stale cookies"]
+    assert route.calls.last.request.url.params["refresh"] == "true"

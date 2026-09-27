@@ -1,8 +1,8 @@
 """Account cookies pushed from the desktop client.
 
-Used ONLY for the personalised YouTube home feed (yt-dlp `:ytrec`): search,
-stream resolution and details stay anonymous, so a flagged session cannot break
-playback. yt-dlp rewrites rotated cookies back into this file on every use,
+Used ONLY for the personalised YouTube home feed and the YouTube Music home
+(services/music.py, with its personal playlists): search, stream resolution and
+details stay anonymous, so a flagged session cannot break playback. yt-dlp rewrites rotated cookies back into this file on every use,
 which is what keeps the pushed session alive.
 """
 

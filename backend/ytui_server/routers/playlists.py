@@ -57,7 +57,13 @@ async def import_playlist(body: PlaylistImportIn, request: Request) -> PlaylistI
     limit = max(1, min(body.limit, 500))
     url = Video(video_id=source, title="", kind="playlist", platform=body.platform).url
     try:
-        items, source_title = await ytdlp.playlist_videos(url, limit=limit)
+        if body.platform == "youtube":
+            # Personal mixes and liked music need the signed-in session.
+            items, source_title = await request.app.state.music_service.youtube_playlist(
+                source, limit=limit
+            )
+        else:
+            items, source_title = await ytdlp.playlist_videos(url, limit=limit)
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Playlist listing failed: {exc}") from exc
     videos = [item for item in items if item.kind == "video"]

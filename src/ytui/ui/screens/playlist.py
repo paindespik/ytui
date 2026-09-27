@@ -16,6 +16,17 @@ from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
 
+def _signed_in_only(playlist: Video) -> bool:
+    """YouTube Music playlists the server lists with the account.
+
+    Mirrors services/music.is_personal_playlist: liked music (LM) and the
+    personal mixes (RDTMAK\u2026).
+    """
+    return playlist.platform == "youtube" and (
+        playlist.video_id == "LM" or playlist.video_id.startswith("RDTMAK")
+    )
+
+
 class PlaylistScreen(BrowseScreen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
@@ -26,6 +37,7 @@ class PlaylistScreen(BrowseScreen):
     def __init__(self, playlist: Video) -> None:
         super().__init__()
         self.playlist = playlist
+        self._videos: list[Video] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -59,11 +71,16 @@ class PlaylistScreen(BrowseScreen):
         self.query_one("#playlist-loading", LoadingIndicator).display = False
         for v in videos:
             v.playlist_id = self.playlist.video_id
+        self._videos = videos
         video_list = self.query_one("#playlist-list", VideoList)
         video_list.set_videos(videos, self.app.watched)
         video_list.focus()
 
     def action_play_all(self) -> None:
+        if self._videos and _signed_in_only(self.playlist):
+            # mpv would list it anonymously: generic tracks, or nothing at all.
+            self.app.play_listed(self._videos)
+            return
         self.app.play_video(self.playlist)
 
     def action_import_playlist(self) -> None:

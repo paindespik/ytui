@@ -45,6 +45,23 @@ class FeedResult:
         self.warnings = warnings or []
 
 
+class MusicShelf:
+    """One YouTube Music home shelf ("S\u00e9lection rapide", "Mix\u00e9s pour vous"\u2026)."""
+
+    def __init__(self, title: str, items: list[Video], strapline: str = "") -> None:
+        self.title = title
+        self.items = items
+        self.strapline = strapline
+
+
+class MusicHome:
+    """YouTube Music home shelves plus non-fatal warnings (missing/stale cookies)."""
+
+    def __init__(self, shelves: list[MusicShelf], warnings: list[str] | None = None) -> None:
+        self.shelves = shelves
+        self.warnings = warnings or []
+
+
 class FollowedChannel:
     def __init__(self, ref: str, channel_id: str, title: str = "", platform: str = "youtube"):
         self.ref = ref
@@ -127,6 +144,25 @@ class YtuiClient:
         ).json()
         return FeedResult(
             [Video.model_validate(v) for v in data["videos"]], data.get("warnings", [])
+        )
+
+    async def music(self, refresh: bool = False) -> MusicHome:
+        # A cold fetch pages through several InnerTube calls server-side.
+        data = (
+            await self._request(
+                "GET", "/api/music", params={"refresh": refresh}, timeout=SLOW_TIMEOUT
+            )
+        ).json()
+        return MusicHome(
+            [
+                MusicShelf(
+                    shelf.get("title", ""),
+                    [Video.model_validate(v) for v in shelf.get("items", [])],
+                    shelf.get("strapline", ""),
+                )
+                for shelf in data.get("shelves", [])
+            ],
+            data.get("warnings", []),
         )
 
     async def search(

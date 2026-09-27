@@ -1,5 +1,6 @@
-/// Home: "Abonnements" (followed channels feed) and "Suggestions"
-/// (history-based recommendations) tabs, pull-to-refresh, live badge.
+/// Home: "Abonnements" (followed channels feed), "Suggestions"
+/// (recommendations) and "Musique" (YouTube Music home) tabs,
+/// pull-to-refresh, live badge.
 library;
 
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import '../widgets/app_state_views.dart';
 import '../widgets/responsive.dart';
 import '../widgets/screen_focus.dart';
 import '../widgets/video_tile.dart';
+import 'music.dart';
 
 class HomeFeedScreen extends ConsumerWidget {
   const HomeFeedScreen({super.key});
@@ -21,7 +23,7 @@ class HomeFeedScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         appBar: AppBar(
           title: Text.rich(
@@ -49,7 +51,10 @@ class HomeFeedScreen extends ConsumerWidget {
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Actualiser',
                   onPressed: () async {
-                    if (DefaultTabController.of(context).index == 1) {
+                    final tab = DefaultTabController.of(context).index;
+                    if (tab == 2) {
+                      await ref.read(musicProvider.notifier).refresh();
+                    } else if (tab == 1) {
                       await ref.read(suggestionsProvider.notifier).refresh();
                     } else {
                       ref.invalidate(livesProvider);
@@ -83,6 +88,7 @@ class HomeFeedScreen extends ConsumerWidget {
             tabs: [
               Tab(text: 'Abonnements'),
               Tab(text: 'Suggestions'),
+              Tab(text: 'Musique'),
             ],
           ),
         ),
@@ -92,6 +98,7 @@ class HomeFeedScreen extends ConsumerWidget {
             children: [
               _SubscriptionsTab(),
               _SuggestionsTab(),
+              MusicTab(),
             ],
           ),
         ),

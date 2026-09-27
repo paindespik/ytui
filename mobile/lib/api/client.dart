@@ -82,6 +82,13 @@ class YtuiApi {
     return FeedResult.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// YouTube Music home. A cold fetch pages through several InnerTube calls
+  /// server-side; the default 60 s receive timeout covers it.
+  Future<MusicHome> music({bool refresh = false}) async {
+    final r = await _request('GET', '/api/music', query: {'refresh': refresh});
+    return MusicHome.fromJson(r.data as Map<String, dynamic>);
+  }
+
   Future<List<Video>> search(
     String query, {
     int limit = 20,

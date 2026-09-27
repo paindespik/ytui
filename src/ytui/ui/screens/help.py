@@ -44,6 +44,8 @@ HELP_TEXT = """\
   r               Refresh feed
   /               Open search
   h               Watch history
+  S               Suggestions (YouTube home)
+  M               Music (YouTube Music home)
   P               Local playlists
   ,               Settings
 
@@ -52,6 +54,11 @@ HELP_TEXT = """\
   Results include videos, playlists and channels
   /               Focus the search input
   Ctrl+S          Toggle source (YouTube / Odysee)
+
+[b]Music (YouTube Music home, needs the account cookies)[/b]
+  J / K           Next / previous shelf
+  Enter           Play a track, open an album/mix, or open an artist
+  r               Refresh
 
 [b]Playlist view (YouTube)[/b]
   Enter           Play one video

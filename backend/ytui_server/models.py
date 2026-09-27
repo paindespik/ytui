@@ -145,6 +145,20 @@ class FeedResponse(BaseModel):
     warnings: list[str] = []
 
 
+class MusicShelf(BaseModel):
+    """One YouTube Music home shelf ("Sélection rapide", "Mixés pour vous"…)."""
+
+    title: str
+    # Small caption above the title on the site ("EN RAPPORT AVEC", "RADIO").
+    strapline: str = ""
+    items: list[Video]
+
+
+class MusicHomeResponse(BaseModel):
+    shelves: list[MusicShelf]
+    warnings: list[str] = []
+
+
 class SearchResponse(BaseModel):
     items: list[Video]
 

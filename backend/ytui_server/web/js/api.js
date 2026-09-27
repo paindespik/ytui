@@ -61,6 +61,7 @@ export const api = {
   // ─── browse ───
   feed: (refresh = false) => request("GET", "/api/feed", { query: { refresh } }),
   suggestions: (refresh = false) => request("GET", "/api/suggestions", { query: { refresh } }),
+  music: (refresh = false) => request("GET", "/api/music", { query: { refresh } }),
   search: (q, source = "youtube", limit = 20) =>
     request("GET", "/api/search", { query: { q, source, limit } }),
   lives: () => request("GET", "/api/lives"),
