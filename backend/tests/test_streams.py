@@ -1291,3 +1291,31 @@ def test_concurrent_callers_share_the_failure():
     assert len(calls) == 1
     assert errors == ["video unavailable"] * 2
     assert not ytdlp._INFLIGHT
+
+
+def test_youtube_details_share_the_stream_extraction(client):
+    """Watch page: /streams + /videos/{id} = one yt-dlp run, not two."""
+    import yt_dlp
+
+    calls = []
+
+    class CountingYDL(FakeYDL):
+        def extract_info(self, url, download=False):
+            calls.append(url)
+            return super().extract_info(url, download)
+
+    info = _info(
+        [{"url": "https://cdn.example/v.mp4", "vcodec": "avc1", "acodec": "mp4a", "height": 360}],
+        id="vid000000001",
+        description="Chapitres : 1:02 intro",
+        channel_id="UCtest000000000000000000",
+        channel="Chan",
+        upload_date="20260920",
+    )
+    with patch.object(yt_dlp, "YoutubeDL", CountingYDL(info)):
+        assert client.get("/api/videos/vid000000001/streams").status_code == 200
+        details = client.get("/api/videos/vid000000001").json()
+    assert len(calls) == 1
+    assert details["description"] == "Chapitres : 1:02 intro"
+    assert details["upload_date"] == "2026-09-20"
+    assert details["thumbnail_url"] == "https://i.ytimg.com/vi/vid000000001/mqdefault.jpg"
