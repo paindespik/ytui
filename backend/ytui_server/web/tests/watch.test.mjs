@@ -22,8 +22,16 @@ const STREAMS_VOD = {
 };
 
 /// Routes minimales d'une page lecture. `lives` et `chat` varient par test.
-function routes({ lives = [], livesDelay = 0, related = [], streams = STREAMS_VOD, chat } = {}) {
+function routes({
+  lives = [],
+  livesDelay = 0,
+  related = [],
+  streams = STREAMS_VOD,
+  chat,
+  details = null,
+} = {}) {
   return [
+    ...(details ? [{ match: /\/api\/videos\/[^/?]+\?/, method: "GET", json: details }] : []),
     { match: "/api/lives", json: lives, delay: livesDelay },
     { match: "/chat", json: chat || { messages: [], cursor: 1, active: true } },
     { match: "/related", json: { items: related } },
@@ -62,6 +70,10 @@ describe("vue lecture — cycle de vie et lecture auto", () => {
     queue.items = [];
     queue.index = 0;
     watch = await import("../views/watch.js");
+    // Enchaînement immédiat par défaut ; les tests du compte à rebours le
+    // règlent eux-mêmes.
+    watch.upNextConfig.seconds = 0;
+    globalThis.localStorage.removeItem("ytui.cinema");
     // Le harness partage #view entre les tests (installDom est idempotent) :
     // sans ce vidage, mediaEl() renverrait le <video> d'un montage précédent.
     document.getElementById("view").replaceChildren();
@@ -234,6 +246,130 @@ describe("vue lecture — cycle de vie et lecture auto", () => {
     document.dispatchEvent(new Event("click"));
     assert.equal(panel.hidden, false, "l'écouteur document a été retiré au démontage");
   });
+
+  // ─── Lot 3 : « À suivre », compte à rebours, description, cinéma ───
+
+  test("clic sur « À suivre » : lecture immédiate, le reste de la file reste à venir", async () => {
+    const zzz = makeVideo("zzz");
+    mockApi(routes({ related: [zzz] }));
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+    const row = findRowFor(view, "zzz");
+    row.dispatchEvent(new Event("click"));
+    assert.deepEqual(
+      queue.items.map((v) => v.video_id),
+      ["abc", "zzz", "def"],
+    );
+    assert.equal(queue.index, 1);
+  });
+
+  test("bouton + de « À suivre » : ajout en fin de file, lecture inchangée", async () => {
+    mockApi(routes({ related: [makeVideo("zzz")] }));
+    queue.play([makeVideo("abc")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+    const add = findByAttr(findRowFor(view, "zzz"), "title", "Ajouter à la file d'attente");
+    add.dispatchEvent(Object.assign(new Event("click"), { stopPropagation() {} }));
+    assert.deepEqual(queue.items.map((v) => v.video_id), ["abc", "zzz"]);
+    assert.equal(queue.index, 0);
+  });
+
+  test("fin de vidéo : « Suivant dans N s » puis enchaînement", async () => {
+    watch.upNextConfig.seconds = 0.05;
+    mockApi(routes());
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+    mediaEl(view).emitEnded();
+    await flush(2);
+    assert.ok(textOf(view).includes("Suivant dans"), "écran d'attente affiché");
+    assert.equal(queue.index, 0, "pas encore enchaîné");
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(queue.index, 1);
+  });
+
+  test("« Annuler » arrête l'enchaînement", async () => {
+    watch.upNextConfig.seconds = 0.05;
+    mockApi(routes());
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+    mediaEl(view).emitEnded();
+    await flush(2);
+    findText(view, "Annuler").dispatchEvent(new Event("click"));
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(queue.index, 0);
+    assert.ok(!textOf(view).includes("Suivant dans"));
+  });
+
+  test("démontage pendant le compte à rebours : aucun enchaînement", async () => {
+    watch.upNextConfig.seconds = 0.05;
+    mockApi(routes());
+    queue.play([makeVideo("abc"), makeVideo("def")], 0);
+    const view = document.getElementById("view");
+    const cleanup = await mount(view);
+    await flush(4);
+    mediaEl(view).emitEnded();
+    await flush(2);
+    cleanup();
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(queue.index, 0);
+  });
+
+  test("description : un horodatage cliquable déplace la lecture", async () => {
+    mockApi(
+      routes({
+        details: {
+          video_id: "abc",
+          title: "Une vidéo",
+          channel_id: "UCchan",
+          channel_title: "Chaîne",
+          description: "Sommaire\n1:05 le vif du sujet\nhttps://example.org/source",
+          upload_date: "2026-09-20",
+          like_count: 1200,
+        },
+      }),
+    );
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(8);
+    const el = mediaEl(view);
+    el.emitLoadedMetadata({ duration: 600 });
+    const ts = findByAttr(view, "title", "Aller à 1:05");
+    assert.ok(ts, "horodatage rendu en lien");
+    ts.dispatchEvent(Object.assign(new Event("click"), { preventDefault() {}, stopPropagation() {} }));
+    assert.equal(el.currentTime, 65);
+    assert.ok(findByAttr(view, "href", "https://example.org/source"), "lien rendu");
+  });
+
+  test("lien nu : la chaîne vient des détails (lien + bouton Suivre)", async () => {
+    mockApi(
+      routes({
+        details: { video_id: "abc", channel_id: "UCchan", channel_title: "Chaîne", description: "" },
+      }),
+    );
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(8);
+    assert.equal(queue.current.channel_id, "UCchan");
+    assert.ok(findByAttr(view, "href", "#/channel/youtube/UCchan?title=Cha%C3%AEne"));
+  });
+
+  test("mode cinéma : bascule persistée", async () => {
+    mockApi(routes());
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+    const btn = findByAttr(view, "title", "Mode cinéma (t)");
+    btn.dispatchEvent(new Event("click"));
+    assert.equal(globalThis.localStorage.getItem("ytui.cinema"), "true");
+    assert.equal(btn.getAttribute("aria-pressed"), "true");
+  });
 });
 
 /// Premier noeud dont le texte propre vaut `text`.
@@ -253,6 +389,17 @@ function findByAttr(root, name, value) {
     if (typeof c !== "object") continue;
     if (c.getAttribute && c.getAttribute(name) === value) return c;
     const hit = findByAttr(c, name, value);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/// Ligne du panneau latéral portant la vidéo `id`.
+function findRowFor(root, id) {
+  for (const c of root.children || []) {
+    if (typeof c !== "object") continue;
+    if (c._video && c._video.video_id === id) return c;
+    const hit = findRowFor(c, id);
     if (hit) return hit;
   }
   return null;

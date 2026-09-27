@@ -7,7 +7,9 @@ import {
   toast,
   errorToast,
   fmtCount,
+  fmtDate,
   fmtDuration,
+  fmtRelative,
   watchPath,
   channelPath,
   detailPath,
@@ -16,6 +18,8 @@ import {
   iconBtn,
   setBtnLabel,
   showMenu,
+  descriptionNodes,
+  followButton,
 } from "../js/ui.js";
 import { icon } from "../js/icons.js";
 import { queue } from "../js/queue.js";
@@ -28,6 +32,10 @@ import { createComments } from "../js/comments.js";
 // Sleep-timer presets (minutes), mirroring the mobile player menu.
 const SLEEP_PRESETS = [15, 30, 45, 60, 90];
 const CHAT_POLL_MS = 3000;
+
+// Compte à rebours avant la vidéo suivante (lecture auto). Mutable pour les
+// tests : 0 enchaîne immédiatement, sans écran d'attente.
+export const upNextConfig = { seconds: 5 };
 
 export async function render(view, { params }) {
   const { platform, id } = params;
@@ -80,16 +88,99 @@ export async function render(view, { params }) {
 
   const titleEl = el("h1", { text: video.title || "…" });
   const channelLink = el("a", { class: "channel", text: video.channel_title || "" });
-  if (video.channel_id) {
-    channelLink.href = "#" + channelPath(video.channel_id, platform, video.channel_title);
-  }
   const metaLine = el("span", { class: "sub", text: isLive ? "EN DIRECT" : "" });
-  const channelAvatar = el("span", {
-    class: "avatar small",
-    "aria-hidden": "true",
-    text: (video.channel_title || "").replace(/^[@\s]+/, "").charAt(0).toUpperCase(),
+  const channelAvatar = el("span", { class: "avatar small", "aria-hidden": "true" });
+  function syncChannel() {
+    channelAvatar.textContent = (video.channel_title || "")
+      .replace(/^[@\s]+/, "")
+      .charAt(0)
+      .toUpperCase();
+    channelAvatar.hidden = !video.channel_title;
+    channelLink.textContent = video.channel_title || "";
+    if (video.channel_id) {
+      channelLink.setAttribute(
+        "href",
+        "#" + channelPath(video.channel_id, platform, video.channel_title),
+      );
+    }
+  }
+  syncChannel();
+  const followBtn = followButton(platform, video.channel_id, { compact: true });
+
+  // ─── Description (repliée, horodatages cliquables) ───
+  //
+  // /api/videos/{id} partage l'extraction de /streams côté serveur (YouTube) :
+  // la demander en même temps que la lecture ne coûte pas un second yt-dlp.
+  const descMeta = el("div", { class: "desc-meta" });
+  const descText = el("div", { class: "desc-text" });
+  const descToggle = el("button", {
+    class: "desc-toggle",
+    type: "button",
+    text: "Afficher plus",
+    onclick: (e) => {
+      e.stopPropagation();
+      setDescOpen(!descBox.classList.contains("open"));
+    },
   });
-  channelAvatar.hidden = !video.channel_title;
+  const descBox = el(
+    "div",
+    {
+      class: "desc-box",
+      // Clic n'importe où sur la boîte repliée : on déplie (comme YouTube).
+      onclick: () => {
+        if (!descBox.classList.contains("open")) setDescOpen(true);
+      },
+    },
+    descMeta,
+    descText,
+    descToggle,
+  );
+  descBox.hidden = true;
+
+  function setDescOpen(open) {
+    descBox.classList.toggle("open", open);
+    descToggle.textContent = open ? "Afficher moins" : "Afficher plus";
+  }
+
+  async function loadDetails() {
+    // Les ids composites (direct Twitch/TikTok) n'ont pas de page de détails.
+    if (isLiveId(platform, id) || platform === "tiktok") return;
+    let d;
+    try {
+      d = await api.videoDetails(id, platform);
+    } catch {
+      return; // non bloquant : la page reste sans description
+    }
+    if (disposed || !d) return;
+    // Lien nu : la chaîne n'était pas connue avant les détails.
+    if (!video.channel_id && d.channel_id) video.channel_id = d.channel_id;
+    if (!video.channel_title && d.channel_title) video.channel_title = d.channel_title;
+    syncChannel();
+    followBtn.setChannel(video.channel_id);
+    const meta = [
+      d.upload_date ? fmtRelative(d.upload_date) : "",
+      d.like_count != null ? `${fmtCount(d.like_count)} j'aime` : "",
+    ].filter(Boolean);
+    descMeta.textContent = meta.join(" · ");
+    if (d.upload_date) descMeta.title = fmtDate(d.upload_date);
+    const text = (d.description || "").trim();
+    if (!text && !meta.length) return;
+    descText.replaceChildren(
+      ...descriptionNodes(text, {
+        onSeek: isLive
+          ? null
+          : (t) => {
+              player.seek(t);
+              playerBox.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            },
+      }),
+    );
+    // Texte court : rien à déplier.
+    const long = text.length > 220 || text.split("\n").length > 3;
+    descToggle.hidden = !long;
+    if (!long) descBox.classList.add("open");
+    descBox.hidden = false;
+  }
 
   // ─── Réglages de lecture (panneau « Lecture ») ───
   //
@@ -174,7 +265,10 @@ export async function render(view, { params }) {
   );
   settingsPanel.hidden = true;
 
+  // compact-1 / compact-2 : libellés masqués quand la colonne rétrécit
+  // (container queries, app.css) — l'icône et le title restent.
   const settingsBtn = iconBtn("settings-2", "Lecture", {
+    class: "compact-2",
     title: "Réglages de lecture",
     "aria-haspopup": "dialog",
     "aria-expanded": "false",
@@ -335,10 +429,12 @@ export async function render(view, { params }) {
   });
 
   const shareBtn = iconBtn("share-2", "Partager", {
+    class: "compact-1",
     title: "Partager le lien public",
     onclick: () => shareVideo(),
   });
   const plBtn = iconBtn("list-plus", "Playlist", {
+    class: "compact-1",
     title: "Ajouter à une playlist",
     onclick: () => addToPlaylistModal(video),
   });
@@ -442,6 +538,8 @@ export async function render(view, { params }) {
   const commentsBtn =
     platform === "youtube" || platform === "odysee"
       ? iconBtn("message-square", "Commentaires", {
+          class: "compact-2",
+          title: "Commentaires",
           "aria-pressed": "false",
           onclick: () => toggleComments(),
         })
@@ -472,6 +570,8 @@ export async function render(view, { params }) {
   const likeBtn =
     platform === "youtube"
       ? iconBtn("thumbs-up", "J'aime", {
+          class: "compact-2",
+          title: "J'aime",
           "aria-pressed": "false",
           onclick: async () => {
             likeBtn.disabled = true;
@@ -510,18 +610,45 @@ export async function render(view, { params }) {
       .catch(() => {});
   }
 
+  // ─── Mode cinéma (t) ───
+
+  const cinemaBtn = iconBtn("rectangle-horizontal", null, {
+    class: "cinema-btn",
+    title: "Mode cinéma (t)",
+    "aria-pressed": prefs.cinema ? "true" : "false",
+    onclick: () => toggleCinema(),
+  });
+  cinemaBtn.classList.toggle("on", prefs.cinema);
+
+  function toggleCinema() {
+    prefs.cinema = !prefs.cinema;
+    watchRoot.classList.toggle("cinema", prefs.cinema);
+    cinemaBtn.classList.toggle("on", prefs.cinema);
+    cinemaBtn.setAttribute("aria-pressed", prefs.cinema ? "true" : "false");
+  }
+
   watchRoot = el(
     "div",
-    { class: "watch" },
+    { class: prefs.cinema ? "watch cinema" : "watch" },
     el(
       "div",
-      {},
+      // display: contents — lecteur et infos sont placés par la grille de
+      // .watch (le mode cinéma met le lecteur seul sur toute la largeur).
+      { class: "watch-main" },
       playerBox,
       el(
         "div",
         { class: "watch-info" },
         titleEl,
-        el("div", { class: "channel-line" }, channelAvatar, channelLink, metaLine),
+        el(
+          "div",
+          { class: "channel-line" },
+          channelAvatar,
+          channelLink,
+          followBtn,
+          el("span", { class: "grow" }),
+          metaLine,
+        ),
         el(
           "div",
           { class: "watch-actions" },
@@ -537,10 +664,12 @@ export async function render(view, { params }) {
             { class: "actions-end" },
             loopChip,
             sleepChip,
+            cinemaBtn,
             el("div", { class: "menu-anchor" }, settingsBtn, settingsPanel),
             moreBtn,
           ),
         ),
+        descBox,
       ),
     ),
     el(
@@ -676,12 +805,16 @@ export async function render(view, { params }) {
   gainSel.addEventListener("change", () => player.setGain(Number(gainSel.value)));
   qualitySel.onchange = (e) => player.setMaxHeight(Number(e.target.value));
   subSel.addEventListener("change", () => player.setSubtitle(Number(subSel.value)));
-  videoEl.addEventListener("play", clearOverlay);
+  // Relancer la vidéo terminée (bouton natif) annule le compte à rebours.
+  videoEl.addEventListener("play", () => {
+    cancelUpNext();
+    clearOverlay();
+  });
   videoEl.addEventListener("playing", clearOverlay);
 
   // ─── File d'attente & « À suivre » ───
 
-  function sideRow(v, { onClick, onRemove } = {}) {
+  function sideRow(v, { onClick, onRemove, onAdd } = {}) {
     const row = el(
       "div",
       {
@@ -705,18 +838,30 @@ export async function render(view, { params }) {
         el("div", { class: "title clamp", title: v.title, text: v.title }),
         v.channel_title ? el("div", { class: "sub", text: v.channel_title }) : null,
       ),
-      onRemove
+      onRemove || onAdd
         ? el(
             "div",
             { class: "actions" },
-            iconBtn("x", null, {
-              class: "small",
-              title: "Retirer de la file",
-              onclick: (e) => {
-                e.stopPropagation();
-                onRemove();
-              },
-            }),
+            onAdd
+              ? iconBtn("list-plus", null, {
+                  class: "small",
+                  title: "Ajouter à la file d'attente",
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    onAdd();
+                  },
+                })
+              : null,
+            onRemove
+              ? iconBtn("x", null, {
+                  class: "small",
+                  title: "Retirer de la file",
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    onRemove();
+                  },
+                })
+              : null,
           )
         : null,
     );
@@ -756,7 +901,9 @@ export async function render(view, { params }) {
       relatedPanel.replaceChildren(
         ...related.map((v) =>
           sideRow(v, {
-            onClick: () => {
+            // Clic : lecture immédiate, le reste de la file reste à venir.
+            onClick: () => queue.playNow(v),
+            onAdd: () => {
               queue.enqueue(v);
               toast("Ajouté à la file d'attente");
             },
@@ -873,7 +1020,9 @@ export async function render(view, { params }) {
     }
     if (!prefs.autoplay) return; // lecture auto désactivée : la lecture s'arrête
     if (queue.hasNext) {
-      queue.next();
+      upNext(queue.items[queue.index + 1], () => {
+        if (queue.hasNext) queue.next();
+      });
       return;
     }
     let first = related.length ? related[0] : null;
@@ -885,11 +1034,76 @@ export async function render(view, { params }) {
         first = null;
       }
     }
-    if (disposed || isLive) return;
-    if (first) {
-      queue.enqueue(first);
-      queue.next();
+    if (disposed || isLive || !first) return;
+    upNext(first, () => queue.playNow(first));
+  }
+
+  // ─── « Suivant dans N s » ───
+
+  let upNextTimer = null;
+  let upNextTick = null;
+
+  function cancelUpNext() {
+    clearTimeout(upNextTimer);
+    clearInterval(upNextTick);
+    const was = upNextTimer !== null;
+    upNextTimer = null;
+    upNextTick = null;
+    return was;
+  }
+
+  function upNext(target, go) {
+    cancelUpNext();
+    const seconds = upNextConfig.seconds;
+    if (!(seconds > 0)) {
+      go();
+      return;
     }
+    let left = Math.ceil(seconds);
+    const count = el("b", { text: String(left) });
+    const run = () => {
+      if (disposed) return;
+      cancelUpNext();
+      clearOverlay();
+      go();
+    };
+    const bar = el("div", { class: "upnext-bar" });
+    bar.style.animationDuration = `${seconds}s`;
+    overlayHost.replaceChildren(
+      el(
+        "div",
+        { class: "player-overlay upnext" },
+        el("div", { class: "upnext-label" }, "Suivant dans ", count, " s"),
+        el(
+          "div",
+          { class: "upnext-card" },
+          target.thumbnail_url
+            ? el("img", { src: target.thumbnail_url, alt: "", class: "upnext-thumb" })
+            : null,
+          el(
+            "div",
+            { class: "upnext-txt" },
+            el("div", { class: "upnext-title", text: target.title || "Vidéo suivante" }),
+            target.channel_title ? el("div", { class: "sub", text: target.channel_title }) : null,
+          ),
+        ),
+        el("div", { class: "upnext-track" }, bar),
+        el(
+          "div",
+          { class: "upnext-actions" },
+          el("button", { class: "btn", type: "button", text: "Annuler", onclick: () => {
+            cancelUpNext();
+            clearOverlay();
+          } }),
+          el("button", { class: "btn primary", type: "button", text: "Lire maintenant", onclick: run }),
+        ),
+      ),
+    );
+    upNextTick = setInterval(() => {
+      left = Math.max(0, left - 1);
+      count.textContent = String(left);
+    }, 1000);
+    upNextTimer = setTimeout(run, seconds * 1000);
   }
 
   let queueIndex = queue.index;
@@ -922,6 +1136,7 @@ export async function render(view, { params }) {
   };
   playerActions.toggleAutoplay = toggleAutoplay;
   playerActions.toggleLoop = toggleLoop;
+  playerActions.toggleCinema = toggleCinema;
 
   renderQueue();
   syncNav();
@@ -931,9 +1146,11 @@ export async function render(view, { params }) {
   loadRelated();
   initChat();
   startPlayback();
+  loadDetails();
 
   return () => {
     disposed = true;
+    cancelUpNext();
     document.removeEventListener("click", closePanel);
     stopChat();
     clearSleep();

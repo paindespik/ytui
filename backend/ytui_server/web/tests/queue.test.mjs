@@ -536,3 +536,29 @@ test("smoke : player.js s'importe et s'instancie sous le harness", async () => {
   assert.equal(player.rate, 1);
   player.destroy();
 });
+
+
+test("playNow() insère juste après la vidéo courante et la lance", () => {
+  queue.play([makeVideo("a"), makeVideo("b"), makeVideo("c")], 0);
+  queue.playNow(makeVideo("x"));
+  assert.deepEqual(queue.items.map((it) => it.video_id), ["a", "x", "b", "c"]);
+  assert.equal(queue.index, 1);
+  assert.equal(queue.current.video_id, "x");
+});
+
+test("playNow() sur une file vide : la vidéo devient la file", () => {
+  queue.clear();
+  queue.playNow(makeVideo("x"));
+  assert.deepEqual(queue.items.map((it) => it.video_id), ["x"]);
+  assert.equal(queue.index, 0);
+});
+
+test("playNow() émet un seul 'change'", () => {
+  queue.play([makeVideo("a")], 0);
+  let n = 0;
+  const h = () => (n += 1);
+  queue.addEventListener("change", h);
+  queue.playNow(makeVideo("x"));
+  queue.removeEventListener("change", h);
+  assert.equal(n, 1);
+});

@@ -20,6 +20,7 @@ export async function render(view) {
     if (!silent) body.replaceChildren(skeletonGrid(4));
     try {
       const lives = await api.lives();
+      window.dispatchEvent(new CustomEvent("ytui:lives", { detail: lives.length }));
       body.replaceChildren(
         lives.length
           ? el("div", { class: "grid" }, lives.map((l) => videoCard(l.video, { live: true })))

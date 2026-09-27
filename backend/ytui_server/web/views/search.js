@@ -1,9 +1,11 @@
-// Recherche YouTube / Odysee. L'état (q, source) vit dans le hash — partageable.
+// Recherche YouTube / Odysee / CrowdBunker. Le terme se saisit dans la barre
+// du haut (toujours visible) ; cette page choisit la source et affiche les
+// résultats. L'état (q, source) vit dans le hash — partageable.
 
 import { api } from "../js/api.js";
 import { navigate } from "../js/router.js";
 import { el, emptyState, errorToast, skeletonGrid, videoGrid } from "../js/ui.js";
-import { icon } from "../js/icons.js";
+import { prefs } from "../js/state.js";
 
 const SOURCES = [
   ["youtube", "YouTube"],
@@ -13,69 +15,44 @@ const SOURCES = [
 
 export async function render(view, { query }) {
   const q = (query.get("q") || "").trim();
-  let source = query.get("source") || "youtube";
+  let source = query.get("source") || prefs.searchSource;
   if (!SOURCES.some(([s]) => s === source)) source = "youtube";
+  prefs.searchSource = source; // la barre du haut reprend cette source
 
-  const input = el("input", {
-    class: "input",
-    id: "search-input",
-    type: "search",
-    placeholder: "Rechercher…",
-    "aria-label": "Rechercher",
-    value: q,
-  });
   const segButtons = SOURCES.map(([value, label]) =>
     el("button", {
       type: "button",
       class: value === source ? "active" : "",
+      "aria-pressed": value === source ? "true" : "false",
       dataset: { source: value },
       text: label,
       onclick: () => {
         if (value === source) return;
-        source = value;
-        // Comparaison sur la valeur (le libellé n'est pas une clé), et hash mis
-        // à jour même sans terme : la source choisie reste partageable et
-        // survit à un rechargement.
-        segButtons.forEach((b) => b.classList.toggle("active", b.dataset.source === source));
-        const term = input.value.trim();
-        navigate(`/search?source=${source}` + (term ? `&q=${encodeURIComponent(term)}` : ""));
+        // Hash mis à jour même sans terme : la source choisie reste
+        // partageable et survit à un rechargement.
+        navigate(`/search?source=${value}` + (q ? `&q=${encodeURIComponent(q)}` : ""));
       },
     }),
   );
   const results = el("div");
 
-  function submit() {
-    const term = input.value.trim();
-    if (!term) return;
-    const target = `/search?q=${encodeURIComponent(term)}&source=${source}`;
-    if (location.hash === "#" + target) {
-      runSearch(results, term, source); // même requête : relancer sans navigation
-    } else {
-      navigate(target);
-    }
-  }
-
-  const form = el(
-    "form",
-    {
-      class: "search-form",
-      onsubmit: (e) => {
-        e.preventDefault();
-        submit();
-      },
-    },
-    input,
-    el("div", { class: "seg" }, segButtons),
-    el("button", { class: "btn primary", type: "submit" }, icon("search"), el("span", { text: "Rechercher" })),
+  view.append(
+    el(
+      "div",
+      { class: "page-head" },
+      el("h1", { text: q ? `Résultats pour « ${q} »` : "Recherche" }),
+      el("div", { class: "seg", role: "group", "aria-label": "Source" }, segButtons),
+    ),
+    results,
   );
-
-  view.append(el("div", { class: "page-head" }, el("h1", { text: "Recherche" })), form, results);
 
   if (q) {
     await runSearch(results, q, source);
   } else {
-    results.append(emptyState("Recherchez des vidéos, chaînes ou playlists.", "search"));
-    input.focus();
+    results.append(
+      emptyState("Recherchez des vidéos, chaînes ou playlists dans la barre du haut.", "search"),
+    );
+    document.getElementById("search-input")?.focus();
   }
 }
 

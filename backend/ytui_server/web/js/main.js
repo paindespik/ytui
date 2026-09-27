@@ -2,7 +2,7 @@
 
 import { route, dispatch, navigate, parseHash } from "./router.js";
 import { api } from "./api.js";
-import { watched } from "./state.js";
+import { watched, prefs } from "./state.js";
 import { initShortcuts, showHelp } from "./shortcuts.js";
 import { icon } from "./icons.js";
 
@@ -40,14 +40,62 @@ const view = document.getElementById("view");
 const appRoot = document.getElementById("app");
 
 // Icônes de la navigation (déclarées en data-icon dans index.html).
-document.querySelectorAll("#sidebar [data-icon]").forEach((node) => {
+document.querySelectorAll("#app [data-icon]").forEach((node) => {
   node.prepend(icon(node.dataset.icon, { size: 20 }));
 });
 
+// ─── Barre de recherche du haut (toujours visible) ───
+
+const topSearch = document.getElementById("topsearch");
+const topInput = document.getElementById("search-input");
+
+topSearch.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const term = topInput.value.trim();
+  if (!term) {
+    topInput.focus();
+    return;
+  }
+  // Sur la page Recherche, la source affichée ; ailleurs, la dernière choisie.
+  const { path, query } = parseHash();
+  const source = (path === "/search" && query.get("source")) || prefs.searchSource;
+  const target = `/search?q=${encodeURIComponent(term)}&source=${source}`;
+  topInput.blur();
+  if (location.hash === "#" + target) render(); // même requête : relancer
+  else navigate(target);
+});
+
+// ─── Compteur de lives dans la navigation ───
+
+const liveCount = document.getElementById("live-count");
+const LIVE_POLL_MS = 2 * 60 * 1000; // /api/lives est servi de mémoire : léger
+
+function setLiveCount(n) {
+  liveCount.textContent = n > 99 ? "99+" : String(n);
+  liveCount.hidden = !n;
+  liveCount.title = n ? `${n} en direct` : "";
+}
+// Accueil et Lives le publient quand ils ont déjà la liste en main.
+window.addEventListener("ytui:lives", (e) => setLiveCount(Number(e.detail) || 0));
+
+async function pollLives() {
+  if (document.hidden || parseHash().path === "/login") return;
+  try {
+    setLiveCount((await api.lives()).length);
+  } catch {
+    /* non bloquant : le compteur garde sa dernière valeur */
+  }
+}
+setInterval(pollLives, LIVE_POLL_MS);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) pollLives();
+});
+
 function highlightNav() {
-  const { path } = parseHash();
+  const { path, query } = parseHash();
   // Hors session, la navigation ne mène qu'à des 401 : la masquer.
   appRoot.classList.toggle("no-nav", path === "/login");
+  if (path === "/search") topInput.value = query.get("q") || "";
   document.querySelectorAll("#sidebar a[data-nav]").forEach((a) => {
     const target = a.dataset.nav;
     a.classList.toggle("active", target === "/" ? path === "/" : path.startsWith(target));
@@ -70,7 +118,10 @@ document.getElementById("nav-help").addEventListener("click", showHelp);
     /* server unreachable: the login page will surface the error */
   }
   appRoot.hidden = false;
-  if (authenticated) watched.load(); // fire and forget
+  if (authenticated) {
+    watched.load(); // fire and forget
+    pollLives();
+  }
   initShortcuts();
   const { path } = parseHash();
   // navigate() change le hash, donc hashchange rendra la bonne vue : rendre ici

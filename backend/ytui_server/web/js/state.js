@@ -44,7 +44,36 @@ export const prefs = {
   // the next queue item (or a suggestion). Same default as the mobile app.
   get autoplay() { return getBool("autoplay", true); },
   set autoplay(v) { set("autoplay", v); },
+  // Mode cinéma : lecteur sur toute la largeur, panneau latéral dessous.
+  get cinema() { return getBool("cinema", false); },
+  set cinema(v) { set("cinema", v); },
+  // Dernière source de recherche choisie (la barre du haut la réutilise).
+  get searchSource() { return getStr("search_source", "youtube"); },
+  set searchSource(v) { set("search_source", v); },
 };
+
+// « Nouveau » sur l'accueil : ce qui est sorti depuis la visite précédente.
+// La référence est figée pour toute la session de l'onglet (sessionStorage) :
+// revenir sur l'accueil après une vidéo ne fait pas disparaître les badges des
+// autres. Première visite : aucune référence, donc aucun badge (sinon tout le
+// flux serait « nouveau »).
+const SEEN_KEY = P + "feed_seen_at";
+export function feedNewSince(now = Date.now()) {
+  let since = null;
+  try {
+    const session = sessionStorage.getItem(SEEN_KEY);
+    if (session !== null) {
+      since = Number(session) || null;
+    } else {
+      since = Number(localStorage.getItem(SEEN_KEY)) || null;
+      sessionStorage.setItem(SEEN_KEY, String(since || 0));
+    }
+    localStorage.setItem(SEEN_KEY, String(now));
+  } catch {
+    /* stockage indisponible : pas de badge */
+  }
+  return since;
+}
 
 // Clé qualifiée '{platform}:{video_id}' : le même id nu peut exister sur
 // deux plateformes (uid CrowdBunker au format id YouTube).

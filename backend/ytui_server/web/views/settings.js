@@ -2,7 +2,7 @@
 
 import { api, ApiError } from "../js/api.js";
 import { navigate } from "../js/router.js";
-import { prefs, QUALITIES } from "../js/state.js";
+import { prefs, QUALITIES, GAINS } from "../js/state.js";
 import {
   el,
   channelPath,
@@ -16,6 +16,13 @@ import {
   PLATFORM_LABELS,
 } from "../js/ui.js";
 import { icon } from "../js/icons.js";
+
+// `commande` → <code> (les aides citent des commandes du client bureau).
+function withCode(text) {
+  return String(text)
+    .split(/`([^`]+)`/g)
+    .map((part, i) => (i % 2 ? el("code", { text: part }) : part));
+}
 
 // Initiale d'une chaîne pour sa pastille (pas d'avatar distant à charger).
 function initial(name) {
@@ -166,13 +173,33 @@ export async function render(view) {
   // ─── Lecture ───
   view.append(el("div", { class: "section-title", text: "Lecture" }));
 
-  const sbToggle = el("input", {
-    type: "checkbox",
-    checked: prefs.sponsorblock,
-    onchange: (e) => {
-      prefs.sponsorblock = e.target.checked;
+  // Interrupteur lié à une préférence booléenne.
+  const toggle = (key) =>
+    el("input", {
+      type: "checkbox",
+      class: "switch",
+      checked: prefs[key],
+      onchange: (e) => {
+        prefs[key] = e.target.checked;
+      },
+    });
+  const sbToggle = toggle("sponsorblock");
+  const gainSelect = el(
+    "select",
+    {
+      class: "input",
+      onchange: (e) => {
+        prefs.gain = Number(e.target.value);
+      },
     },
-  });
+    GAINS.map((g) =>
+      el("option", {
+        value: g,
+        selected: g === prefs.gain,
+        text: g === 1 ? "Aucune" : `×${g.toLocaleString("fr-FR")}`,
+      }),
+    ),
+  );
   const qualitySelect = el(
     "select",
     {
@@ -217,8 +244,100 @@ export async function render(view) {
         el("span", { text: "Langues des sous-titres" }),
         langsInput,
       ),
+      el(
+        "label",
+        { class: "pref-row" },
+        el("span", { text: "Lecture auto (enchaîner la vidéo suivante)" }),
+        toggle("autoplay"),
+      ),
+      el(
+        "label",
+        { class: "pref-row" },
+        el("span", { text: "Amplification audio (au-delà de 100 %)" }),
+        gainSelect,
+      ),
+      el(
+        "label",
+        { class: "pref-row" },
+        el("span", { text: "Mode cinéma par défaut" }),
+        toggle("cinema"),
+      ),
     ),
   );
+
+  // ─── Compte YouTube (poussé depuis le client bureau) ───
+  view.append(el("div", { class: "section-title", text: "Compte YouTube" }));
+  const accountBox = el("div", { class: "pref-rows" }, skeletonRows(2));
+  view.append(accountBox);
+
+  const statusRow = (iconName, label, ok, okText, koText, hint, action = null) =>
+    el(
+      "div",
+      { class: "pref-row account-row" },
+      icon(iconName),
+      el(
+        "div",
+        { class: "txt" },
+        el("div", { text: label }),
+        el("div", { class: "field-help" }, withCode(hint)),
+      ),
+      el("span", { class: ok ? "chip status ok" : "chip status", text: ok ? okText : koText }),
+      action,
+    );
+
+  async function loadAccount() {
+    let st;
+    try {
+      st = await api.youtubeAuthStatus();
+    } catch {
+      accountBox.replaceChildren(el("div", { class: "sub", text: "État du compte indisponible" }));
+      return;
+    }
+    const dropCookies = st.cookies
+      ? iconBtn("trash-2", null, {
+          class: "danger small",
+          title: "Supprimer les cookies du serveur",
+          onclick: async () => {
+            const ok = await confirmModal(
+              "Supprimer les cookies YouTube du serveur ? Les suggestions et la musique " +
+                "redeviendront anonymes jusqu'au prochain « ytui auth cookies ».",
+            );
+            if (!ok) return;
+            try {
+              await api.deleteYoutubeCookies();
+              toast("Cookies supprimés");
+            } catch (err) {
+              errorToast(err);
+            }
+            loadAccount();
+          },
+        })
+      : null;
+    accountBox.replaceChildren(
+      statusRow(
+        "key-round",
+        "Jeton OAuth",
+        st.authenticated,
+        "Connecté",
+        "Absent",
+        st.authenticated
+          ? "J'aime et commentaires actifs."
+          : "Pour aimer et commenter : `ytui auth push` depuis le client bureau.",
+      ),
+      statusRow(
+        "cookie",
+        "Cookies du compte",
+        st.cookies,
+        "Présents",
+        "Absents",
+        st.cookies
+          ? "Accueil personnalisé (Suggestions, Musique)."
+          : "Pour des suggestions personnalisées : `ytui auth cookies`.",
+        dropCookies,
+      ),
+    );
+  }
+  loadAccount();
 
   // ─── Serveur ───
   view.append(el("div", { class: "section-title", text: "Serveur" }));

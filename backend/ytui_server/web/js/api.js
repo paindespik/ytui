@@ -155,6 +155,10 @@ export const api = {
   removePlaylistItem: (playlistId, position) =>
     request("DELETE", `/api/playlists/${playlistId}/items/${position}`),
 
+  // ─── YouTube account (pushed from the desktop client) ───
+  youtubeAuthStatus: () => request("GET", "/api/auth/youtube/status"),
+  deleteYoutubeCookies: () => request("DELETE", "/api/auth/youtube/cookies"),
+
   // ─── misc ───
   status: () => request("GET", "/api/status"),
   proxyUrl: (url) => "/api/proxy?url=" + encodeURIComponent(url),

@@ -841,11 +841,20 @@ export class Player {
     }
   }
 
+  // Déplacement volontaire (clavier, horodatage de la description) : la
+  // position choisie fait foi, plus aucun point de reprise à protéger.
+  seek(t) {
+    if (this.live || !Number.isFinite(t)) return;
+    this._resumeSettled = true;
+    this._resumeTarget = 0;
+    this.el.currentTime = Math.max(0, t);
+    if (this.el.paused) this._play();
+  }
+
   _registerShortcuts() {
     playerActions.toggle = () => (this.el.paused ? this._play() : this.el.pause());
     playerActions.seekBy = (d) => {
       if (this.live) return;
-      // Déplacement volontaire : la position choisie fait foi.
       this._resumeSettled = true;
       this._resumeTarget = 0;
       this.el.currentTime = Math.max(0, this.el.currentTime + d);

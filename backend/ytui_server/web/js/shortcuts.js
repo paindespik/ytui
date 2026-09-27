@@ -68,6 +68,7 @@ export function showHelp() {
     ["n / p", "Vidéo suivante / précédente de la file"],
     ["a", "Lecture auto (marche / arrêt)"],
     ["l", "Boucle sur la vidéo courante"],
+    ["t", "Mode cinéma"],
     ["Échap", "Fermer / retour"],
     ["?", "Cette aide"],
   ];
@@ -99,16 +100,16 @@ export function initShortcuts() {
     switch (e.key) {
       case "/": {
         e.preventDefault();
-        // Pages carrying their own search field (search, chaîne) focus it in
-        // place instead of jumping to the global search.
-        const input = document.getElementById("search-input");
+        // A page carrying its own search field (chaîne) focuses it in place;
+        // everywhere else, the search bar at the top.
+        const input =
+          document.querySelector("#view .page-search") || document.getElementById("search-input");
         if (input) {
           input.focus();
           input.select();
           return;
         }
         navigate("/search");
-        setTimeout(() => document.getElementById("search-input")?.focus(), 60);
         return;
       }
       case "?":
@@ -192,6 +193,9 @@ export function initShortcuts() {
         return;
       case "l":
         playerActions.toggleLoop?.();
+        return;
+      case "t":
+        playerActions.toggleCinema?.();
         return;
     }
   });

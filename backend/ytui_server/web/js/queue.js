@@ -84,6 +84,23 @@ class PlayQueue extends EventTarget {
     this._emit();
   }
 
+  // Play `video` right now, inserted just after the current item: the rest of
+  // the queue stays upcoming (a suggestion picked mid-playlist does not throw
+  // the playlist away). On an empty queue it simply becomes the queue.
+  playNow(video) {
+    if (!this.current) {
+      this.play([video]);
+      return;
+    }
+    this.items = [
+      ...this.items.slice(0, this.index + 1),
+      video,
+      ...this.items.slice(this.index + 1),
+    ];
+    this.index += 1;
+    this._emit();
+  }
+
   // Remove the upcoming item at `offset` (0 = the next one). Positional.
   removeUpcoming(offset) {
     const i = this.index + 1 + offset;

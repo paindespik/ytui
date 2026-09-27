@@ -14,18 +14,10 @@ import {
   playVideos,
   iconBtn,
   setBtnLabel,
+  descriptionNodes,
+  followButton,
 } from "../js/ui.js";
 import { createComments } from "../js/comments.js";
-
-// Autolink sans innerHTML : le texte distant reste du texte.
-function linkify(text) {
-  const parts = String(text || "").split(/(https?:\/\/[^\s<>"']+)/g);
-  return parts.map((part, i) =>
-    i % 2 === 1
-      ? el("a", { href: part, target: "_blank", rel: "noopener noreferrer", text: part })
-      : part,
-  );
-}
 
 function fmtUploadDate(raw) {
   if (!raw) return "";
@@ -88,6 +80,7 @@ export async function render(view, { params }) {
             text: d.channel_title || "",
           })
         : el("span", { text: d.channel_title || "" }),
+      d.channel_id ? followButton(platform, d.channel_id, { compact: true }) : null,
     ),
     meta ? el("div", { class: "detail-meta", text: meta }) : null,
   );
@@ -103,7 +96,7 @@ export async function render(view, { params }) {
   detail.append(actions);
 
   if (d.description) {
-    detail.append(el("div", { class: "desc" }, linkify(d.description)));
+    detail.append(el("div", { class: "desc" }, descriptionNodes(d.description)));
   }
 
   view.append(detail);

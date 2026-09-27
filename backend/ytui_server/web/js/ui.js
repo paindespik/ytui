@@ -220,7 +220,7 @@ export const PLATFORM_LABELS = {
 // que la règle de reprise (95 %) arrondi vers le bas pour les génériques.
 const DONE_FRACTION = 0.9;
 
-export function videoCard(video, { live = false, onOpen } = {}) {
+export function videoCard(video, { live = false, onOpen, isNew = false } = {}) {
   const isLive = live || isLiveVideo(video);
   const isVideo = video.kind === "video";
   const seen = !isLive && isVideo && watched.has(video);
@@ -286,7 +286,14 @@ export function videoCard(video, { live = false, onOpen } = {}) {
         { class: "txt" },
         el("div", { class: "title", title: video.title, text: video.title }),
         video.channel_title ? el("div", { class: "sub channel-name", text: video.channel_title }) : null,
-        views || when ? el("div", { class: "sub", text: [views, when].filter(Boolean).join(" · ") }) : null,
+        views || when || isNew
+          ? el(
+              "div",
+              { class: "sub" },
+              isNew ? el("span", { class: "chip new", text: "Nouveau" }) : null,
+              [views, when].filter(Boolean).join(" · "),
+            )
+          : null,
       ),
       isVideo || video.kind === "playlist"
         ? el(
@@ -319,6 +326,171 @@ export function videoCard(video, { live = false, onOpen } = {}) {
 
 export function videoGrid(videos, opts = {}) {
   return el("div", { class: "grid" }, videos.map((v) => videoCard(v, opts)));
+}
+
+// ─── Description : liens et horodatages cliquables ───
+
+const URL_RE = /(https?:\/\/[^\s<>"']+)/g;
+// 1:02, 12:34, 1:02:03 — bornés pour ne pas mordre dans un score « 3-1 » ou
+// une heure « 20h30 ». Les minutes/secondes au-delà de 59 ne sont pas des
+// horodatages.
+const TIME_RE = /(^|[^\d:])((?:(\d{1,2}):)?([0-5]?\d):([0-5]\d))(?![\d:])/g;
+
+/// Découpe un texte en morceaux { type: "text" | "link" | "time", value,
+/// seconds } — sans innerHTML : le texte distant reste du texte.
+export function parseDescription(text) {
+  const out = [];
+  const pushText = (value) => {
+    if (value) out.push({ type: "text", value });
+  };
+  const parts = String(text || "").split(URL_RE);
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) {
+      out.push({ type: "link", value: part });
+      return;
+    }
+    let last = 0;
+    for (const m of part.matchAll(TIME_RE)) {
+      const start = m.index + m[1].length;
+      pushText(part.slice(last, start));
+      const h = m[3] ? Number(m[3]) : 0;
+      out.push({ type: "time", value: m[2], seconds: h * 3600 + Number(m[4]) * 60 + Number(m[5]) });
+      last = start + m[2].length;
+    }
+    pushText(part.slice(last));
+  });
+  return out;
+}
+
+/// Noeuds DOM d'une description. Sans `onSeek`, les horodatages restent du
+/// texte (page Détails : pas de lecteur sur place).
+export function descriptionNodes(text, { onSeek = null } = {}) {
+  return parseDescription(text).map((seg) => {
+    if (seg.type === "link") {
+      return el("a", { href: seg.value, target: "_blank", rel: "noopener noreferrer", text: seg.value });
+    }
+    if (seg.type === "time" && onSeek) {
+      return el("a", {
+        href: "#",
+        class: "ts",
+        title: `Aller à ${seg.value}`,
+        text: seg.value,
+        onclick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onSeek(seg.seconds);
+        },
+      });
+    }
+    return seg.value;
+  });
+}
+
+// ─── Suivre une chaîne ───
+
+// Ref de follow — même construction que mobile/lib/screens/channel.dart :
+// préfixe plateforme pour les plateformes non-YouTube, id brut pour YouTube.
+export function followRef(platform, channelId) {
+  return platform === "youtube" ? channelId : `${platform}:${channelId}`;
+}
+
+// Liste des chaînes suivies, partagée entre les boutons d'une même page (un
+// seul GET /api/channels) et rafraîchie après chaque bascule.
+let followedCache = null;
+function followedChannels(refresh = false) {
+  if (refresh || !followedCache) {
+    followedCache = api.channels().catch((err) => {
+      followedCache = null;
+      throw err;
+    });
+  }
+  return followedCache;
+}
+
+/// Bouton Suivre / Suivie (bascule). `channelId` peut arriver plus tard :
+/// setChannel() l'active quand les détails de la vidéo le révèlent.
+export function followButton(platform, channelId = "", { compact = false } = {}) {
+  let followed = false;
+  let current = channelId;
+  const btn = el("button", {
+    class: compact ? "btn small follow-btn" : "btn follow-btn",
+    type: "button",
+    "aria-pressed": "false",
+    disabled: true,
+  });
+
+  function sync() {
+    btn.replaceChildren(
+      icon(followed ? "user-check" : "user-plus", { size: compact ? 16 : 18 }),
+      el("span", { class: "lbl", text: followed ? "Suivie" : "Suivre" }),
+    );
+    btn.title = followed ? "Ne plus suivre cette chaîne" : "Suivre cette chaîne";
+    btn.setAttribute("aria-pressed", followed ? "true" : "false");
+    btn.classList.toggle("on", followed);
+  }
+
+  async function load() {
+    btn.hidden = !current;
+    if (!current) return;
+    try {
+      const chans = await followedChannels();
+      followed = chans.some((c) => c.channel_id === current && c.platform === platform);
+    } catch {
+      /* /channels muet : le bouton reste utilisable */
+    }
+    sync();
+    btn.disabled = false;
+  }
+
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!current) return;
+    btn.disabled = true;
+    if (followed) {
+      try {
+        await api.unfollowChannel(current, platform);
+        followed = false;
+        toast("Chaîne retirée");
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          followed = false;
+          toast("Chaîne déjà retirée");
+        } else {
+          errorToast(err);
+        }
+      }
+    } else {
+      try {
+        await api.followChannel(followRef(platform, current));
+        followed = true;
+        toast("Chaîne suivie");
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          followed = true;
+          toast("Chaîne déjà suivie");
+        } else if (err instanceof ApiError && err.status === 404) {
+          toast("Chaîne introuvable", { error: true });
+        } else if (err instanceof ApiError && err.status === 502) {
+          toast("Erreur de la plateforme", { error: true });
+        } else {
+          errorToast(err);
+        }
+      }
+    }
+    followedChannels(true).catch(() => {});
+    sync();
+    btn.disabled = false;
+  });
+
+  sync();
+  load();
+  btn.setChannel = (id) => {
+    if (!id || id === current) return;
+    current = id;
+    load();
+  };
+  btn.isFollowed = () => followed;
+  return btn;
 }
 
 // ─── Menus flottants (⋮, ⋯) et panneaux ───
