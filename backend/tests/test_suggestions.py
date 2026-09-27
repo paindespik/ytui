@@ -197,3 +197,40 @@ def test_suggestions_fall_back_when_home_fails(client, app, settings):
     body = resp.json()
     assert [v["video_id"] for v in body["videos"]] == ["relA1"]
     assert COOKIE_STALE_WARNING in body["warnings"]
+
+def test_suggestions_act_as_the_configured_channel(client, app, settings):
+    _with_cookies(app, settings)
+    service = app.state.suggestions_service
+    service.channel = "@brand"
+    service.cache_key = "suggestions:home:@brand"
+    home = AsyncMock(return_value=[make_video("brandVid0001")])
+    with (
+        patch("ytui_server.services.suggestions.music.page_id_for", new=AsyncMock(return_value="42")),
+        patch("ytui_server.services.suggestions.ytdlp.home_recommendations", new=home),
+    ):
+        body = client.get("/api/suggestions").json()
+    assert [v["video_id"] for v in body["videos"]] == ["brandVid0001"]
+    assert home.await_args.kwargs["page_id"] == "42"
+    # One cache per profile.
+    assert app.state.db.get_feed("suggestions:home:@brand", ttl_seconds=3600)
+    assert app.state.db.get_feed("suggestions:home", ttl_seconds=3600) is None
+
+
+def test_suggestions_unknown_channel_is_a_warning_not_another_profile(client, app, settings):
+    from ytui_server.services import music
+
+    _watch(client, "seedA0000001", channel_id="UCchanA00000000000000000")
+    _with_cookies(app, settings)
+    app.state.suggestions_service.channel = "@typo"
+    home = AsyncMock(return_value=[make_video("defaultProf1")])
+    related = _related_mock({"seedA0000001": [make_video("relA1")]})
+    err = music.ChannelNotFound("YouTube channel @typo is not on this Google account")
+    with (
+        patch("ytui_server.services.suggestions.music.page_id_for", new=AsyncMock(side_effect=err)),
+        patch("ytui_server.services.suggestions.ytdlp.home_recommendations", new=home),
+        patch("ytui_server.services.suggestions.ytdlp.related_videos", new=related),
+    ):
+        body = client.get("/api/suggestions").json()
+    home.assert_not_awaited()
+    assert [v["video_id"] for v in body["videos"]] == ["relA1"]
+    assert "@typo" in body["warnings"][0]

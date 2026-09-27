@@ -397,3 +397,94 @@ def test_playlist_failure_without_cookies_is_502(client):
     with patch.object(ytdlp, "playlist_videos", AsyncMock(side_effect=ytdlp.UpstreamError("nope"))):
         resp = client.get("/api/ytplaylists/LM/videos")
     assert resp.status_code == 502
+
+
+# ─── acting as a brand channel (YTUI_YOUTUBE_CHANNEL) ───
+
+
+PAGE_ID = "123456789012345678901"
+
+
+def _accounts(*items: tuple[str, str, str]) -> dict:
+    """accounts_list: (name, @handle, page id or '') per channel of the account."""
+    def item(name, handle, page_id):
+        tokens = [{"pageIdToken": {"pageId": page_id}}] if page_id else []
+        return {"accountItem": {
+            "accountName": _runs(name),
+            "channelHandle": _runs(handle),
+            "serviceEndpoint": {"selectActiveIdentityEndpoint": {"supportedTokens": tokens}},
+        }}
+
+    return {"actions": [{"getMultiPageMenuAction": {"menu": {"multiPageMenuRenderer": {
+        "sections": [{"accountSectionListRenderer": {"contents": [{"accountItemSectionRenderer": {
+            "contents": [item(*i) for i in items]
+        }}]}}]
+    }}}}]}
+
+
+ACCOUNTS = _accounts(("Main", "@main1234", ""), ("Brand", "@brand4884", PAGE_ID))
+
+
+@pytest.fixture(autouse=True)
+def _forget_page_ids():
+    music._PAGE_IDS.clear()
+    yield
+    music._PAGE_IDS.clear()
+
+
+async def test_home_acts_as_the_configured_brand_channel(cookie_file):
+    calls: list = []
+    get_patch, post_patch = _serve(
+        html=_music_html(), browse=[ACCOUNTS, _home_page(QUICK_PICKS)], calls=calls
+    )
+    with get_patch, post_patch:
+        shelves = await music.home(cookie_file, channel="brand4884")  # "@" optional
+
+    assert shelves is not None and shelves[0].title == "Sélection rapide"
+    assert "account/accounts_list" in calls[0][0]
+    browse = calls[1][1]
+    assert browse["headers"]["X-Goog-PageId"] == PAGE_ID
+    assert browse["json"]["context"]["user"]["onBehalfOfUser"] == PAGE_ID
+    assert music._PAGE_IDS == {"@brand4884": PAGE_ID}  # resolved once per process
+
+
+async def test_the_session_default_channel_needs_no_page_id(cookie_file):
+    calls: list = []
+    get_patch, post_patch = _serve(
+        html=_music_html(), browse=[ACCOUNTS, _home_page(QUICK_PICKS)], calls=calls
+    )
+    with get_patch, post_patch:
+        await music.home(cookie_file, channel="@MAIN1234")
+    assert "X-Goog-PageId" not in calls[1][1]["headers"]
+    assert "onBehalfOfUser" not in calls[1][1]["json"]["context"].get("user", {})
+
+
+async def test_an_unknown_channel_fails_loudly_instead_of_serving_another_profile(cookie_file):
+    get_patch, post_patch = _serve(html=_music_html(), browse=[ACCOUNTS])
+    with get_patch, post_patch, pytest.raises(music.ChannelNotFound, match="@main1234, @brand4884"):
+        await music.home(cookie_file, channel="@typo")
+
+
+def test_music_warns_about_an_unknown_channel(client, settings, app):
+    _push_cookies(settings)
+    app.state.music_service.channel = "@typo"
+    err = music.ChannelNotFound("YouTube channel @typo is not on this Google account")
+    with patch.object(music, "home", AsyncMock(side_effect=err)) as home:
+        body = client.get("/api/music").json()
+    assert body["shelves"] == []
+    assert "@typo" in body["warnings"][0]
+    assert home.await_args.kwargs["channel"] == "@typo"
+
+
+def test_personal_playlist_never_falls_back_to_anonymous_on_unknown_channel(client, settings, app):
+    _push_cookies(settings)
+    app.state.music_service.channel = "@typo"
+    err = music.ChannelNotFound("YouTube channel @typo is not on this Google account")
+    with (
+        patch.object(music, "playlist_videos", AsyncMock(side_effect=err)),
+        patch.object(ytdlp, "playlist_videos", AsyncMock()) as anonymous,
+    ):
+        resp = client.get("/api/ytplaylists/RDTMAK5uy_mix/videos")
+    assert resp.status_code == 502
+    assert "@typo" in resp.json()["detail"]
+    anonymous.assert_not_awaited()

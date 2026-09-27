@@ -230,3 +230,25 @@ async def test_pagination_failure_keeps_the_first_page(cookie_file):
     with _serve(html), failing:
         videos = await ytdlp.home_recommendations(cookie_file, limit=10)
     assert [v.video_id for v in videos] == ["vid000000001"]
+
+
+async def test_a_brand_channel_home_comes_from_innertube_only(cookie_file):
+    """The HTML grid is the session's default identity: with a page id it is
+    skipped and every page is requested on behalf of the brand channel."""
+    html = _page_with_context(_lockup("vid000000001", "Default profile pick"))
+    pages = [[_lockup("vid000000002", "Brand pick")]]
+    post_patch, calls = _serve_pages(pages)
+    headers: list[dict] = []
+    fake_post = post_patch.new.side_effect
+
+    async def spying_post(url, **kwargs):
+        headers.append(kwargs.get("headers") or {})
+        return await fake_post(url, **kwargs)
+
+    post_patch.new.side_effect = spying_post
+    with _serve(html), post_patch:
+        videos = await ytdlp.home_recommendations(cookie_file, page_id="42")
+    assert [v.video_id for v in videos] == ["vid000000002"]
+    assert calls[0]["browseId"] == "FEwhat_to_watch"
+    assert calls[0]["context"]["user"]["onBehalfOfUser"] == "42"
+    assert headers[0]["X-Goog-PageId"] == "42"

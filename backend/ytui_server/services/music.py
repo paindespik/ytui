@@ -32,6 +32,7 @@ from .ytdlp import UpstreamError
 
 MUSIC_ORIGIN = "https://music.youtube.com"
 _BROWSE_URL = f"{MUSIC_ORIGIN}/youtubei/v1/browse?prettyPrint=false"
+_ACCOUNTS_URL = f"{MUSIC_ORIGIN}/youtubei/v1/account/accounts_list?prettyPrint=false"
 # The first response carries 3 shelves; measured 5 more pages for 16 shelves.
 _HOME_MAX_PAGES = 8
 # Playlist pages hold 100 tracks each.
@@ -45,6 +46,10 @@ STALE_COOKIES_WARNING = (
 )
 
 log = logging.getLogger(__name__)
+
+
+class ChannelNotFound(UpstreamError):
+    """YTUI_YOUTUBE_CHANNEL names a channel the Google account does not have."""
 
 
 # ─── parsing ───
@@ -317,14 +322,28 @@ def _sapisid_hash(jar) -> str | None:
 
 
 class _Session:
-    """A signed-in WEB_REMIX InnerTube client."""
+    """A signed-in WEB_REMIX InnerTube client, optionally acting as a channel."""
 
     def __init__(self, client: httpx.AsyncClient, jar, context: dict) -> None:
         self._client = client
         self._jar = jar
         self._context = context
+        self.page_id = ""
 
-    async def browse(self, body: dict, *, params: dict | None = None) -> dict:
+    def act_as(self, page_id: str) -> None:
+        """Speak for a brand channel of the account ("" = the session default).
+
+        Per request, like the site does after a channel switch: the browser
+        that holds the session is never switched, so nothing persistent
+        changes on the account.
+        """
+        self.page_id = page_id
+        user = {k: v for k, v in self._context.get("user", {}).items() if k != "onBehalfOfUser"}
+        if page_id:
+            user["onBehalfOfUser"] = page_id
+        self._context = {**self._context, "user": user}
+
+    def _headers(self) -> dict:
         headers = {
             "Content-Type": "application/json",
             "X-Youtube-Client-Name": "67",  # WEB_REMIX
@@ -337,18 +356,84 @@ class _Session:
         authorization = _sapisid_hash(self._jar)
         if authorization:
             headers["Authorization"] = authorization
+        if self.page_id:
+            headers["X-Goog-PageId"] = self.page_id
+        return headers
+
+    async def _post(self, url: str, body: dict, params: dict | None = None) -> dict:
         resp = await self._client.post(
-            _BROWSE_URL, params=params, json={"context": self._context, **body}, headers=headers
+            url, params=params, json={"context": self._context, **body}, headers=self._headers()
         )
         if resp.status_code == 429:
             raise UpstreamError("YouTube Music rate-limited the request (429)")
         resp.raise_for_status()
         return resp.json()
 
+    async def browse(self, body: dict, *, params: dict | None = None) -> dict:
+        return await self._post(_BROWSE_URL, body, params)
+
+    async def accounts(self) -> list[tuple[str, str, str]]:
+        """(name, @handle, page id) of every channel of the Google account.
+
+        The page id is "" for the session's own identity (no switch needed).
+        """
+        data = await self._post(_ACCOUNTS_URL, {})
+        out = []
+        for item in ytdlp._walk_key(data, "accountItem"):
+            page_ids = [
+                token["pageId"]
+                for token in ytdlp._walk_key(item.get("serviceEndpoint"), "pageIdToken")
+                if token.get("pageId")
+            ]
+            out.append(
+                (
+                    _text(item.get("accountName")),
+                    _text(item.get("channelHandle")),
+                    page_ids[0] if page_ids else "",
+                )
+            )
+        return out
+
+
+# channel setting -> page id ("" = the session default). Stable per account.
+_PAGE_IDS: dict[str, str] = {}
+
+
+def _normalize_channel(channel: str) -> str:
+    channel = channel.strip()
+    if channel and not channel.startswith("@") and not channel.isdigit():
+        channel = f"@{channel}"
+    return channel.lower()
+
+
+async def _select_channel(session: _Session, channel: str) -> None:
+    """Make `session` act as `channel` (@handle or page id).
+
+    Raises UpstreamError when the account has no such channel: silently
+    serving the default profile instead is exactly the invisible failure
+    this setting exists to prevent.
+    """
+    wanted = _normalize_channel(channel)
+    if not wanted:
+        return
+    if wanted not in _PAGE_IDS:
+        accounts = await session.accounts()
+        for _name, handle, page_id in accounts:
+            if wanted in (handle.lower(), page_id):
+                _PAGE_IDS[wanted] = page_id
+                break
+        else:
+            available = ", ".join(h or n for n, h, _ in accounts) or "none"
+            raise ChannelNotFound(
+                f"YouTube channel {channel} is not on this Google account (available: {available})"
+            )
+    session.act_as(_PAGE_IDS[wanted])
+
 
 @asynccontextmanager
-async def _session(cookie_file: Path) -> AsyncIterator[_Session | None]:
-    """A signed-in session, or None when the cookies no longer authenticate."""
+async def _session(cookie_file: Path, channel: str = "") -> AsyncIterator[_Session | None]:
+    """A signed-in session (acting as `channel` when set), or None when the
+    cookies no longer authenticate."""
     from yt_dlp.cookies import YoutubeDLCookieJar
 
     jar = YoutubeDLCookieJar(str(cookie_file))
@@ -380,13 +465,35 @@ async def _session(cookie_file: Path) -> AsyncIterator[_Session | None]:
             context = ytdlp._json_object_after(html, '"INNERTUBE_CONTEXT":')
         except (ValueError, KeyError) as exc:
             raise UpstreamError("INNERTUBE_CONTEXT not found on music.youtube.com") from exc
-        yield _Session(client, jar, context)
+        session = _Session(client, jar, context)
+        try:
+            await _select_channel(session, channel)
+        except httpx.HTTPError as exc:
+            raise UpstreamError(f"YouTube channel list: {exc}") from exc
+        yield session
 
 
-async def home(cookie_file: Path, max_pages: int = _HOME_MAX_PAGES) -> list[MusicShelf] | None:
+async def page_id_for(cookie_file: Path, channel: str) -> str | None:
+    """Page id to act as `channel` ("" = session default); None when signed out.
+
+    Resolved once per process, then served from memory. Raises UpstreamError
+    for a channel the account does not have.
+    """
+    wanted = _normalize_channel(channel)
+    if not wanted:
+        return ""
+    if wanted in _PAGE_IDS:
+        return _PAGE_IDS[wanted]
+    async with _session(cookie_file, channel) as session:
+        return None if session is None else session.page_id
+
+
+async def home(
+    cookie_file: Path, max_pages: int = _HOME_MAX_PAGES, channel: str = ""
+) -> list[MusicShelf] | None:
     """The account's YouTube Music home shelves; None when signed out."""
     try:
-        async with _session(cookie_file) as session:
+        async with _session(cookie_file, channel) as session:
             if session is None:
                 return None
             data = await session.browse({"browseId": "FEmusic_home"})
@@ -424,13 +531,13 @@ def is_personal_playlist(playlist_id: str) -> bool:
 
 
 async def playlist_videos(
-    cookie_file: Path, playlist_id: str, limit: int = 200
+    cookie_file: Path, playlist_id: str, limit: int = 200, channel: str = ""
 ) -> tuple[list[Video], str] | None:
     """A playlist listed through the signed-in session; None when signed out."""
     videos: list[Video] = []
     seen: set[str] = set()
     try:
-        async with _session(cookie_file) as session:
+        async with _session(cookie_file, channel) as session:
             if session is None:
                 return None
             data = await session.browse({"browseId": f"VL{playlist_id}"})
@@ -466,9 +573,17 @@ class MusicHome:
 class MusicService:
     """Cached YouTube Music home (in memory: cheap to rebuild, personal, short-lived)."""
 
-    def __init__(self, cookies: CookieStore | None, ttl_seconds: int = 30 * 60) -> None:
+    def __init__(
+        self,
+        cookies: CookieStore | None,
+        ttl_seconds: int = 30 * 60,
+        channel: str = "",
+    ) -> None:
         self.cookies = cookies
         self.ttl_seconds = ttl_seconds
+        # Brand channel of the account to act as (YTUI_YOUTUBE_CHANNEL);
+        # "" = the identity the session is on.
+        self.channel = channel
         self._cached: list[MusicShelf] | None = None
         self._fetched_at = 0.0
         self._lock = asyncio.Lock()
@@ -489,7 +604,7 @@ class MusicService:
             if not force_refresh and self._fresh():
                 return MusicHome(list(self._cached or []))
             try:
-                shelves = await home(self.cookies.path)
+                shelves = await home(self.cookies.path, channel=self.channel)
             except UpstreamError as exc:
                 log.warning("music home failed: %s", exc)
                 return MusicHome(list(self._cached or []), [f"YouTube Music: {exc}"])
@@ -506,7 +621,11 @@ class MusicService:
         if self.cookies is None or not self.cookies.exists():
             return None
         try:
-            listed = await playlist_videos(self.cookies.path, playlist_id, limit=limit)
+            listed = await playlist_videos(
+                self.cookies.path, playlist_id, limit=limit, channel=self.channel
+            )
+        except ChannelNotFound:
+            raise  # never fall back to another profile's (or generic) listing
         except UpstreamError as exc:
             log.warning("signed-in listing of %s failed: %s", playlist_id, exc)
             return None
@@ -519,7 +638,8 @@ class MusicService:
 
         Personal mixes go through the account first (anonymously they list
         generic tracks); anything yt-dlp cannot list (liked music, private
-        playlists) gets a signed-in second chance. Raises UpstreamError.
+        playlists) gets a signed-in second chance. Raises UpstreamError
+        (ChannelNotFound when the configured channel does not exist).
         """
         if is_personal_playlist(playlist_id):
             listed = await self._signed_in_playlist(playlist_id, limit)

@@ -655,7 +655,17 @@ async def playlist_videos(playlist_url: str, limit: int = 200) -> tuple[list[Vid
     return await _run(_BULK_SEM, _extract_flat_info, playlist_url, limit)
 
 
+def _is_youtube_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "youtube.com" or host.endswith(".youtube.com") or host == "youtu.be"
+
+
 def _extract_details(url: str) -> VideoDetails:
+    if _is_youtube_url(url):
+        # Same extraction as /streams (TTL cache + in-flight sharing): the
+        # watch page asks for both at once, and a details page followed by
+        # "Lire" no longer pays two full yt-dlp runs.
+        return _details_from_info(_extract_info_cached(url), url)
     import yt_dlp
 
     # check_formats: /details never serves a stream URL, so BitChute's seed
@@ -669,6 +679,10 @@ def _extract_details(url: str) -> VideoDetails:
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
+    return _details_from_info(info, url)
+
+
+def _details_from_info(info: dict, url: str) -> VideoDetails:
     upload_date = info.get("upload_date") or ""
     if len(upload_date) == 8:
         upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
@@ -1227,7 +1241,9 @@ async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
     return videos
 
 
-async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video]:
+async def home_recommendations(
+    cookie_file: Path, limit: int = 50, page_id: str = ""
+) -> list[Video]:
     """The account's YouTube home feed, scraped with the pushed cookies.
 
     Reads the very page the browser shows, so the content and its order match
@@ -1242,6 +1258,11 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
 
     Returns [] when the cookies no longer authenticate, so callers can warn and
     fall back instead of serving an anonymous feed as if it were personal.
+
+    `page_id` acts as a brand channel of the account (see
+    music.page_id_for): the HTML page always shows the identity the session
+    is on, so the grid then comes from InnerTube only, where the page id is
+    honoured per request.
     """
     from yt_dlp.cookies import YoutubeDLCookieJar
 
@@ -1278,9 +1299,12 @@ async def home_recommendations(cookie_file: Path, limit: int = 50) -> list[Video
 
             # _walk_lockups keeps only LOCKUP_CONTENT_TYPE_VIDEO, which drops
             # the ad slots, the Shorts shelf and the radio playlists.
-            _collect_lockups(data, videos, seen, limit)
+            if not page_id:
+                _collect_lockups(data, videos, seen, limit)
             if len(videos) < limit:
-                await _home_continuations(http_client, jar, html, videos, seen, limit)
+                await _home_continuations(
+                    http_client, jar, html, videos, seen, limit, page_id=page_id
+                )
     except UpstreamError:
         raise
     except Exception as exc:
@@ -1342,6 +1366,7 @@ async def _home_continuations(
     videos: list[Video],
     seen: set[str],
     limit: int,
+    page_id: str = "",
 ) -> None:
     """Page the home grid through InnerTube, the way scrolling does.
 
@@ -1359,6 +1384,8 @@ async def _home_continuations(
         log.warning("home feed: INNERTUBE_CONTEXT not found, no pagination")
         return
     version = context.get("client", {}).get("clientVersion", "")
+    if page_id:
+        context = {**context, "user": {**context.get("user", {}), "onBehalfOfUser": page_id}}
     headers = {
         "Content-Type": "application/json",
         "X-Youtube-Client-Name": "1",
@@ -1369,6 +1396,8 @@ async def _home_continuations(
         "Origin": "https://www.youtube.com",
         "Referer": "https://www.youtube.com/",
     }
+    if page_id:
+        headers["X-Goog-PageId"] = page_id
     url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
     body: dict = {"context": context, "browseId": "FEwhat_to_watch"}
     for _ in range(_HOME_MAX_PAGES):

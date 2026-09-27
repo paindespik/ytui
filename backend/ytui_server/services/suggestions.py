@@ -13,7 +13,7 @@ import logging
 
 from ..db import Database
 from ..models import Video
-from . import ytdlp
+from . import music, ytdlp
 from .cookies import CookieStore
 from .feed import FeedResult
 
@@ -78,11 +78,17 @@ class SuggestionsService:
         ttl_seconds: int = 30 * 60,
         cookies: CookieStore | None = None,
         keepalive_hours: int = 0,
+        channel: str = "",
     ) -> None:
         self.db = db
         self.ttl_seconds = ttl_seconds
         self.cookies = cookies
         self.keepalive_hours = keepalive_hours
+        # Brand channel of the account to act as (YTUI_YOUTUBE_CHANNEL);
+        # "" = the identity the session is on.
+        self.channel = channel
+        # One cache per profile: switching channel must not serve the old one.
+        self.cache_key = f"{CACHE_KEY}:{channel.strip().lower()}" if channel.strip() else CACHE_KEY
         self._keepalive: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -124,23 +130,34 @@ class SuggestionsService:
 
     async def suggestions(self, force_refresh: bool = False) -> FeedResult:
         if not force_refresh:
-            cached = self.db.get_feed(CACHE_KEY, ttl_seconds=self.ttl_seconds)
+            cached = self.db.get_feed(self.cache_key, ttl_seconds=self.ttl_seconds)
             if cached is not None:
                 return FeedResult(cached, [])
 
         stale_warning: str | None = None
         if self.cookies is not None and self.cookies.exists():
             try:
-                videos = await ytdlp.home_recommendations(
-                    self.cookies.path, limit=MAX_SUGGESTIONS
+                page_id = await music.page_id_for(self.cookies.path, self.channel)
+                videos = (
+                    await ytdlp.home_recommendations(
+                        self.cookies.path, limit=MAX_SUGGESTIONS, page_id=page_id
+                    )
+                    if page_id is not None
+                    else []
                 )
+                stale_warning = COOKIE_STALE_WARNING
+            except music.ChannelNotFound as exc:
+                # Never show another profile's home in its place.
+                log.warning("home recommendations: %s", exc)
+                videos = []
+                stale_warning = f"{exc} (falling back to history-based suggestions)"
             except ytdlp.UpstreamError as exc:
                 log.warning("home recommendations failed: %s", exc)
                 videos = []
+                stale_warning = COOKIE_STALE_WARNING
             if videos:
-                self.db.set_feed(CACHE_KEY, videos)
+                self.db.set_feed(self.cache_key, videos)
                 return FeedResult(videos)
-            stale_warning = COOKIE_STALE_WARNING
 
         history = [video for video, _, _ in self.db.watch_history(limit=100)]
         seeds = _pick_seeds(history)
@@ -163,7 +180,7 @@ class SuggestionsService:
         excluded = {v.video_id for v in history} | {s.video_id for s in seeds}
         videos = _interleave(sources, excluded)
         if videos:
-            self.db.set_feed(CACHE_KEY, videos)
+            self.db.set_feed(self.cache_key, videos)
         elif not warnings:
             warnings.append(EMPTY_HISTORY_WARNING)
         log.info(

@@ -94,9 +94,12 @@ def create_app(settings: Settings | None = None, start_pollers: bool = True) -> 
             ttl_seconds=settings.suggestions_ttl_minutes * 60,
             cookies=app.state.youtube_cookies,
             keepalive_hours=settings.suggestions_keepalive_hours,
+            channel=settings.youtube_channel,
         )
         app.state.music_service = MusicService(
-            app.state.youtube_cookies, ttl_seconds=settings.music_ttl_minutes * 60
+            app.state.youtube_cookies,
+            ttl_seconds=settings.music_ttl_minutes * 60,
+            channel=settings.youtube_channel,
         )
         app.state.youtube_service = YouTubeService(settings.data_dir)
         app.state.sponsorblock = SponsorBlockService(

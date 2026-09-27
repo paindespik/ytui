@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         default=30, validation_alias="YTUI_SUGGESTIONS_TTL_MINUTES"
     )
     music_ttl_minutes: int = Field(default=30, validation_alias="YTUI_MUSIC_TTL_MINUTES")
+    # Brand channel of the cookie account to act as for the YouTube home and
+    # YouTube Music (@handle or page id). Empty: whatever identity the session
+    # is on — the Google account's primary channel unless switched in the
+    # browser that holds it.
+    youtube_channel: str = Field(default="", validation_alias="YTUI_YOUTUBE_CHANNEL")
     # Periodic authenticated ping that keeps the pushed cookie session alive
     # (yt-dlp rewrites the rotated cookies on each use). 0 disables.
     suggestions_keepalive_hours: int = Field(

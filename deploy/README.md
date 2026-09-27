@@ -84,7 +84,16 @@ l'accueil YouTube Music du compte (étagères de music.youtube.com via InnerTube
 `WEB_REMIX`, cache mémoire `YTUI_MUSIC_TTL_MINUTES`, 30 min par défaut), ainsi
 que le listage des mixes personnels (`RDTMAK…`) et de la playlist « J'aime »
 (`LM`), qu'yt-dlp anonyme ne voit pas ou voit génériques. Le fichier de cookies
-n'y est jamais réécrit. Ces cookies ne peuvent pas être entretenus par
+n'y est jamais réécrit.
+
+**Compte à plusieurs chaînes** : la session est sur la chaîne principale du
+compte Google. Pour servir l'accueil YouTube (Suggestions) et YouTube Music
+d'une chaîne de marque, mettre son handle dans `deploy/.env` :
+`YTUI_YOUTUBE_CHANNEL=@handle` (ou son page id). Le backend lit la liste des
+chaînes du compte (`account/accounts_list`) et envoie `X-Goog-PageId` requête
+par requête — le navigateur détenteur de la session n'est jamais basculé. Un
+handle absent du compte produit un avertissement explicite (avec les chaînes
+disponibles), jamais le profil par défaut à la place. Ces cookies ne peuvent pas être entretenus par
 le backend : YouTube lie la session à un cookie `__Secure-1PSIDTS` que seul son
 détenteur peut renouveler — youtube.com ne le renvoie jamais (il ne rafraîchit
 que `SIDCC`/`__Secure-*PSIDCC`) et l'endpoint de rotation de Google refuse les
