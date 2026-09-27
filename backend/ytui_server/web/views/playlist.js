@@ -3,7 +3,8 @@
 import { api } from "../js/api.js";
 import {
   el,
-  spinner,
+  iconBtn,
+  skeletonRows,
   emptyState,
   errorToast,
   toast,
@@ -14,12 +15,12 @@ import {
 export async function render(view, { params, query }) {
   const playlistId = params.id;
   const title = el("h1", { text: query.get("name") || "Playlist" });
-  const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
+  const playAllBtn = iconBtn("play", "Tout lire", { class: "primary", disabled: true });
   const body = el("div");
   view.append(el("div", { class: "page-head" }, title, playAllBtn), body);
 
   async function load() {
-    body.replaceChildren(spinner());
+    body.replaceChildren(skeletonRows(6));
     let items;
     try {
       items = await api.playlistItems(playlistId);
@@ -30,7 +31,7 @@ export async function render(view, { params, query }) {
     }
     if (!items.length) {
       playAllBtn.disabled = true;
-      body.replaceChildren(emptyState("Cette playlist est vide"));
+      body.replaceChildren(emptyState("Cette playlist est vide", "list-video"));
       return;
     }
     const videos = items.map((it) => it.video);
@@ -45,7 +46,7 @@ export async function render(view, { params, query }) {
           const sub = [v.channel_title, v.duration ? fmtDuration(v.duration) : ""]
             .filter(Boolean)
             .join(" · ");
-          return el(
+          const row = el(
             "div",
             {
               class: "row",
@@ -71,10 +72,9 @@ export async function render(view, { params, query }) {
             el(
               "div",
               { class: "actions" },
-              el("button", {
-                class: "btn icon danger",
+              iconBtn("x", null, {
+                class: "danger",
                 title: "Retirer de la playlist",
-                text: "✕",
                 onclick: async (e) => {
                   e.stopPropagation();
                   try {
@@ -88,6 +88,8 @@ export async function render(view, { params, query }) {
               }),
             ),
           );
+          row._video = v; // raccourci q (file d'attente)
+          return row;
         }),
       ),
     );

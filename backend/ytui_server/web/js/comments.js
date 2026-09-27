@@ -3,6 +3,7 @@
 
 import { api, ApiError } from "./api.js";
 import { el, spinner, errorToast, toast, fmtRelative } from "./ui.js";
+import { icon } from "./icons.js";
 
 const PAGE_SIZE = 50;
 
@@ -14,9 +15,17 @@ const repliesLabel = (n) => `${n} réponse${n > 1 ? "s" : ""}`;
 // (comme sur youtube.com).
 export function commentCard(c, ctx = null) {
   const when = c.timestamp ? fmtRelative(new Date(c.timestamp * 1000).toISOString()) : "";
-  const counts = [c.likes ? `👍 ${c.likes}` : "", c.dislikes ? `👎 ${c.dislikes}` : ""]
-    .filter(Boolean)
-    .join(" · ");
+  // Pouces : icône + nombre (le pouce retourné porte les « je n'aime pas »
+  // d'Odysee).
+  const counts = () =>
+    c.likes || c.dislikes
+      ? el(
+          "span",
+          { class: "comment-votes" },
+          c.likes ? [icon("thumbs-up", { size: 13 }), String(c.likes)] : null,
+          c.dislikes ? [icon("thumbs-up", { size: 13, cls: "flip" }), String(c.dislikes)] : null,
+        )
+      : null;
   const card = el(
     "div",
     { class: "comment" },
@@ -31,12 +40,20 @@ export function commentCard(c, ctx = null) {
   );
 
   if (ctx === null) {
-    const stats = [counts, c.replies ? repliesLabel(c.replies) : ""].filter(Boolean).join(" · ");
-    if (stats) card.append(el("div", { class: "comment-stats", text: stats }));
+    if (c.likes || c.dislikes || c.replies) {
+      card.append(
+        el(
+          "div",
+          { class: "comment-stats" },
+          counts(),
+          c.replies ? el("span", { text: repliesLabel(c.replies) }) : null,
+        ),
+      );
+    }
     return card;
   }
 
-  const stats = el("div", { class: "comment-stats" }, counts ? el("span", { text: counts }) : null);
+  const stats = el("div", { class: "comment-stats" }, counts());
   const thread = el("div", { class: "comment-replies", hidden: true });
   const moreBtn = el("button", {
     class: "btn more",

@@ -13,8 +13,11 @@ import {
   detailPath,
   publicVideoUrl,
   addToPlaylistModal,
-  openModal,
+  iconBtn,
+  setBtnLabel,
+  showMenu,
 } from "../js/ui.js";
+import { icon } from "../js/icons.js";
 import { queue } from "../js/queue.js";
 import { replace, navigate } from "../js/router.js";
 import { Player, isLiveId } from "../js/player.js";
@@ -81,68 +84,125 @@ export async function render(view, { params }) {
     channelLink.href = "#" + channelPath(video.channel_id, platform, video.channel_title);
   }
   const metaLine = el("span", { class: "sub", text: isLive ? "EN DIRECT" : "" });
+  const channelAvatar = el("span", {
+    class: "avatar small",
+    "aria-hidden": "true",
+    text: (video.channel_title || "").replace(/^[@\s]+/, "").charAt(0).toUpperCase(),
+  });
+  channelAvatar.hidden = !video.channel_title;
+
+  // ─── Réglages de lecture (panneau « Lecture ») ───
+  //
+  // Vitesse, qualité, sous-titres, amplification, lecture auto, boucle et
+  // minuterie vivent dans un seul panneau : la barre d'actions garde les
+  // gestes fréquents, l'état actif (boucle, minuterie) reste visible en puce.
 
   const speedSel = el(
     "select",
-    { class: "input", title: "Vitesse de lecture" },
+    { class: "input", "aria-label": "Vitesse de lecture" },
     [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3].map((r) =>
-      el("option", { value: String(r), selected: r === 1 }, `×${r}`),
+      el(
+        "option",
+        { value: String(r), selected: r === 1 },
+        r === 1 ? "Normale" : `×${r.toLocaleString("fr-FR")}`,
+      ),
     ),
   );
   const subSel = el(
     "select",
-    { class: "input", title: "Sous-titres" },
-    el("option", { value: "-1" }, "Sous-titres : aucun"),
+    { class: "input", "aria-label": "Sous-titres" },
+    el("option", { value: "-1" }, "Aucun"),
   );
   const gainSel = el(
     "select",
-    { class: "input", title: "Amplification audio (au-delà de 100 %)" },
+    { class: "input", "aria-label": "Amplification audio (au-delà de 100 %)" },
     GAINS.map((g) =>
-      el("option", { value: String(g), selected: g === prefs.gain }, `Vol ×${g}`),
+      el(
+        "option",
+        { value: String(g), selected: g === prefs.gain },
+        g === 1 ? "Aucune" : `×${g.toLocaleString("fr-FR")}`,
+      ),
     ),
   );
   const qualitySel = el(
     "select",
-    { class: "input", title: "Qualité maximale" },
+    { class: "input", "aria-label": "Qualité maximale" },
     QUALITIES.map((q) =>
       el("option", { value: String(q), selected: q === prefs.maxHeight }, `${q}p`),
     ),
   );
+  const autoplayInput = el("input", {
+    type: "checkbox",
+    class: "switch",
+    "aria-label": "Lecture auto",
+  });
+  const loopInput = el("input", { type: "checkbox", class: "switch", "aria-label": "Boucle" });
+  const sleepSel = el(
+    "select",
+    { class: "input", "aria-label": "Minuterie de mise en veille" },
+    el("option", { value: "0" }, "Désactivée"),
+    SLEEP_PRESETS.map((m) => el("option", { value: String(m) }, `${m} min`)),
+    el("option", { value: "end" }, "Fin de la vidéo"),
+  );
 
-  const pipBtn = document.pictureInPictureEnabled
-    ? el(
-        "button",
-        {
-          class: "btn",
-          title: "Picture-in-picture",
-          onclick: () => videoEl.requestPictureInPicture().catch(() => {}),
-        },
-        "PiP",
-      )
-    : null;
-  const detailsBtn = el(
-    "button",
-    { class: "btn", onclick: () => navigate(detailPath(video)) },
-    "Détails",
+  const settingRow = (iconName, label, control, hint = "") =>
+    el(
+      "label",
+      { class: "setting-row", title: hint || null },
+      icon(iconName),
+      el("span", { class: "setting-label", text: label }),
+      control,
+    );
+
+  const settingsPanel = el(
+    "div",
+    {
+      class: "popover settings-panel",
+      role: "dialog",
+      "aria-label": "Réglages de lecture",
+      // Un clic dedans ne doit pas refermer le panneau (écouteur document).
+      onclick: (e) => e.stopPropagation(),
+    },
+    settingRow("gauge", "Vitesse", speedSel, "[ et ] au clavier"),
+    settingRow("monitor", "Qualité max.", qualitySel),
+    settingRow("captions", "Sous-titres", subSel, "v au clavier"),
+    settingRow("volume-2", "Amplification", gainSel, "Au-delà de 100 % du volume"),
+    el("div", { class: "popover-sep" }),
+    settingRow("circle-play", "Lecture auto", autoplayInput, "a au clavier"),
+    settingRow("repeat-1", "Boucle", loopInput, "l au clavier"),
+    settingRow("timer", "Minuterie", sleepSel),
   );
-  const plBtn = el(
-    "button",
-    { class: "btn", onclick: () => addToPlaylistModal(video) },
-    "+ Playlist",
-  );
+  settingsPanel.hidden = true;
+
+  const settingsBtn = iconBtn("settings-2", "Lecture", {
+    title: "Réglages de lecture",
+    "aria-haspopup": "dialog",
+    "aria-expanded": "false",
+    onclick: (e) => {
+      e.stopPropagation();
+      setPanel(settingsPanel.hidden);
+    },
+  });
+
+  function setPanel(open) {
+    settingsPanel.hidden = !open;
+    settingsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    settingsBtn.classList.toggle("on", open);
+  }
+  settingsPanel._close = () => setPanel(false); // Échap (shortcuts.js)
+  const closePanel = () => setPanel(false);
+  document.addEventListener("click", closePanel);
 
   // ─── Navigation dans la file (n / p au clavier, boutons ici) ───
 
-  const prevBtn = el(
-    "button",
-    { class: "btn", title: "Vidéo précédente (p)", onclick: () => playerActions.previous?.() },
-    "⏮ Précédent",
-  );
-  const nextBtn = el(
-    "button",
-    { class: "btn", title: "Vidéo suivante (n)", onclick: () => playerActions.next?.() },
-    "⏭ Suivant",
-  );
+  const prevBtn = iconBtn("skip-back", null, {
+    title: "Vidéo précédente (p)",
+    onclick: () => playerActions.previous?.(),
+  });
+  const nextBtn = iconBtn("skip-forward", null, {
+    title: "Vidéo suivante (n)",
+    onclick: () => playerActions.next?.(),
+  });
 
   function syncNav() {
     prevBtn.disabled = !queue.hasPrevious;
@@ -151,55 +211,75 @@ export async function render(view, { params }) {
 
   // ─── Lecture auto / boucle / minuterie / partage (parité mobile) ───
 
-  const autoplayBtn = el("button", {
-    class: "btn",
-    title: "Enchaîner automatiquement la vidéo suivante (a)",
-    "aria-pressed": "false",
-    onclick: () => {
-      prefs.autoplay = !prefs.autoplay;
-      syncAutoplay();
-      toast(prefs.autoplay ? "Lecture auto activée" : "Lecture auto désactivée");
-    },
-  });
-
-  function syncAutoplay() {
-    const on = prefs.autoplay;
-    autoplayBtn.textContent = on ? "↪ Lecture auto ✓" : "↪ Lecture auto";
-    autoplayBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    autoplayBtn.classList.toggle("primary", on);
+  function toggleAutoplay() {
+    prefs.autoplay = !prefs.autoplay;
+    syncAutoplay();
+    toast(prefs.autoplay ? "Lecture auto activée" : "Lecture auto désactivée");
   }
 
-  const loopBtn = el("button", {
-    class: "btn",
-    title: "Répéter cette vidéo (l)",
-    "aria-pressed": "false",
-    onclick: () => {
-      if (isLive) return;
-      player.setLoop(!player.loop);
-      syncLoop();
-      toast(player.loop ? "Boucle activée" : "Boucle désactivée");
-    },
+  function syncAutoplay() {
+    autoplayInput.checked = prefs.autoplay;
+  }
+
+  autoplayInput.addEventListener("change", () => {
+    if (autoplayInput.checked !== prefs.autoplay) toggleAutoplay();
   });
+
+  // Puce d'état : la boucle se voit (et se coupe) sans rouvrir le panneau.
+  const loopChip = el(
+    "button",
+    {
+      class: "chip state",
+      type: "button",
+      title: "Boucle active — cliquer pour la couper (l)",
+      onclick: () => toggleLoop(),
+    },
+    icon("repeat-1", { size: 14 }),
+    "Boucle",
+  );
+
+  function toggleLoop() {
+    if (isLive) return;
+    player.setLoop(!player.loop);
+    syncLoop();
+    toast(player.loop ? "Boucle activée" : "Boucle désactivée");
+  }
 
   function syncLoop() {
     const on = Boolean(player && player.loop);
-    loopBtn.textContent = on ? "🔂 Boucle ✓" : "🔂 Boucle";
-    loopBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    loopBtn.classList.toggle("primary", on);
-    loopBtn.disabled = isLive;
+    loopInput.checked = on;
+    loopInput.disabled = isLive;
+    loopChip.hidden = !on;
   }
+
+  loopInput.addEventListener("change", () => {
+    if (loopInput.checked !== Boolean(player && player.loop)) toggleLoop();
+    else syncLoop();
+  });
 
   // Minuterie de mise en veille : soit une échéance, soit « fin de la vidéo ».
   let sleepTimer = null;
   let sleepTick = null;
   let sleepDeadline = 0;
+  let sleepMinutes = 0;
   let sleepAtEnd = false;
 
-  const sleepBtn = el("button", {
-    class: "btn",
-    title: "Minuterie de mise en veille",
-    onclick: () => sleepMenu(),
-  });
+  const sleepChipLabel = el("span");
+  const sleepChip = el(
+    "button",
+    {
+      class: "chip state",
+      type: "button",
+      title: "Minuterie de mise en veille — cliquer pour la modifier",
+      onclick: (e) => {
+        e.stopPropagation();
+        setPanel(true);
+        sleepSel.focus();
+      },
+    },
+    icon("timer", { size: 14 }),
+    sleepChipLabel,
+  );
 
   function clearSleep() {
     clearTimeout(sleepTimer);
@@ -207,17 +287,20 @@ export async function render(view, { params }) {
     sleepTimer = null;
     sleepTick = null;
     sleepDeadline = 0;
+    sleepMinutes = 0;
     sleepAtEnd = false;
     syncSleep();
   }
 
   function syncSleep() {
-    if (sleepAtEnd) sleepBtn.textContent = "⏱ Fin de la vidéo";
+    let label = "";
+    if (sleepAtEnd) label = "Fin de la vidéo";
     else if (sleepDeadline) {
-      const left = Math.max(1, Math.ceil((sleepDeadline - Date.now()) / 60000));
-      sleepBtn.textContent = `⏱ ${left} min`;
-    } else sleepBtn.textContent = "⏱ Minuterie";
-    sleepBtn.classList.toggle("primary", Boolean(sleepDeadline || sleepAtEnd));
+      label = `${Math.max(1, Math.ceil((sleepDeadline - Date.now()) / 60000))} min`;
+    }
+    sleepChipLabel.textContent = label;
+    sleepChip.hidden = !label;
+    sleepSel.value = sleepAtEnd ? "end" : sleepDeadline ? String(sleepMinutes) : "0";
   }
 
   function fireSleep() {
@@ -228,6 +311,7 @@ export async function render(view, { params }) {
 
   function setSleep(minutes) {
     clearSleep();
+    sleepMinutes = minutes;
     sleepDeadline = Date.now() + minutes * 60000;
     sleepTimer = setTimeout(fireSleep, minutes * 60000);
     sleepTick = setInterval(syncSleep, 30000); // libellé = temps restant
@@ -235,59 +319,55 @@ export async function render(view, { params }) {
     toast(`Minuterie : ${minutes} min`);
   }
 
-  function sleepMenu() {
-    const buttons = [
-      ...SLEEP_PRESETS.map((m) =>
-        el(
-          "button",
-          {
-            class: "btn",
-            onclick: () => {
-              close();
-              setSleep(m);
-            },
-          },
-          `${m} min`,
-        ),
-      ),
-      el(
-        "button",
-        {
-          class: "btn",
-          onclick: () => {
-            close();
-            clearSleep();
-            sleepAtEnd = true;
-            syncSleep();
-            toast("Minuterie : fin de la vidéo");
-          },
-        },
-        "Fin de la vidéo",
-      ),
-      el(
-        "button",
-        {
-          class: "btn",
-          onclick: () => {
-            close();
-            clearSleep();
-            toast("Minuterie désactivée");
-          },
-        },
-        "Désactiver",
-      ),
-    ];
-    const { close } = openModal(
-      "Minuterie de mise en veille",
-      el("div", { class: "list-pick" }, buttons),
-    );
-  }
+  sleepSel.addEventListener("change", () => {
+    const choice = sleepSel.value;
+    if (choice === "end") {
+      clearSleep();
+      sleepAtEnd = true;
+      syncSleep();
+      toast("Minuterie : fin de la vidéo");
+    } else if (Number(choice) > 0) {
+      setSleep(Number(choice));
+    } else {
+      clearSleep();
+      toast("Minuterie désactivée");
+    }
+  });
 
-  const shareBtn = el(
-    "button",
-    { class: "btn", title: "Partager le lien public", onclick: () => shareVideo() },
-    "Partager",
-  );
+  const shareBtn = iconBtn("share-2", "Partager", {
+    title: "Partager le lien public",
+    onclick: () => shareVideo(),
+  });
+  const plBtn = iconBtn("list-plus", "Playlist", {
+    title: "Ajouter à une playlist",
+    onclick: () => addToPlaylistModal(video),
+  });
+  const moreBtn = iconBtn("ellipsis", null, {
+    title: "Plus d'actions",
+    "aria-haspopup": "menu",
+    onclick: (e) => {
+      e.stopPropagation();
+      setPanel(false);
+      showMenu(e, [
+        { icon: "info", label: "Détails de la vidéo", onClick: () => navigate(detailPath(video)) },
+        video.channel_id
+          ? {
+              icon: "user",
+              label: "Ouvrir la chaîne",
+              onClick: () =>
+                navigate(channelPath(video.channel_id, platform, video.channel_title)),
+            }
+          : null,
+        document.pictureInPictureEnabled
+          ? {
+              icon: "picture-in-picture-2",
+              label: "Picture-in-picture",
+              onClick: () => videoEl.requestPictureInPicture().catch(() => {}),
+            }
+          : null,
+      ]);
+    },
+  });
 
   async function shareVideo() {
     // Toujours le lien public de la plateforme : l'URL interne ytui n'a aucun
@@ -347,13 +427,21 @@ export async function render(view, { params }) {
   function setSideHidden(section, hidden) {
     if (hiddenBefore) hiddenBefore.set(section, hidden);
     else section.hidden = hidden;
+    syncSide();
+  }
+
+  // Panneau latéral sans rien à montrer (file vide, pas de suggestions ni de
+  // chat) : le lecteur récupère toute la largeur au lieu d'une colonne vide.
+  let watchRoot = null;
+  function syncSide() {
+    if (!watchRoot) return;
+    const empty = [...sidePanels, commentsSection].every((section) => section.hidden);
+    watchRoot.classList.toggle("no-side", empty);
   }
 
   const commentsBtn =
     platform === "youtube" || platform === "odysee"
-      ? el("button", {
-          class: "btn",
-          text: "Commentaires",
+      ? iconBtn("message-square", "Commentaires", {
           "aria-pressed": "false",
           onclick: () => toggleComments(),
         })
@@ -373,7 +461,8 @@ export async function render(view, { params }) {
       commentsSection.hidden = false;
     }
     const on = hiddenBefore !== null;
-    commentsBtn.classList.toggle("primary", on);
+    syncSide();
+    commentsBtn.classList.toggle("on", on);
     commentsBtn.setAttribute("aria-pressed", on ? "true" : "false");
   }
 
@@ -382,8 +471,7 @@ export async function render(view, { params }) {
   let liked = false;
   const likeBtn =
     platform === "youtube"
-      ? el("button", {
-          class: "btn",
+      ? iconBtn("thumbs-up", "J'aime", {
           "aria-pressed": "false",
           onclick: async () => {
             likeBtn.disabled = true;
@@ -391,7 +479,7 @@ export async function render(view, { params }) {
               await api.likeVideo(id, liked ? "none" : "like");
               liked = !liked;
               syncLike();
-              toast(liked ? "Vidéo aimée 👍" : "J'aime retiré");
+              toast(liked ? "Vidéo aimée" : "J'aime retiré");
             } catch (err) {
               if (err instanceof ApiError && err.status === 409) {
                 toast("Compte YouTube non connecté", { error: true });
@@ -406,9 +494,9 @@ export async function render(view, { params }) {
       : null;
 
   function syncLike() {
-    likeBtn.textContent = liked ? "👍 Aimé" : "👍 J'aime";
+    setBtnLabel(likeBtn, liked ? "Aimé" : "J'aime");
     likeBtn.setAttribute("aria-pressed", liked ? "true" : "false");
-    likeBtn.classList.toggle("primary", liked);
+    likeBtn.classList.toggle("on", liked);
   }
   if (likeBtn) {
     syncLike();
@@ -422,50 +510,49 @@ export async function render(view, { params }) {
       .catch(() => {});
   }
 
-  view.append(
+  watchRoot = el(
+    "div",
+    { class: "watch" },
     el(
       "div",
-      { class: "watch" },
+      {},
+      playerBox,
       el(
         "div",
-        {},
-        playerBox,
+        { class: "watch-info" },
+        titleEl,
+        el("div", { class: "channel-line" }, channelAvatar, channelLink, metaLine),
         el(
           "div",
-          { class: "watch-info" },
-          titleEl,
-          el("div", { class: "channel-line" }, channelLink, metaLine),
+          { class: "watch-actions" },
+          el("div", { class: "btn-group" }, prevBtn, nextBtn),
+          likeBtn,
+          shareBtn,
+          plBtn,
+          commentsBtn,
+          // Groupe de droite : puces d'état + réglages + « plus », qui passent
+          // ensemble à la ligne sur une colonne étroite.
           el(
             "div",
-            { class: "watch-actions" },
-            speedSel,
-            gainSel,
-            qualitySel,
-            subSel,
-            prevBtn,
-            nextBtn,
-            autoplayBtn,
-            loopBtn,
-            sleepBtn,
-            shareBtn,
-            pipBtn,
-            likeBtn,
-            commentsBtn,
-            detailsBtn,
-            plBtn,
+            { class: "actions-end" },
+            loopChip,
+            sleepChip,
+            el("div", { class: "menu-anchor" }, settingsBtn, settingsPanel),
+            moreBtn,
           ),
         ),
       ),
-      el(
-        "aside",
-        { class: "side-panel" },
-        queueSection,
-        chatSection,
-        relatedSection,
-        commentsSection,
-      ),
+    ),
+    el(
+      "aside",
+      { class: "side-panel" },
+      queueSection,
+      chatSection,
+      relatedSection,
+      commentsSection,
     ),
   );
+  view.append(watchRoot);
 
   // ─── Overlay (erreur / autoplay bloqué) ───
 
@@ -551,9 +638,9 @@ export async function render(view, { params }) {
       if (streams.is_live) markLive();
       renderMeta();
       subSel.replaceChildren(
-        el("option", { value: "-1" }, "Sous-titres : aucun"),
+        el("option", { value: "-1" }, "Aucun"),
         ...(streams.subtitles || []).map((s, i) =>
-          el("option", { value: String(i) }, `Sous-titres : ${s.label || s.lang}`),
+          el("option", { value: String(i) }, s.label || s.lang),
         ),
       );
     },
@@ -571,7 +658,7 @@ export async function render(view, { params }) {
               videoEl.play().catch(() => {});
             },
           },
-          "▶",
+          icon("play", { size: 34 }),
         ),
       );
     },
@@ -595,9 +682,17 @@ export async function render(view, { params }) {
   // ─── File d'attente & « À suivre » ───
 
   function sideRow(v, { onClick, onRemove } = {}) {
-    return el(
+    const row = el(
       "div",
-      { class: "row", tabindex: "0", role: "button", onclick: onClick },
+      {
+        class: "row",
+        tabindex: "0",
+        role: "button",
+        onclick: onClick,
+        onkeydown: (e) => {
+          if (e.key === "Enter") onClick?.();
+        },
+      },
       el(
         "div",
         { class: "row-thumb" },
@@ -607,37 +702,35 @@ export async function render(view, { params }) {
       el(
         "div",
         { class: "txt" },
-        el("div", { class: "title", title: v.title, text: v.title }),
+        el("div", { class: "title clamp", title: v.title, text: v.title }),
         v.channel_title ? el("div", { class: "sub", text: v.channel_title }) : null,
       ),
       onRemove
         ? el(
             "div",
             { class: "actions" },
-            el(
-              "button",
-              {
-                class: "btn icon small",
-                title: "Retirer de la file",
-                onclick: (e) => {
-                  e.stopPropagation();
-                  onRemove();
-                },
+            iconBtn("x", null, {
+              class: "small",
+              title: "Retirer de la file",
+              onclick: (e) => {
+                e.stopPropagation();
+                onRemove();
               },
-              "✕",
-            ),
+            }),
           )
         : null,
     );
+    row._video = v; // raccourci q (file d'attente)
+    return row;
   }
 
   function renderQueue() {
     queuePanel.replaceChildren();
     const upcoming = queue.upcoming;
-    if (!upcoming.length) {
-      queuePanel.append(el("div", { class: "sub", text: "File d'attente vide" }));
-      return;
-    }
+    // File vide : pas de section « vide » en tête du panneau, « À suivre »
+    // remonte. Pendant un direct, la section cède la place au chat.
+    setSideHidden(queueSection, chatStarted || !upcoming.length);
+    if (!upcoming.length) return;
     upcoming.forEach((v, i) => {
       queuePanel.append(
         sideRow(v, {
@@ -827,17 +920,8 @@ export async function render(view, { params }) {
     if (queue.hasPrevious) queue.previous();
     else if (!isLive) videoEl.currentTime = 0;
   };
-  playerActions.toggleAutoplay = () => {
-    prefs.autoplay = !prefs.autoplay;
-    syncAutoplay();
-    toast(prefs.autoplay ? "Lecture auto activée" : "Lecture auto désactivée");
-  };
-  playerActions.toggleLoop = () => {
-    if (isLive) return;
-    player.setLoop(!player.loop);
-    syncLoop();
-    toast(player.loop ? "Boucle activée" : "Boucle désactivée");
-  };
+  playerActions.toggleAutoplay = toggleAutoplay;
+  playerActions.toggleLoop = toggleLoop;
 
   renderQueue();
   syncNav();
@@ -850,6 +934,7 @@ export async function render(view, { params }) {
 
   return () => {
     disposed = true;
+    document.removeEventListener("click", closePanel);
     stopChat();
     clearSleep();
     queue.removeEventListener("change", onQueueChange);

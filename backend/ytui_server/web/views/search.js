@@ -2,7 +2,8 @@
 
 import { api } from "../js/api.js";
 import { navigate } from "../js/router.js";
-import { el, spinner, emptyState, errorToast, videoGrid } from "../js/ui.js";
+import { el, emptyState, errorToast, skeletonGrid, videoGrid } from "../js/ui.js";
+import { icon } from "../js/icons.js";
 
 const SOURCES = [
   ["youtube", "YouTube"],
@@ -65,7 +66,7 @@ export async function render(view, { query }) {
     },
     input,
     el("div", { class: "seg" }, segButtons),
-    el("button", { class: "btn primary", type: "submit", text: "Rechercher" }),
+    el("button", { class: "btn primary", type: "submit" }, icon("search"), el("span", { text: "Rechercher" })),
   );
 
   view.append(el("div", { class: "page-head" }, el("h1", { text: "Recherche" })), form, results);
@@ -73,18 +74,18 @@ export async function render(view, { query }) {
   if (q) {
     await runSearch(results, q, source);
   } else {
-    results.append(emptyState("Recherchez des vidéos, chaînes ou playlists."));
+    results.append(emptyState("Recherchez des vidéos, chaînes ou playlists.", "search"));
     input.focus();
   }
 }
 
 async function runSearch(results, q, source) {
-  results.replaceChildren(spinner());
+  results.replaceChildren(skeletonGrid(8));
   try {
     const out = await api.search(q, source, 20);
     const items = out.items || [];
     results.replaceChildren(
-      items.length ? videoGrid(items) : emptyState(`Aucun résultat pour « ${q} »`),
+      items.length ? videoGrid(items) : emptyState(`Aucun résultat pour « ${q} »`, "search"),
     );
   } catch (err) {
     errorToast(err);

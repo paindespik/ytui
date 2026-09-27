@@ -54,14 +54,21 @@ export function watchKey(video) {
 
 export const watched = {
   ids: new Set(),
+  // Fraction vue (0-1) par clé, pour la barre de progression des miniatures.
+  progress: new Map(),
   async load() {
     try {
       const out = await api.watchedIds();
       this.ids = new Set(out.ids);
+      this.progress = new Map(Object.entries(out.progress || {}));
     } catch {
       /* non-blocking: the ✓ badges simply stay hidden */
     }
   },
   has(video) { return this.ids.has(watchKey(video)); },
   add(video) { this.ids.add(watchKey(video)); },
+  fraction(video) { return this.progress.get(watchKey(video)) || 0; },
+  setProgress(video, fraction) {
+    if (fraction > 0) this.progress.set(watchKey(video), Math.min(1, fraction));
+  },
 };

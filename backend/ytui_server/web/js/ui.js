@@ -5,6 +5,7 @@ import { api, ApiError } from "./api.js";
 import { watched } from "./state.js";
 import { queue } from "./queue.js";
 import { navigate } from "./router.js";
+import { icon } from "./icons.js";
 
 // ─── Element builder ───
 
@@ -27,7 +28,80 @@ export function el(tag, attrs = {}, ...children) {
 }
 
 export const spinner = () => el("div", { class: "spinner" });
-export const emptyState = (msg) => el("div", { class: "empty", text: msg });
+export const emptyState = (msg, iconName = null) =>
+  el(
+    "div",
+    { class: "empty" },
+    iconName ? icon(iconName, { size: 40, cls: "empty-icon" }) : null,
+    el("div", { text: msg }),
+  );
+
+/// Bouton à icône. Sans libellé, l'icône seule s'affiche et `title` sert de
+/// nom accessible. Le libellé vit dans un <span class="lbl"> : les bascules
+/// le mettent à jour via setBtnLabel() sans effacer l'icône.
+export function iconBtn(name, label, attrs = {}) {
+  const { class: cls = "", ...rest } = attrs;
+  if (!label) {
+    return el(
+      "button",
+      {
+        class: `btn icon ${cls}`.trim(),
+        type: "button",
+        "aria-label": rest.title,
+        ...rest,
+      },
+      icon(name),
+    );
+  }
+  return el(
+    "button",
+    { class: `btn ${cls}`.trim(), type: "button", ...rest },
+    icon(name),
+    el("span", { class: "lbl", text: label }),
+  );
+}
+
+export function setBtnLabel(btn, label) {
+  const span = btn.querySelector(".lbl");
+  if (span) span.textContent = label;
+  else btn.textContent = label;
+}
+
+// ─── Squelettes de chargement (à la place d'un spinner centré) ───
+
+export function skeletonGrid(count = 8) {
+  return el(
+    "div",
+    { class: "grid", "aria-busy": "true", "aria-label": "Chargement…" },
+    Array.from({ length: count }, () =>
+      el(
+        "div",
+        { class: "card skeleton" },
+        el("div", { class: "thumb sk" }),
+        el(
+          "div",
+          { class: "meta" },
+          el("div", { class: "txt" }, el("div", { class: "sk sk-line" }), el("div", { class: "sk sk-line short" })),
+        ),
+      ),
+    ),
+  );
+}
+
+export function skeletonRows(count = 6) {
+  return el(
+    "div",
+    { class: "rows", "aria-busy": "true", "aria-label": "Chargement…" },
+    Array.from({ length: count }, () =>
+      el(
+        "div",
+        { class: "row skeleton" },
+        el("div", { class: "row-thumb sk" }),
+        el("div", { class: "txt" }, el("div", { class: "sk sk-line" }), el("div", { class: "sk sk-line short" })),
+      ),
+    ),
+  );
+}
 
 // ─── Formatters (French) ───
 
@@ -134,43 +208,75 @@ export const isLiveVideo = (v) =>
 
 // ─── Video card (grid) ───
 
+export const PLATFORM_LABELS = {
+  odysee: "Odysee",
+  bitchute: "BitChute",
+  twitch: "Twitch",
+  tiktok: "TikTok",
+  crowdbunker: "CrowdBunker",
+};
+
+// Au-delà de cette fraction, une vidéo est « vue » (grisée) — même seuil
+// que la règle de reprise (95 %) arrondi vers le bas pour les génériques.
+const DONE_FRACTION = 0.9;
+
 export function videoCard(video, { live = false, onOpen } = {}) {
   const isLive = live || isLiveVideo(video);
   const isVideo = video.kind === "video";
+  const seen = !isLive && isVideo && watched.has(video);
+  const fraction = !isLive && isVideo ? watched.fraction(video) : 0;
+  const done = fraction >= DONE_FRACTION;
+  const platformLabel = PLATFORM_LABELS[video.platform];
   const thumb = el(
     "div",
     { class: "thumb" },
     video.thumbnail_url
       ? el("img", { src: video.thumbnail_url, loading: "lazy", alt: "" })
-      : el("div", { class: "ph", text: video.kind === "channel" ? "◉" : "▶" }),
-    !isVideo
-      ? el("span", {
-          class: "badge kind",
-          text: video.kind === "channel" ? "chaîne" : "playlist",
-        })
+      : el("div", { class: "ph" }, icon(video.kind === "channel" ? "user" : "play", { size: 30 })),
+    platformLabel
+      ? el("span", { class: `chip platform ${video.platform}`, text: platformLabel })
       : null,
-    isLive ? el("span", { class: `badge live ${video.platform}`, text: "LIVE" }) : null,
+    !isVideo
+      ? el(
+          "span",
+          { class: "badge kind" },
+          icon(video.kind === "channel" ? "user" : "list-video", { size: 13 }),
+          video.kind === "channel" ? "Chaîne" : "Playlist",
+        )
+      : null,
+    isLive ? el("span", { class: `badge live ${video.platform}`, text: "EN DIRECT" }) : null,
     !isLive && video.duration
       ? el("span", { class: "badge", text: fmtDuration(video.duration) })
       : null,
-    !isLive && isVideo && watched.has(video)
-      ? el("span", { class: "badge watched", text: "✓" })
+    seen && (done || !fraction)
+      ? el(
+          "span",
+          { class: "badge seen", title: done ? "Déjà vue" : "Déjà ouverte" },
+          icon("check", { size: 13 }),
+          done ? "Vue" : null,
+        )
+      : null,
+    fraction > 0
+      ? el(
+          "div",
+          { class: "thumb-progress" },
+          el("div", { style: `width:${Math.round(Math.min(1, fraction) * 100)}%` }),
+        )
       : null,
   );
   const views =
     video.kind === "video" && video.view_count != null
       ? `${fmtCount(video.view_count)} vues`
       : "";
-  const sub = [
-    video.channel_title,
-    views,
-    video.published ? fmtRelative(video.published) : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const when = video.published ? fmtRelative(video.published) : "";
   const card = el(
     "div",
-    { class: "card", tabindex: "0", role: "button", "aria-label": video.title },
+    {
+      class: done ? "card done" : "card",
+      tabindex: "0",
+      role: "button",
+      "aria-label": video.title,
+    },
     thumb,
     el(
       "div",
@@ -179,7 +285,8 @@ export function videoCard(video, { live = false, onOpen } = {}) {
         "div",
         { class: "txt" },
         el("div", { class: "title", title: video.title, text: video.title }),
-        sub ? el("div", { class: "sub", text: sub }) : null,
+        video.channel_title ? el("div", { class: "sub channel-name", text: video.channel_title }) : null,
+        views || when ? el("div", { class: "sub", text: [views, when].filter(Boolean).join(" · ") }) : null,
       ),
       isVideo || video.kind === "playlist"
         ? el(
@@ -187,12 +294,13 @@ export function videoCard(video, { live = false, onOpen } = {}) {
             {
               class: "menu-btn",
               title: "Actions",
+              "aria-label": "Actions",
               onclick: (e) => {
                 e.stopPropagation();
                 cardMenu(e, video);
               },
             },
-            "⋮",
+            icon("ellipsis-vertical"),
           )
         : null,
     ),
@@ -213,90 +321,109 @@ export function videoGrid(videos, opts = {}) {
   return el("div", { class: "grid" }, videos.map((v) => videoCard(v, opts)));
 }
 
-// ─── Context menu (⋮) ───
+// ─── Menus flottants (⋮, ⋯) et panneaux ───
 
 function closeMenus() {
   document.querySelectorAll(".ctx-menu").forEach((m) => m.remove());
 }
 document.addEventListener("click", closeMenus);
 
-export function cardMenu(evt, video) {
+/// Ferme le menu contextuel ou le panneau ouvert (Échap). Vrai si quelque
+/// chose a été fermé : la touche n'a alors pas d'autre effet.
+export function closeFloating() {
+  const menus = document.querySelectorAll(".ctx-menu");
+  if (menus.length) {
+    closeMenus();
+    return true;
+  }
+  const open = [...document.querySelectorAll(".popover")].find((p) => !p.hidden);
+  if (open) {
+    if (typeof open._close === "function") open._close();
+    else open.hidden = true;
+    return true;
+  }
+  return false;
+}
+
+/// Menu d'actions : `items` = [{ icon, label, onClick }] (les null sont
+/// ignorés). Ancré au clic, ou sous le bouton quand il vient du clavier.
+export function showMenu(evt, items) {
   closeMenus();
-  const isPlaylist = video.kind === "playlist";
   const menu = el(
     "div",
-    { class: "ctx-menu" },
-    isPlaylist
-      ? null
-      : el(
-          "button",
-          {
-            onclick: () => {
-              closeMenus();
-              queue.enqueue(video);
-              toast("Ajouté à la file d'attente");
-            },
+    { class: "ctx-menu", role: "menu" },
+    items.filter(Boolean).map(({ icon: name, label, onClick }) =>
+      el(
+        "button",
+        {
+          role: "menuitem",
+          onclick: () => {
+            closeMenus();
+            onClick();
           },
-          "Ajouter à la file d'attente",
-        ),
-    isPlaylist
-      ? null
-      : el(
-          "button",
-          {
-            onclick: () => {
-              closeMenus();
-              navigate(detailPath(video));
-            },
-          },
-          "Détails",
-        ),
-    isPlaylist
-      ? el(
-          "button",
-          {
-            onclick: () => {
-              closeMenus();
-              importPlaylistModal({
-                source: video.video_id,
-                platform: video.platform,
-                defaultName: video.title,
-              });
-            },
-          },
-          "Importer dans une playlist locale",
-        )
-      : null,
-    // Les cartes « chaîne » ouvrent déjà la chaîne au clic.
-    video.kind !== "channel" && video.channel_id
-      ? el(
-          "button",
-          {
-            onclick: () => {
-              closeMenus();
-              navigate(channelPath(video.channel_id, video.platform, video.channel_title));
-            },
-          },
-          "Ouvrir la chaîne",
-        )
-      : null,
-    isPlaylist
-      ? null
-      : el(
-          "button",
-          {
-            onclick: () => {
-              closeMenus();
-              addToPlaylistModal(video);
-            },
-          },
-          "Ajouter à une playlist",
-        ),
+        },
+        name ? icon(name, { size: 16 }) : null,
+        el("span", { text: label }),
+      ),
+    ),
   );
   document.body.append(menu);
   const rect = menu.getBoundingClientRect();
-  menu.style.left = Math.min(evt.clientX, window.innerWidth - rect.width - 8) + "px";
-  menu.style.top = Math.min(evt.clientY, window.innerHeight - rect.height - 8) + "px";
+  let x = evt.clientX;
+  let y = evt.clientY;
+  const anchor = evt.currentTarget || evt.target;
+  if ((!x && !y) && anchor && anchor.getBoundingClientRect) {
+    const r = anchor.getBoundingClientRect();
+    x = r.right - rect.width;
+    y = r.bottom + 4;
+  }
+  menu.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8)) + "px";
+  menu.style.top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8)) + "px";
+  menu.querySelector("button")?.focus();
+  return menu;
+}
+
+export function cardMenu(evt, video) {
+  const isPlaylist = video.kind === "playlist";
+  showMenu(evt, [
+    isPlaylist
+      ? null
+      : {
+          icon: "list-end",
+          label: "Ajouter à la file d'attente",
+          onClick: () => {
+            queue.enqueue(video);
+            toast("Ajouté à la file d'attente");
+          },
+        },
+    isPlaylist
+      ? null
+      : { icon: "info", label: "Détails", onClick: () => navigate(detailPath(video)) },
+    isPlaylist
+      ? {
+          icon: "download",
+          label: "Importer dans une playlist locale",
+          onClick: () =>
+            importPlaylistModal({
+              source: video.video_id,
+              platform: video.platform,
+              defaultName: video.title,
+            }),
+        }
+      : null,
+    // Les cartes « chaîne » ouvrent déjà la chaîne au clic.
+    video.kind !== "channel" && video.channel_id
+      ? {
+          icon: "user",
+          label: "Ouvrir la chaîne",
+          onClick: () =>
+            navigate(channelPath(video.channel_id, video.platform, video.channel_title)),
+        }
+      : null,
+    isPlaylist
+      ? null
+      : { icon: "list-plus", label: "Ajouter à une playlist", onClick: () => addToPlaylistModal(video) },
+  ]);
 }
 
 export async function addToPlaylistModal(video) {
@@ -382,6 +509,7 @@ export async function importPlaylistModal({ source, platform = "youtube", defaul
           "button",
           {
             class: "btn primary",
+            type: "button",
             onclick: async () => {
               close();
               const name = await promptModal("Nouvelle playlist", {
@@ -393,7 +521,8 @@ export async function importPlaylistModal({ source, platform = "youtube", defaul
               resolve(await runImport(source, { platform, name }));
             },
           },
-          "＋ Nouvelle playlist",
+          icon("plus"),
+          el("span", { text: "Nouvelle playlist" }),
         ),
         lists.map((p) =>
           el(

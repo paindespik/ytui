@@ -4,6 +4,7 @@ import { route, dispatch, navigate, parseHash } from "./router.js";
 import { api } from "./api.js";
 import { watched } from "./state.js";
 import { initShortcuts, showHelp } from "./shortcuts.js";
+import { icon } from "./icons.js";
 
 import * as login from "../views/login.js";
 import * as feed from "../views/feed.js";
@@ -36,8 +37,15 @@ route("/settings", settings.render);
 const view = document.getElementById("view");
 const appRoot = document.getElementById("app");
 
+// Icônes de la navigation (déclarées en data-icon dans index.html).
+document.querySelectorAll("#sidebar [data-icon]").forEach((node) => {
+  node.prepend(icon(node.dataset.icon, { size: 20 }));
+});
+
 function highlightNav() {
   const { path } = parseHash();
+  // Hors session, la navigation ne mène qu'à des 401 : la masquer.
+  appRoot.classList.toggle("no-nav", path === "/login");
   document.querySelectorAll("#sidebar a[data-nav]").forEach((a) => {
     const target = a.dataset.nav;
     a.classList.toggle("active", target === "/" ? path === "/" : path.startsWith(target));

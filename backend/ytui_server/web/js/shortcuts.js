@@ -3,7 +3,7 @@
 // j/k/Entrée/q navigation over .card/.row elements automatically.
 
 import { navigate, dispatch, parseHash } from "./router.js";
-import { el, openModal, anyModalOpen, toast } from "./ui.js";
+import { el, openModal, anyModalOpen, toast, closeFloating } from "./ui.js";
 import { queue } from "./queue.js";
 
 // player.js assigns: toggle, seekBy, speedBy, cycleSubtitles, fullscreen,
@@ -13,7 +13,9 @@ export const playerActions = {};
 let focusIndex = -1;
 
 function focusables() {
-  return [...document.querySelectorAll("#view .card, #view .row")];
+  return [...document.querySelectorAll("#view .card, #view .row")].filter(
+    (n) => !n.classList.contains("skeleton"),
+  );
 }
 
 function moveFocus(delta) {
@@ -114,13 +116,9 @@ export function initShortcuts() {
         showHelp();
         return;
       case "Escape": {
-        // Un menu contextuel ouvert se ferme en premier ; sur l'accueil il n'y a
-        // rien derrière, et remonter sortait carrément de l'application.
-        const menu = document.querySelector(".ctx-menu");
-        if (menu) {
-          menu.remove();
-          return;
-        }
+        // Un menu ou un panneau ouvert se ferme en premier ; sur l'accueil il
+        // n'y a rien derrière, et remonter sortait carrément de l'application.
+        if (closeFloating()) return;
         if (parseHash().path !== "/") history.back();
         return;
       }

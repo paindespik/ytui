@@ -12,6 +12,8 @@ import {
   fmtDate,
   channelPath,
   playVideos,
+  iconBtn,
+  setBtnLabel,
 } from "../js/ui.js";
 import { createComments } from "../js/comments.js";
 
@@ -50,12 +52,17 @@ export async function render(view, { params }) {
   }
   view.replaceChildren();
 
+  // Tout ce que la lecture (et donc l'historique) doit garder : sans
+  // channel_id ni miniature, la ligne d'historique perdait l'un et l'autre.
   const asVideo = {
     video_id: d.video_id,
     platform,
     kind: "video",
     title: d.title,
     channel_title: d.channel_title,
+    channel_id: d.channel_id || "",
+    thumbnail_url: d.thumbnail_url || "",
+    view_count: d.view_count ?? null,
     duration: d.duration,
   };
 
@@ -73,10 +80,14 @@ export async function render(view, { params }) {
     el(
       "div",
       { class: "detail-channel" },
-      el("a", {
-        href: "#" + channelPath(d.channel_id, platform, d.channel_title),
-        text: d.channel_title || "",
-      }),
+      // Sans id, le lien menait à « #/channel/youtube/ » : route inconnue,
+      // retour silencieux à l'accueil.
+      d.channel_id
+        ? el("a", {
+            href: "#" + channelPath(d.channel_id, platform, d.channel_title),
+            text: d.channel_title || "",
+          })
+        : el("span", { text: d.channel_title || "" }),
     ),
     meta ? el("div", { class: "detail-meta", text: meta }) : null,
   );
@@ -84,11 +95,7 @@ export async function render(view, { params }) {
   const actions = el(
     "div",
     { class: "detail-actions" },
-    el("button", {
-      class: "btn primary",
-      text: "▶ Lire",
-      onclick: () => playVideos([asVideo]),
-    }),
+    iconBtn("play", "Lire", { class: "primary", onclick: () => playVideos([asVideo]) }),
   );
   if (platform === "youtube") {
     actions.append(likeToggle(d.video_id));
@@ -110,16 +117,14 @@ export async function render(view, { params }) {
 
 function likeToggle(videoId) {
   let liked = false;
-  const btn = el("button", {
-    class: "btn",
-    text: "👍 J'aime",
+  const btn = iconBtn("thumbs-up", "J'aime", {
     onclick: async () => {
       btn.disabled = true;
       try {
         await api.likeVideo(videoId, liked ? "none" : "like");
         liked = !liked;
         sync();
-        toast(liked ? "Vidéo aimée 👍" : "J'aime retiré");
+        toast(liked ? "Vidéo aimée" : "J'aime retiré");
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           toast("Compte YouTube non connecté", { error: true });
@@ -133,9 +138,9 @@ function likeToggle(videoId) {
   });
 
   function sync() {
-    btn.textContent = liked ? "👍 Aimé" : "👍 J'aime";
+    setBtnLabel(btn, liked ? "Aimé" : "J'aime");
     btn.setAttribute("aria-pressed", liked ? "true" : "false");
-    btn.classList.toggle("primary", liked);
+    btn.classList.toggle("on", liked);
   }
   sync();
 

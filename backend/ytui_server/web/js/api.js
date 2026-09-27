@@ -108,7 +108,10 @@ export const api = {
   // ─── followed channels ───
   channels: () => request("GET", "/api/channels"),
   followChannel: (ref) => request("POST", "/api/channels", { body: { ref } }),
-  unfollowChannel: (channelId) => request("DELETE", `/api/channels/${id(channelId)}`),
+  // `platform` scopes the unfollow: the same login can be followed on Twitch
+  // and on TikTok.
+  unfollowChannel: (channelId, platform) =>
+    request("DELETE", `/api/channels/${id(channelId)}`, { query: { platform } }),
 
   // ─── history ───
   history: (limit = 200) => request("GET", "/api/history", { query: { limit } }),

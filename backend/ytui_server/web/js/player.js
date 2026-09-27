@@ -219,9 +219,21 @@ export class Player {
     // distingue d'une VOD (pas de reprise, pas de boucle, pas d'enchaînement).
     if (streams.is_live) this.live = true;
     if (this.live) this.setLoop(false);
+    // Lien direct : l'historique a été écrit sans titre (load() n'en avait pas).
+    // Le réécrire maintenant qu'on le connaît, sinon la ligne resterait vide.
+    const untitled = !v.title;
     this.cb.onMeta?.(streams);
+    if (untitled && streams.title) {
+      if (!v.title) v.title = streams.title;
+      api.recordWatch(v).catch(() => {});
+    }
 
-    if (streams.kind === "hls") {
+    if (streams.kind === "hls" && streams.proxy_path) {
+      // Direct YouTube : le proxy auto-réparant du serveur (même origine, le
+      // cookie de session suffit). Les URL de segments directes meurent ~26 s
+      // après extraction et gelaient l'image toutes les minutes.
+      this._useHls(streams.proxy_path, 0, { sameOrigin: true });
+    } else if (streams.kind === "hls") {
       // Lives (YouTube/Twitch/TikTok). Un room TikTok FLV-only arrive ici
       // avec une URL .flv (chemin chaud, cf. backend).
       let isFlv = false;
@@ -278,8 +290,8 @@ export class Player {
     this._play();
   }
 
-  _useHls(url, start = 0) {
-    const src = api.proxyHlsUrl(url);
+  _useHls(url, start = 0, { sameOrigin = false } = {}) {
+    const src = sameOrigin ? url : api.proxyHlsUrl(url);
     if (window.Hls && window.Hls.isSupported()) {
       this._engine = "hls";
       const h = new window.Hls();
@@ -553,6 +565,7 @@ export class Player {
     // du flux, l'écrire effacerait le point de reprise qu'on vient de lire.
     if (!this._resumeSettled && position < this._resumeTarget - 5) return;
     const video = this.video;
+    watched.setProgress(video, position / duration); // barre des miniatures
     api.savePosition(video.video_id, position, duration, video.platform, { keepalive }).catch(async (err) => {
       // 404 : l'enregistrement dans l'historique (fire and forget) n'a pas
       // encore atterri, ou la ligne a été évincée. Réenregistrer puis réessayer
@@ -570,13 +583,19 @@ export class Player {
 
   // ─── SponsorBlock ───
 
+  // Les segments d'une vidéo quittée pendant la requête ne doivent pas
+  // s'appliquer à la suivante (sauts au mauvais endroit).
   async _loadSponsor() {
+    const video = this.video;
+    let segments = [];
     try {
-      const out = await api.sponsorSegments(this.video.video_id);
-      this._segments = out.segments || [];
+      const out = await api.sponsorSegments(video.video_id, video.platform);
+      segments = out.segments || [];
     } catch {
-      this._segments = [];
+      segments = [];
     }
+    if (this._destroyed || this.video !== video) return;
+    this._segments = segments;
   }
 
   _onTimeUpdate() {

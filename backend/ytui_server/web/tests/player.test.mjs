@@ -887,4 +887,89 @@ describe("lecteur web — reprise et playlist", () => {
       player.destroy();
     });
   });
+
+  // ─── Revue 2026-09 : direct YouTube, lien nu, SponsorBlock, progression ───
+
+  describe("revue — correctifs", () => {
+    test("direct YouTube : hls.js joue le proxy auto-réparant, pas /api/proxy/hls", async () => {
+      const hls = fakeHls();
+      globalThis.window.Hls = hls.Hls;
+      mockApi(
+        routes({
+          streams: {
+            ...STREAMS_HLS,
+            is_live: true,
+            proxy_path: "/api/live/dQw4w9WgXcQ/playlist.m3u8?max_height=1440",
+          },
+        }),
+      );
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      assert.deepEqual(hls.instances.at(-1).calls.loadSource, [
+        "/api/live/dQw4w9WgXcQ/playlist.m3u8?max_height=1440",
+      ]);
+      player.destroy();
+    });
+
+    test("sans proxy_path, un HLS passe toujours par /api/proxy/hls", async () => {
+      const hls = fakeHls();
+      globalThis.window.Hls = hls.Hls;
+      mockApi(routes({ streams: STREAMS_HLS }));
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      assert.ok(hls.instances.at(-1).calls.loadSource[0].startsWith("/api/proxy/hls?url="));
+      player.destroy();
+    });
+
+    test("lien nu : l'historique est réécrit avec le titre venu de /streams", async () => {
+      const api = mockApi(routes());
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(makeVideo("bare0000001", { title: "" }));
+      await flush();
+      const posts = api.find("/api/history", "POST").map((r) => r.body.video.title);
+      assert.deepEqual(posts, ["", "Une vidéo"]);
+      player.destroy();
+    });
+
+    test("titre déjà connu : un seul enregistrement", async () => {
+      const api = mockApi(routes());
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      await flush();
+      assert.equal(api.find("/api/history", "POST").length, 1);
+      player.destroy();
+    });
+
+    test("les segments SponsorBlock d'une vidéo quittée ne s'appliquent pas à la suivante", async () => {
+      const api = mockApi([
+        { match: "/sponsor", json: { segments: [{ category: "sponsor", start: 10, end: 20 }] }, delay: 30 },
+        ...routes(),
+      ]);
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO); // requête SponsorBlock lente, en vol
+      api.routes.unshift({ match: "/sponsor", json: { segments: [] } });
+      await player.load(makeVideo("next0000001"));
+      await wait(60);
+      assert.deepEqual(player._segments, [], "segments de la vidéo précédente ignorés");
+      player.destroy();
+    });
+
+    test("la position écrite alimente la barre de progression des miniatures", async () => {
+      const { watched } = await import("../js/state.js");
+      mockApi(routes());
+      const el = new FakeMediaElement();
+      const { player } = makePlayer(el);
+      await player.load(VIDEO);
+      el.emitLoadedMetadata({ duration: 600 });
+      el.emitTimeUpdate(150);
+      player._savePosition();
+      assert.equal(watched.fraction(VIDEO), 0.25);
+      player.destroy();
+    });
+  });
 });

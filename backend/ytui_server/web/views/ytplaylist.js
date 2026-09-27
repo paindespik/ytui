@@ -3,7 +3,8 @@
 import { api } from "../js/api.js";
 import {
   el,
-  spinner,
+  iconBtn,
+  skeletonGrid,
   emptyState,
   errorToast,
   videoCard,
@@ -15,10 +16,8 @@ import { navigate } from "../js/router.js";
 export async function render(view, { params, query }) {
   const { platform, id } = params;
   const title = el("h1", { text: query.get("title") || "Playlist" });
-  const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
-  const importBtn = el("button", {
-    class: "btn",
-    text: "＋ Importer",
+  const playAllBtn = iconBtn("play", "Tout lire", { class: "primary", disabled: true });
+  const importBtn = iconBtn("download", "Importer", {
     title: "Copier toute la playlist dans une playlist ytui",
     onclick: async () => {
       const playlist = await importPlaylistModal({
@@ -31,7 +30,7 @@ export async function render(view, { params, query }) {
   });
   const body = el("div");
   view.append(el("div", { class: "page-head" }, title, playAllBtn, importBtn), body);
-  body.append(spinner());
+  body.append(skeletonGrid(8));
 
   try {
     const out = await api.playlistVideos(id, platform, 200);

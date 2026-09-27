@@ -4,7 +4,8 @@ import { api, ApiError } from "../js/api.js";
 import { navigate } from "../js/router.js";
 import {
   el,
-  spinner,
+  iconBtn,
+  skeletonRows,
   emptyState,
   errorToast,
   toast,
@@ -13,11 +14,11 @@ import {
   importPlaylistModal,
   fmtDate,
 } from "../js/ui.js";
+import { icon } from "../js/icons.js";
 
 export async function render(view) {
-  const newBtn = el("button", {
-    class: "btn primary",
-    text: "Nouvelle playlist",
+  const newBtn = iconBtn("plus", "Nouvelle playlist", {
+    class: "primary",
     onclick: async () => {
       const name = await promptModal("Nouvelle playlist", {
         placeholder: "Nom de la playlist",
@@ -37,9 +38,7 @@ export async function render(view) {
       }
     },
   });
-  const importBtn = el("button", {
-    class: "btn",
-    text: "Importer depuis YouTube",
+  const importBtn = iconBtn("download", "Importer depuis YouTube", {
     onclick: async () => {
       const source = await promptModal("Importer une playlist YouTube", {
         placeholder: "URL ou identifiant de la playlist",
@@ -57,7 +56,7 @@ export async function render(view) {
   );
 
   async function load() {
-    body.replaceChildren(spinner());
+    body.replaceChildren(skeletonRows(4));
     let playlists;
     try {
       playlists = await api.playlists();
@@ -67,7 +66,7 @@ export async function render(view) {
       return;
     }
     if (!playlists.length) {
-      body.replaceChildren(emptyState("Aucune playlist — créez-en une."));
+      body.replaceChildren(emptyState("Aucune playlist — créez-en une.", "list-video"));
       return;
     }
     body.replaceChildren(
@@ -95,7 +94,7 @@ function playlistRow(p, reload) {
         if (e.key === "Enter") navigate(`/playlist/${p.id}?name=${encodeURIComponent(p.name)}`);
       },
     },
-    el("div", { class: "row-thumb playlist-thumb" }, el("span", { text: "≡" })),
+    el("div", { class: "row-thumb playlist-thumb" }, icon("list-video", { size: 28 })),
     el(
       "div",
       { class: "txt" },
@@ -105,9 +104,8 @@ function playlistRow(p, reload) {
     el(
       "div",
       { class: "actions" },
-      el("button", {
-        class: "btn small",
-        text: "Renommer",
+      iconBtn("pencil", null, {
+        title: "Renommer",
         onclick: async (e) => {
           e.stopPropagation();
           const name = await promptModal("Renommer la playlist", {
@@ -128,9 +126,9 @@ function playlistRow(p, reload) {
           }
         },
       }),
-      el("button", {
-        class: "btn small danger",
-        text: "Supprimer",
+      iconBtn("trash-2", null, {
+        class: "danger",
+        title: "Supprimer",
         onclick: async (e) => {
           e.stopPropagation();
           const ok = await confirmModal(`Supprimer la playlist « ${p.name} » ?`);

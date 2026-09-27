@@ -11,7 +11,17 @@ import {
   errorToast,
   toast,
   confirmModal,
+  iconBtn,
+  skeletonRows,
+  PLATFORM_LABELS,
 } from "../js/ui.js";
+import { icon } from "../js/icons.js";
+
+// Initiale d'une chaîne pour sa pastille (pas d'avatar distant à charger).
+function initial(name) {
+  const letter = String(name || "?").replace(/^[@\s]+/, "").charAt(0);
+  return (letter || "?").toUpperCase();
+}
 
 function fmtUptime(seconds) {
   const s = Math.max(0, Math.floor(seconds || 0));
@@ -32,7 +42,7 @@ export async function render(view) {
   view.append(channelList);
 
   async function loadChannels() {
-    channelList.replaceChildren(spinner());
+    channelList.replaceChildren(skeletonRows(3));
     let channels;
     try {
       channels = await api.channels();
@@ -62,19 +72,26 @@ export async function render(view) {
               if (e.key === "Enter") open();
             },
           },
+          el("div", { class: "avatar", "aria-hidden": "true", text: initial(c.title || c.channel_id) }),
           el(
             "div",
             { class: "txt" },
             el("div", { class: "title", text: c.title || c.channel_id }),
-            el("div", { class: "sub", text: c.platform }),
+            el(
+              "div",
+              { class: "sub" },
+              el("span", {
+                class: `chip platform ${c.platform}`,
+                text: PLATFORM_LABELS[c.platform] || "YouTube",
+              }),
+            ),
           ),
           el(
             "div",
             { class: "actions" },
-            el("button", {
-              class: "btn icon danger",
+            iconBtn("x", null, {
+              class: "danger",
               title: "Ne plus suivre",
-              text: "✕",
               onclick: async (e) => {
                 e.stopPropagation();
                 const ok = await confirmModal(
@@ -83,7 +100,7 @@ export async function render(view) {
                 );
                 if (!ok) return;
                 try {
-                  await api.unfollowChannel(c.channel_id);
+                  await api.unfollowChannel(c.channel_id, c.platform);
                   toast("Chaîne retirée");
                   await loadChannels();
                 } catch (err) {
@@ -136,11 +153,13 @@ export async function render(view) {
         },
       },
       refInput,
-      el("button", { class: "btn primary", type: "submit", text: "Ajouter" }),
+      el("button", { class: "btn primary", type: "submit" }, icon("plus"), el("span", { text: "Ajouter" })),
     ),
     el("div", {
       class: "field-help",
-      text: "Formats acceptés : UC…, @handle, bitchute:slug, odysee:@nom, twitch:login, tiktok:user",
+      text:
+        "Formats acceptés : URL de chaîne, UC…, @handle, bitchute:slug, odysee:@nom, " +
+        "twitch:login, tiktok:user, crowdbunker:nom",
     }),
   );
 
@@ -236,9 +255,8 @@ export async function render(view) {
     el(
       "div",
       { class: "settings-footer" },
-      el("button", {
-        class: "btn danger",
-        text: "Se déconnecter",
+      iconBtn("log-out", "Se déconnecter", {
+        class: "danger",
         onclick: async () => {
           try {
             await api.logout();

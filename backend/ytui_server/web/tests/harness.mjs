@@ -694,6 +694,11 @@ export function installDom({ href = "http://localhost:8000/" } = {}) {
     createElement(tag) {
       return tag === "video" || tag === "audio" ? new FakeMediaElement(tag) : new FakeNode(tag);
     },
+    /// Icônes SVG (js/icons.js) : un noeud ordinaire suffit, innerHTML n'est
+    /// qu'une propriété inerte ici.
+    createElementNS(_ns, tag) {
+      return new FakeNode(tag);
+    },
     createTextNode(text) {
       const n = new FakeNode("#text");
       n.textContent = String(text);

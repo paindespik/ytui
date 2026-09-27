@@ -192,4 +192,68 @@ describe("vue lecture — cycle de vie et lecture auto", () => {
     await flush(4);
     assert.equal(queue.index, 0, "un direct terminé n'enchaîne pas sur une suggestion");
   });
+
+  // ─── Barre d'actions / panneau « Lecture » ───
+
+  test("file vide : la section « File d'attente » est masquée", async () => {
+    mockApi(routes());
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+    assert.ok(!textOf(view).includes("File d'attente vide"));
+    const queueSection = findText(view, "File d'attente");
+    assert.equal(queueSection?.parentNode?.hidden, true);
+  });
+
+  test("la bascule « Lecture auto » du panneau écrit la préférence", async () => {
+    mockApi(routes());
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+    const toggle = findByAttr(view, "aria-label", "Lecture auto");
+    assert.equal(toggle.checked, true, "défaut : activée");
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change"));
+    assert.equal(globalThis.localStorage.getItem("ytui.autoplay"), "false");
+  });
+
+  test("le panneau se ferme au clic extérieur, et plus d'écouteur après démontage", async () => {
+    mockApi(routes());
+    const view = document.getElementById("view");
+    const cleanup = await mount(view);
+    await flush(4);
+    const btn = findByAttr(view, "aria-haspopup", "dialog");
+    const panel = findByAttr(view, "aria-label", "Réglages de lecture");
+    btn.dispatchEvent(Object.assign(new Event("click"), { stopPropagation() {} }));
+    assert.equal(panel.hidden, false);
+    document.dispatchEvent(new Event("click"));
+    assert.equal(panel.hidden, true);
+
+    btn.dispatchEvent(Object.assign(new Event("click"), { stopPropagation() {} }));
+    cleanup();
+    document.dispatchEvent(new Event("click"));
+    assert.equal(panel.hidden, false, "l'écouteur document a été retiré au démontage");
+  });
 });
+
+/// Premier noeud dont le texte propre vaut `text`.
+function findText(root, text) {
+  for (const c of root.children || []) {
+    if (typeof c !== "object") continue;
+    if (c.textContent === text) return c;
+    const hit = findText(c, text);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/// Premier noeud portant l'attribut `name` = `value`.
+function findByAttr(root, name, value) {
+  for (const c of root.children || []) {
+    if (typeof c !== "object") continue;
+    if (c.getAttribute && c.getAttribute(name) === value) return c;
+    const hit = findByAttr(c, name, value);
+    if (hit) return hit;
+  }
+  return null;
+}

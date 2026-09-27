@@ -3,7 +3,8 @@
 import { api } from "../js/api.js";
 import {
   el,
-  spinner,
+  iconBtn,
+  skeletonRows,
   emptyState,
   errorToast,
   fmtCount,
@@ -16,7 +17,7 @@ export async function render(view) {
   view.append(el("div", { class: "page-head" }, el("h1", { text: "Historique" })));
   const body = el("div");
   view.append(body);
-  body.append(spinner());
+  body.append(skeletonRows(8));
 
   let entries;
   try {
@@ -27,7 +28,7 @@ export async function render(view) {
     return;
   }
   if (!entries.length) {
-    body.replaceChildren(emptyState("Historique vide"));
+    body.replaceChildren(emptyState("Historique vide", "history"));
     return;
   }
 
@@ -87,17 +88,16 @@ function historyRow(entry, body) {
     el(
       "div",
       { class: "actions" },
-      el("button", {
-        class: "btn icon danger",
+      iconBtn("trash-2", null, {
+        class: "danger",
         title: "Retirer de l'historique",
-        text: "🗑",
         onclick: async (e) => {
           e.stopPropagation();
           try {
             await api.removeWatch(v.video_id, v.platform);
             row.remove(); // pas de confirmation — parité avec le swipe mobile
             if (!body.querySelector(".row")) {
-              body.replaceChildren(emptyState("Historique vide"));
+              body.replaceChildren(emptyState("Historique vide", "history"));
             }
           } catch (err) {
             errorToast(err);
@@ -106,5 +106,6 @@ function historyRow(entry, body) {
       }),
     ),
   );
+  row._video = v; // raccourci q (file d'attente)
   return row;
 }

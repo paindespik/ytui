@@ -4,14 +4,17 @@ import { api, ApiError } from "../js/api.js";
 import { navigate } from "../js/router.js";
 import {
   el,
-  spinner,
   emptyState,
   errorToast,
   toast,
   videoCard,
   playVideos,
   channelPath,
+  iconBtn,
+  skeletonGrid,
+  PLATFORM_LABELS,
 } from "../js/ui.js";
+import { icon } from "../js/icons.js";
 
 // Ref de follow — même construction que mobile/lib/screens/channel.dart :
 // préfixe plateforme pour les plateformes non-YouTube, id brut pour YouTube.
@@ -27,20 +30,13 @@ export async function render(view, { params, query }) {
   const q = (query.get("q") || "").trim();
   const title = el("h1", { text: channelName || "Chaîne" });
   // Badge « en direct » : la chaîne apparaît dans /api/lives.
-  const liveBadge = el("span", {
-    class: `badge live${platform === "twitch" ? " twitch" : platform === "tiktok" ? " tiktok" : ""}`,
-    text: "● en direct",
-  });
-  liveBadge.style.display = "none";
-  liveBadge.style.marginLeft = "8px";
-  title.append(liveBadge);
-  const followBtn = el("button", {
-    class: "btn",
-    text: "Suivre",
-    disabled: true,
-    "aria-pressed": "false",
-  });
-  const playAllBtn = el("button", { class: "btn primary", text: "▶ Tout lire", disabled: true });
+  const liveBadge = el("span", { class: `chip live-chip ${platform}`, text: "EN DIRECT" });
+  liveBadge.hidden = true;
+  const platformChip = PLATFORM_LABELS[platform]
+    ? el("span", { class: `chip platform ${platform}`, text: PLATFORM_LABELS[platform] })
+    : null;
+  const followBtn = iconBtn("plus", "Suivre", { disabled: true, "aria-pressed": "false" });
+  const playAllBtn = iconBtn("play", "Tout lire", { class: "primary", disabled: true });
   const body = el("div");
 
   const searchInput = el("input", {
@@ -65,14 +61,22 @@ export async function render(view, { params, query }) {
       },
     },
     searchInput,
-    el("button", { class: "btn primary", type: "submit", text: "Rechercher" }),
+    el("button", { class: "btn", type: "submit" }, icon("search"), el("span", { text: "Rechercher" })),
     q ? el("button", { class: "btn", type: "button", text: "Effacer", onclick: () => {
       searchInput.value = "";
       navigate(channelPath(id, platform, channelName));
     } }) : null,
   );
 
-  view.append(el("div", { class: "page-head" }, title, playAllBtn, followBtn));
+  view.append(
+    el(
+      "div",
+      { class: "page-head" },
+      el("div", { class: "head-title" }, title, platformChip, liveBadge),
+      playAllBtn,
+      followBtn,
+    ),
+  );
   if (platform === "tiktok") {
     // Les pages de vidéos d'une chaîne TikTok ne sont pas listables sans
     // auth : la chaîne ne se voit que via l'onglet Lives.
@@ -86,19 +90,23 @@ export async function render(view, { params, query }) {
   api
     .lives()
     .then((lives) => {
-      if ((lives || []).some((l) => l.video && l.video.channel_id === id)) {
-        liveBadge.style.display = "inline-block";
+      if (
+        (lives || []).some(
+          (l) => l.video && l.video.channel_id === id && l.video.platform === platform,
+        )
+      ) {
+        liveBadge.hidden = false;
       }
     })
     .catch(() => {});
-  body.append(spinner());
+  body.append(skeletonGrid(8));
 
   // État de suivi (non bloquant si /channels échoue).
   let followed = false;
   const followedCheck = api
     .channels()
     .then((chans) => {
-      followed = chans.some((c) => c.channel_id === id);
+      followed = chans.some((c) => c.channel_id === id && c.platform === platform);
       syncFollowBtn();
     })
     .catch(() => syncFollowBtn()); // /channels muet : le bouton reste utilisable
@@ -106,9 +114,13 @@ export async function render(view, { params, query }) {
   // Bascule : une chaîne suivie doit pouvoir être quittée d'ici, sans passer
   // par les Réglages.
   function syncFollowBtn() {
-    followBtn.textContent = followed ? "✓ Suivie — ne plus suivre" : "Suivre";
+    followBtn.title = followed ? "Ne plus suivre cette chaîne" : "Suivre cette chaîne";
     followBtn.setAttribute("aria-pressed", followed ? "true" : "false");
-    followBtn.classList.toggle("primary", followed);
+    followBtn.classList.toggle("on", followed);
+    followBtn.replaceChildren(
+      icon(followed ? "check" : "plus"),
+      el("span", { class: "lbl", text: followed ? "Suivie" : "Suivre" }),
+    );
     followBtn.disabled = false;
   }
 
@@ -118,7 +130,7 @@ export async function render(view, { params, query }) {
     followBtn.disabled = true;
     if (followed) {
       try {
-        await api.unfollowChannel(id);
+        await api.unfollowChannel(id, platform);
         followed = false;
         toast("Chaîne retirée");
       } catch (err) {
