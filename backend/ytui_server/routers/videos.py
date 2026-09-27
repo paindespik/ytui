@@ -27,7 +27,7 @@ from ..models import (
     Video,
     VideoDetails,
 )
-from ..services import crowdbunker, dash, odysee, tiktok, twitch, ytdlp
+from ..services import bitchute, crowdbunker, dash, odysee, tiktok, twitch, ytdlp
 from ..services.live import live_key
 from ..services.youtube import ApiError, AuthError
 
@@ -76,6 +76,8 @@ async def _search_channel(
         items = await odysee.channel_videos(channel_id, limit=_CHANNEL_SCAN_CAP)
     elif platform == "crowdbunker":
         items = await crowdbunker.channel_videos(channel_id, limit=_CHANNEL_SCAN_CAP)
+    elif platform == "bitchute":
+        items = await bitchute.channel_videos(channel_id, limit=_CHANNEL_SCAN_CAP)
     else:
         items = await ytdlp.channel_videos(
             _channel_url(channel_id, platform), limit=_CHANNEL_SCAN_CAP
@@ -115,6 +117,8 @@ async def channel_videos(
             items = await odysee.channel_videos(channel_id, limit=probe, offset=offset)
         elif platform == "crowdbunker":
             items = await crowdbunker.channel_videos(channel_id, limit=probe, offset=offset)
+        elif platform == "bitchute":
+            items = await bitchute.channel_videos(channel_id, limit=probe, offset=offset)
         else:
             items = await ytdlp.channel_videos(
                 _channel_url(channel_id, platform), limit=probe, offset=offset
@@ -334,6 +338,8 @@ async def related_videos(
             items = await odysee.channel_videos(channel_id, limit=limit)
         elif platform == "crowdbunker":
             items = await crowdbunker.channel_videos(channel_id, limit=limit)
+        elif platform == "bitchute":
+            items = await bitchute.channel_videos(channel_id, limit=limit)
         else:
             items = await ytdlp.channel_videos(
                 _channel_url(channel_id, platform), limit=limit

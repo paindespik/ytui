@@ -134,7 +134,7 @@ def test_channel_videos_query_hits_youtube_search_tab(client):
 
 
 def test_channel_videos_query_filters_platforms_without_search(client):
-    """BitChute has no in-channel search: the listing is filtered on title."""
+    """Twitch has no in-channel search: the listing is filtered on title."""
     entries = [
         {"id": "aaaaaaaaaaaa", "title": "Cooking pasta"},
         {"id": "bbbbbbbbbbbb", "title": "PASTA machine review"},
@@ -143,7 +143,7 @@ def test_channel_videos_query_filters_platforms_without_search(client):
     with _patch_ydl({"entries": entries, "title": "Chan"}):
         resp = client.get(
             "/api/channels/chan0000/videos",
-            params={"platform": "bitchute", "q": "pasta"},
+            params={"platform": "twitch", "q": "pasta"},
         )
     assert resp.status_code == 200
     body = resp.json()

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from ytui_server.models import Video, VideoDetails
-from ytui_server.services import crowdbunker, odysee, ytdlp
+from ytui_server.services import bitchute, crowdbunker, odysee, ytdlp
 
 CHAN = "@channel:abcdef0123456789abcdef0123456789"
 
@@ -50,7 +50,7 @@ def test_related_bitchute_lists_channel(client):
             ytdlp, "video_details", new=AsyncMock(return_value=_details("BUchan123"))
         ),
         patch.object(
-            ytdlp,
+            bitchute,
             "channel_videos",
             new=AsyncMock(return_value=_videos(["cur0001", "b1"], "bitchute")),
         ) as listing,
@@ -60,9 +60,7 @@ def test_related_bitchute_lists_channel(client):
         )
     assert resp.status_code == 200
     assert [v["video_id"] for v in resp.json()["items"]] == ["b1"]
-    listing.assert_awaited_once_with(
-        "https://www.bitchute.com/channel/BUchan123/", limit=20
-    )
+    listing.assert_awaited_once_with("BUchan123", limit=20)
 
 
 def test_related_twitch_lists_channel(client):
