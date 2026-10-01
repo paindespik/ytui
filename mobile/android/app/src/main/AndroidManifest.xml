@@ -37,10 +37,15 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
-        <!-- Warning: Do not change service name. -->
+        <!-- Warning: Do not change service name.
+             stopWithTask: the service only exists for a player living in the
+             activity's Flutter engine. Without this flag the plugin made it
+             START_STICKY and re-armed it after a swipe or a crash, leaving a
+             "Lecture" notification with no player behind it. -->
         <service
             android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="true"
             android:exported="false"/>
     </application>
 

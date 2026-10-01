@@ -22,6 +22,10 @@ Future<void> initForegroundTask() async {
     foregroundTaskOptions: ForegroundTaskOptions(
       eventAction: ForegroundTaskEventAction.nothing(),
       allowWakeLock: true,
+      // A service restarted by the system has no player behind it (playback
+      // lives in the activity's Flutter engine): it would only resurrect a
+      // stale "Lecture" notification.
+      allowAutoRestart: false,
     ),
   );
 }

@@ -17,7 +17,9 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.view.KeyEvent
+import com.pravera.flutter_foreground_task.service.ForegroundService
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -35,6 +37,15 @@ class MainActivity : FlutterActivity() {
                     // the player (Dart side: player.dart _playingSub).
                     "setMediaPlaybackState" -> {
                         setMediaSessionPlaybackState(call.arguments as? Boolean ?: true)
+                        result.success(null)
+                    }
+                    // libmpv instance lifetime, see onDestroy.
+                    "playerCreated" -> {
+                        livePlayers++
+                        result.success(null)
+                    }
+                    "playerDisposed" -> {
+                        livePlayers = (livePlayers - 1).coerceAtLeast(0)
                         result.success(null)
                     }
                     // System share sheet for a video link (player "Partager").
@@ -71,8 +82,30 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         stopAudioMonitors()
         audioEventSink = null
+        if (livePlayers > 0) {
+            // The Flutter engine dies with this activity, but a media_kit
+            // player is native (libmpv) and only Dart can release it: when
+            // the activity goes while the player screen is still mounted —
+            // the task swiped away from recents, kept alive by the playback
+            // foreground service — libmpv survives with callbacks into a dead
+            // isolate. Playing, its next frame crashes on the detached engine
+            // ("FlutterJNI is not attached to native"); paused, it lingers
+            // until the app is reopened, and the next video's libmpv log lines
+            // (routed process-wide to the first instance) or its audiotrack
+            // output (JNI ids shared by every instance) abort the process:
+            // "Callback invoked after it has been deleted" / "mid == null".
+            // Nothing can drive that player any more, so end playback the way
+            // Android ends an app without a foreground service: stop the
+            // service (no sticky restart) and take the process down.
+            stopService(Intent(this, ForegroundService::class.java))
+            Process.killProcess(Process.myPid())
+        }
         super.onDestroy()
     }
+
+    /** media_kit players alive in this activity's engine: reported by
+     *  player.dart when it creates one and once its dispose() completed. */
+    private var livePlayers = 0
 
     private fun share(text: String, subject: String?) {
         val send = Intent(Intent.ACTION_SEND).apply {

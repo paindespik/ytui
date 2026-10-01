@@ -50,6 +50,16 @@ const _kAudioChannel = 'dev.ytui.app/audio';
 /// (see MainActivity.kt).
 const _kDeviceChannel = 'dev.ytui.app/device';
 
+/// Tells MainActivity that a libmpv instance was created (`playerCreated`) or
+/// fully released (`playerDisposed`): an activity destroyed while one is still
+/// alive takes the process down with it rather than leave libmpv calling into
+/// the dead Dart isolate (see MainActivity.onDestroy).
+void _reportNativePlayer(String method) {
+  unawaited(const MethodChannel(_kDeviceChannel)
+      .invokeMethod<void>(method)
+      .catchError((_) {}));
+}
+
 /// Maps raw playback errors to user-friendly French messages.
 String _friendlyError(String raw) {
   final lower = raw.toLowerCase();
@@ -262,6 +272,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   void initState() {
     super.initState();
     PlayerPresence.enter();
+    _reportNativePlayer('playerCreated');
     _completedSub = player.stream.completed.where((done) => done).listen((_) {
       // media_kit re-emits `completed` (and re-arms it on the next open()):
       // without this guard the queue advanced twice and skipped a video.
@@ -1382,7 +1393,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       );
     }
     unawaited(stopPlaybackService());
-    player.dispose();
+    // Unregistered only once dispose() has detached libmpv's callbacks from
+    // this isolate: until then, losing the engine would still strand them.
+    unawaited(player
+        .dispose()
+        .catchError((_) {})
+        .whenComplete(() => _reportNativePlayer('playerDisposed')));
     super.dispose();
   }
 
