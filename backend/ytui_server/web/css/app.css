@@ -815,12 +815,13 @@ kbd {
 
 /* ─── Page lecture ─── */
 
-/* Lecteur, infos et panneau latéral sont placés par zones : le mode cinéma
-   n'a qu'à redessiner la grille (lecteur seul sur la première ligne). */
+/* Lecteur, infos, commentaires et panneau latéral sont placés par zones : le
+   mode cinéma n'a qu'à redessiner la grille (lecteur seul sur la première
+   ligne). */
 .watch {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "player" "info" "side";
+  grid-template-areas: "player" "info" "side" "comments";
   gap: 0 24px;
   max-width: 1700px;
   padding-top: 8px;
@@ -829,22 +830,24 @@ kbd {
 .watch .player-box { grid-area: player; }
 .watch .watch-info { grid-area: info; min-width: 0; }
 .watch .side-panel { grid-area: side; margin-top: 8px; }
+.watch .watch-comments { grid-area: comments; min-width: 0; margin-top: 24px; }
+.watch .watch-comments .comments { max-width: none; }
 @media (min-width: 1100px) {
   .watch {
     grid-template-columns: minmax(0, 1fr) 380px;
-    grid-template-rows: auto 1fr;
-    grid-template-areas: "player side" "info side";
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas: "player side" "info side" "comments side";
   }
   .watch .side-panel { margin-top: 0; }
   /* Rien à montrer à côté (file vide, pas de suggestions) : pleine largeur. */
   .watch.no-side {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "player" "info";
+    grid-template-areas: "player" "info" "comments";
     max-width: 1300px;
   }
   /* Mode cinéma : lecteur sur toute la largeur, hauteur bornée à l'écran. */
-  .watch.cinema { max-width: none; grid-template-areas: "player player" "info side"; }
-  .watch.cinema.no-side { grid-template-areas: "player" "info"; }
+  .watch.cinema { max-width: none; grid-template-areas: "player player" "info side" "comments side"; }
+  .watch.cinema.no-side { grid-template-areas: "player" "info" "comments"; }
   .watch.cinema .player-box {
     aspect-ratio: auto;
     height: min(calc((100vw - var(--sidebar-w) - 48px) * 9 / 16), calc(100vh - 150px));
@@ -1002,15 +1005,6 @@ kbd {
 .side-panel .rows .row { padding: 6px; gap: 10px; }
 .side-panel .rows .row .row-thumb { flex-basis: 150px; }
 .side-panel .rows .row .title { font-size: 13.5px; }
-.side-panel .comments {
-  max-width: none;
-  max-height: 75vh;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-.side-panel .comment-form { flex-wrap: wrap; }
-.side-panel .comment-form .input { min-width: 0; }
-
 /* ─── Chat en direct ─── */
 
 .chat-body {

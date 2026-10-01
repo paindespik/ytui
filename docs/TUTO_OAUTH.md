@@ -122,9 +122,9 @@ Lancez ytui et sélectionnez une vidéo YouTube, puis appuyez sur **L** (like) o
 Ces deux clients passent par le même jeton côté serveur, et exposent les actions **pendant la lecture** (hors plein écran) :
 
 - **👍 J'aime / 👍 Aimé** : bascule. L'état initial est lu via `GET /api/videos/{id}/rating` ; un second appui envoie `rating=none` et retire le like.
-- **Commentaires** : remplace la file d'attente et les suggestions par la liste des commentaires **sans interrompre la lecture** (le mobile garde la même surface vidéo, le web ne touche pas à l'élément `<video>`). Pagination par curseur opaque (bouton « Plus » / chargement automatique en bas de liste sur mobile).
+- **Commentaires** : sur le web, toujours affichés sous la vidéo (comme sur youtube.com), à côté de la file d'attente et des suggestions qui restent visibles ; chargés quand la section approche de l'écran. Sur mobile, le bouton « Commentaires » remplace la file d'attente et les suggestions par la liste **sans interrompre la lecture** (même surface vidéo). Pagination par curseur opaque (bouton « Plus » / chargement automatique en bas de liste sur mobile).
 - **Publier** : le champ de saisie en bas du panneau envoie `POST /api/videos/{id}/comment` ; le commentaire créé est renvoyé par le serveur et inséré en tête de liste (l'ordre « pertinence » de YouTube l'enterrerait sinon).
-- Sur un direct, la place du panneau est occupée par le chat en direct : le bouton « Commentaires » n'apparaît pas.
+- Sur un direct, le chat en direct tient lieu de commentaires : le bouton « Commentaires » n'apparaît pas (mobile) et la section est masquée (web).
 - Odysee : lecture seule (les likes/commentaires exigent une signature de portefeuille LBRY) — le champ de saisie est masqué.
 
 ---

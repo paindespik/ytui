@@ -508,21 +508,15 @@ export async function render(view, { params }) {
     queuePanel,
   );
 
-  // ─── Bascule du panneau latéral : commentaires ⇄ file / chat / à suivre ───
-  //
-  // Le libellé reste « Commentaires » (l'état actif est porté par la classe
-  // `primary` + aria-pressed) : sur un direct le panneau masqué est le chat, pas
-  // la file, donc un libellé « File d'attente » mentirait la moitié du temps.
-  const commentsSection = el("div", { hidden: true });
-  const sidePanels = [queueSection, chatSection, relatedSection];
-  let hiddenBefore = null; // Map(section → hidden) mémorisée pendant les commentaires
+  // Commentaires : toujours sous la vidéo (comme youtube.com), jamais dans le
+  // panneau latéral. Pendant un direct, le chat en tient lieu.
+  const commentsSection =
+    platform === "youtube" || platform === "odysee"
+      ? el("section", { class: "watch-comments", hidden: chatLiveNow })
+      : null;
 
-  // Tant que les commentaires occupent le panneau, les mises à jour de
-  // visibilité (chat qui démarre, « À suivre » qui arrive) vont dans l'état
-  // mémorisé au lieu du DOM : la restauration reste exacte.
   function setSideHidden(section, hidden) {
-    if (hiddenBefore) hiddenBefore.set(section, hidden);
-    else section.hidden = hidden;
+    section.hidden = hidden;
     syncSide();
   }
 
@@ -531,37 +525,16 @@ export async function render(view, { params }) {
   let watchRoot = null;
   function syncSide() {
     if (!watchRoot) return;
-    const empty = [...sidePanels, commentsSection].every((section) => section.hidden);
+    const empty = [queueSection, chatSection, relatedSection].every((s) => s.hidden);
     watchRoot.classList.toggle("no-side", empty);
   }
 
-  const commentsBtn =
-    platform === "youtube" || platform === "odysee"
-      ? iconBtn("message-square", "Commentaires", {
-          class: "compact-2",
-          title: "Commentaires",
-          "aria-pressed": "false",
-          onclick: () => toggleComments(),
-        })
-      : null;
-
-  function toggleComments() {
-    if (hiddenBefore) {
-      for (const [section, hidden] of hiddenBefore) section.hidden = hidden;
-      hiddenBefore = null;
-      commentsSection.hidden = true;
-    } else {
-      hiddenBefore = new Map(sidePanels.map((s) => [s, s.hidden]));
-      for (const s of sidePanels) s.hidden = true;
-      if (!commentsSection.childElementCount) {
-        commentsSection.append(createComments({ videoId: id, platform }));
-      }
-      commentsSection.hidden = false;
-    }
-    const on = hiddenBefore !== null;
-    syncSide();
-    commentsBtn.classList.toggle("on", on);
-    commentsBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  // Chargement paresseux : l'API YouTube coûte du quota, on ne demande les
+  // commentaires que quand la section approche du viewport.
+  let commentsObserver = null;
+  function loadComments() {
+    if (disposed || !commentsSection || commentsSection.childElementCount) return;
+    commentsSection.append(createComments({ videoId: id, platform }));
   }
 
   // ─── J'aime (bascule, ne touche jamais au lecteur) ───
@@ -656,7 +629,6 @@ export async function render(view, { params }) {
           likeBtn,
           shareBtn,
           plBtn,
-          commentsBtn,
           // Groupe de droite : puces d'état + réglages + « plus », qui passent
           // ensemble à la ligne sur une colonne étroite.
           el(
@@ -672,16 +644,37 @@ export async function render(view, { params }) {
         descBox,
       ),
     ),
+    commentsSection,
     el(
       "aside",
       { class: "side-panel" },
       queueSection,
       chatSection,
       relatedSection,
-      commentsSection,
     ),
   );
   view.append(watchRoot);
+
+  // Déclenchement à 600 px du viewport. Sans IntersectionObserver (harnais de
+  // tests Node), chargement immédiat.
+  if (commentsSection) {
+    if (typeof IntersectionObserver === "function") {
+      commentsObserver = new IntersectionObserver(
+        (entries, observer) => {
+          if (!entries.some((e) => e.isIntersecting)) return;
+          // L'observateur reçu en argument, pas la variable (déjà null si un
+          // lot d'entrées arrive après la coupure) ; loadComments est idempotent.
+          observer.disconnect();
+          commentsObserver = null;
+          loadComments();
+        },
+        { rootMargin: "0px 0px 600px 0px" },
+      );
+      commentsObserver.observe(commentsSection);
+    } else {
+      loadComments();
+    }
+  }
 
   // ─── Overlay (erreur / autoplay bloqué) ───
 
@@ -982,6 +975,7 @@ export async function render(view, { params }) {
     chatStopped = false;
     markLive(); // un chat actif = un direct, quel que soit le format de l'id
     setSideHidden(chatSection, false);
+    if (commentsSection) commentsSection.hidden = true; // le chat tient lieu de commentaires
     setSideHidden(queueSection, true);
     chatPanel.append(chatWaiting);
     pollChat();
@@ -1150,6 +1144,7 @@ export async function render(view, { params }) {
 
   return () => {
     disposed = true;
+    commentsObserver?.disconnect();
     cancelUpNext();
     document.removeEventListener("click", closePanel);
     stopChat();

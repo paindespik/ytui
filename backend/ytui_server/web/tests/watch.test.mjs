@@ -21,7 +21,8 @@ const STREAMS_VOD = {
   subtitles: [],
 };
 
-/// Routes minimales d'une page lecture. `lives` et `chat` varient par test.
+/// Routes minimales d'une page lecture. `lives`, `chat`, `related` et
+/// `comments` varient par test.
 function routes({
   lives = [],
   livesDelay = 0,
@@ -29,9 +30,14 @@ function routes({
   streams = STREAMS_VOD,
   chat,
   details = null,
+  comments = null,
 } = {}) {
   return [
     ...(details ? [{ match: /\/api\/videos\/[^/?]+\?/, method: "GET", json: details }] : []),
+    // Aucune autre route ne contient « /comments » dans son URL, et aucune des
+    // sous-chaînes ci-dessous n'apparaît dans /api/videos/{id}/comments : ni
+    // ombrage ni masquage.
+    ...(comments ? [{ match: "/comments", json: comments }] : []),
     { match: "/api/lives", json: lives, delay: livesDelay },
     { match: "/chat", json: chat || { messages: [], cursor: 1, active: true } },
     { match: "/related", json: { items: related } },
@@ -62,33 +68,39 @@ const textOf = (node) =>
     .map((c) => (typeof c === "string" ? c : c.textContent || textOf(c)))
     .join(" ");
 
-describe("vue lecture — cycle de vie et lecture auto", () => {
-  beforeEach(async () => {
-    installDom();
-    globalThis.localStorage.clear();
-    ({ queue } = await import("../js/queue.js"));
-    queue.items = [];
-    queue.index = 0;
-    watch = await import("../views/watch.js");
-    // Enchaînement immédiat par défaut ; les tests du compte à rebours le
-    // règlent eux-mêmes.
-    watch.upNextConfig.seconds = 0;
-    globalThis.localStorage.removeItem("ytui.cinema");
-    // Le harness partage #view entre les tests (installDom est idempotent) :
-    // sans ce vidage, mediaEl() renverrait le <video> d'un montage précédent.
-    document.getElementById("view").replaceChildren();
-  });
+/// Montage propre pour chaque test : DOM réinstallé, file et module watch
+/// réimportés, #view vidé. Partagé par tous les describe du fichier.
+async function resetWatch() {
+  installDom();
+  globalThis.localStorage.clear();
+  ({ queue } = await import("../js/queue.js"));
+  queue.items = [];
+  queue.index = 0;
+  watch = await import("../views/watch.js");
+  // Enchaînement immédiat par défaut ; les tests du compte à rebours le
+  // règlent eux-mêmes.
+  watch.upNextConfig.seconds = 0;
+  globalThis.localStorage.removeItem("ytui.cinema");
+  // Le harness partage #view entre les tests (installDom est idempotent) :
+  // sans ce vidage, mediaEl() renverrait le <video> d'un montage précédent.
+  document.getElementById("view").replaceChildren();
+}
 
-  afterEach(async () => {
-    for (const c of mounted.splice(0)) {
-      try {
-        c();
-      } catch {
-        /* déjà démonté par le test */
-      }
+/// Filet de sécurité : démonte les montages que les tests n'ont pas nettoyés.
+async function unmountAll() {
+  for (const c of mounted.splice(0)) {
+    try {
+      c();
+    } catch {
+      /* déjà démonté par le test */
     }
-    await flush();
-  });
+  }
+  await flush();
+}
+
+describe("vue lecture — cycle de vie et lecture auto", () => {
+  beforeEach(resetWatch);
+  afterEach(unmountAll);
 
   // ─── Chat : aucune fuite de minuteur ───
 
@@ -404,3 +416,211 @@ function findRowFor(root, id) {
   }
   return null;
 }
+
+// ─── Commentaires sous la vidéo (toujours visibles, chargement paresseux) ───
+//
+// Le harnais ne synchronise pas classList avec className : el() pose
+// className, classList.add() pose le _set interne, et querySelectorAll(".x")
+// ne lit que le _set. Les helpers ci-dessous testent donc les deux, sans
+// toucher au harnais.
+
+/// Un noeud « porte la classe » si className la contient ou si classList la
+/// connaît (classes ajoutées après coup, ex. « no-side » ou « cinema »).
+function hasClass(node, cls) {
+  if (!node) return false;
+  if (node.classList && node.classList.contains(cls)) return true;
+  return typeof node.className === "string" && node.className.split(/\s+/).includes(cls);
+}
+
+/// Tous les descendants (profondeur d'abord) portant la classe `cls`.
+function findClassAll(root, cls) {
+  const out = [];
+  const walk = (n) => {
+    for (const c of n.children || []) {
+      if (typeof c !== "object") continue;
+      if (hasClass(c, cls)) out.push(c);
+      walk(c);
+    }
+  };
+  walk(root);
+  return out;
+}
+const findClass = (root, cls) => findClassAll(root, cls)[0] || null;
+
+/// Commentaire de test au format attendu par js/comments.js (commentCard :
+/// comment_id, text, channel_name, likes, timestamp, replies…).
+const COMMENT = {
+  comment_id: "c1",
+  channel_name: "Bob",
+  text: "Premier commentaire factice",
+  likes: 3,
+  timestamp: 1735689600,
+  replies: 0,
+};
+
+/// IntersectionObserver factice : journalise les instances, les cibles
+/// observées et les appels à disconnect(). Comme le vrai, il ne livre plus
+/// aucun callback après disconnect() — c'est pourquoi on déclenche les
+/// entrées via deliver(), jamais via callback() brut après démontage.
+class FakeIntersectionObserver {
+  constructor(callback, options) {
+    this.callback = callback;
+    this.options = options;
+    this.targets = [];
+    this.disconnected = false;
+    this.disconnectCalls = 0;
+    FakeIntersectionObserver.instances.push(this);
+  }
+  observe(target) {
+    this.targets.push(target);
+  }
+  unobserve(target) {
+    this.targets = this.targets.filter((t) => t !== target);
+  }
+  disconnect() {
+    this.disconnected = true;
+    this.disconnectCalls += 1;
+    this.targets = [];
+  }
+  deliver(entries) {
+    if (this.disconnected) return;
+    this.callback(entries, this);
+  }
+}
+FakeIntersectionObserver.instances = [];
+
+describe("vue lecture — commentaires sous la vidéo", () => {
+  beforeEach(resetWatch);
+  afterEach(unmountAll);
+
+  test("YouTube VOD : une seule section .watch-comments, enfant direct de .watch, hors panneau latéral", async () => {
+    const api = mockApi(routes({ comments: { items: [COMMENT], total: 1, next_cursor: null } }));
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+
+    const sections = findClassAll(view, "watch-comments");
+    assert.equal(sections.length, 1, "exactement une section .watch-comments");
+    const section = sections[0];
+    assert.ok(hasClass(section.parentNode, "watch"), "enfant direct de la grille .watch");
+
+    const side = findClass(view, "side-panel");
+    assert.ok(side, "panneau latéral présent");
+    assert.equal(findClassAll(side, "watch-comments").length, 0, "hors du panneau latéral");
+    assert.equal(findClassAll(side, "comments").length, 0, "aucun bloc .comments dans le panneau");
+
+    assert.notEqual(section.hidden, true, "section visible");
+    assert.equal(section.getAttribute("hidden"), null, "aucun attribut hidden");
+
+    assert.ok(findClass(section, "comments"), "bloc .comments chargé dans la section");
+    assert.ok(
+      textOf(section).includes("Premier commentaire factice"),
+      textOf(section).slice(0, 200),
+    );
+    assert.equal(api.find("/comments").length, 1, "une seule requête /comments");
+  });
+
+  test("plus de bouton « Commentaires » : la section « À suivre » reste visible", async () => {
+    mockApi(
+      routes({
+        related: [makeVideo("zzz")],
+        comments: { items: [COMMENT], total: 1, next_cursor: null },
+      }),
+    );
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+
+    assert.equal(findByAttr(view, "title", "Commentaires"), null, "bouton retiré des actions");
+
+    const section = findClass(view, "watch-comments");
+    assert.ok(section, "section .watch-comments présente");
+    const relatedTitle = findText(view, "À suivre");
+    assert.ok(relatedTitle, "section « À suivre » présente");
+    const relatedSection = relatedTitle.parentNode;
+    assert.notEqual(relatedSection.hidden, true, "« À suivre » n'est pas masqué");
+    assert.equal(relatedSection.getAttribute("hidden"), null, "pas d'attribut hidden non plus");
+  });
+
+  test("plateforme sans commentaires (crowdbunker) : ni section ni requête", async () => {
+    const api = mockApi(routes());
+    const view = document.getElementById("view");
+    await mount(view, { platform: "crowdbunker" });
+    await flush(6);
+
+    assert.equal(findClassAll(view, "watch-comments").length, 0, "aucune section");
+    assert.equal(api.find("/comments").length, 0, "aucune requête /comments");
+  });
+
+  test("IntersectionObserver : chargement différé à la première intersection", async () => {
+    globalThis.IntersectionObserver = FakeIntersectionObserver;
+    try {
+      const api = mockApi(routes({ comments: { items: [COMMENT], total: 1, next_cursor: null } }));
+      const view = document.getElementById("view");
+      await mount(view);
+      await flush();
+
+      const inst = FakeIntersectionObserver.instances[0];
+      assert.ok(inst, "un observateur a été créé");
+      assert.equal(inst.options.rootMargin, "0px 0px 600px 0px");
+
+      const section = findClass(view, "watch-comments");
+      assert.ok(section, "section .watch-comments présente");
+      assert.deepEqual(inst.targets, [section], "c'est la section qui est observée");
+      assert.equal(api.find("/comments").length, 0, "pas de requête tant que non visible");
+
+      inst.deliver([{ isIntersecting: false, target: section }]);
+      await flush();
+      assert.equal(api.find("/comments").length, 0, "sans intersection : pas de requête");
+
+      inst.deliver([{ isIntersecting: true, target: section }]);
+      await flush();
+      assert.equal(api.find("/comments").length, 1, "chargée à la première intersection");
+      assert.equal(inst.disconnectCalls, 1, "l'observateur se coupe après le chargement");
+
+      // Lot d'entrées déjà en file au moment de la coupure : callback brut.
+      inst.callback([{ isIntersecting: true, target: section }], inst);
+      await flush();
+      assert.equal(api.find("/comments").length, 1, "aucun second chargement");
+    } finally {
+      delete globalThis.IntersectionObserver;
+      FakeIntersectionObserver.instances.length = 0;
+    }
+  });
+
+  test("démontage avant toute intersection : disconnect et aucune requête", async () => {
+    globalThis.IntersectionObserver = FakeIntersectionObserver;
+    try {
+      const api = mockApi(routes({ comments: { items: [COMMENT], total: 1, next_cursor: null } }));
+      const view = document.getElementById("view");
+      const cleanup = await mount(view);
+      await flush();
+
+      const inst = FakeIntersectionObserver.instances[0];
+      assert.ok(inst, "un observateur a été créé");
+
+      cleanup();
+      await flush(4);
+      assert.equal(inst.disconnectCalls, 1, "disconnect appelé au démontage");
+      assert.equal(api.find("/comments").length, 0, "aucune requête après démontage");
+    } finally {
+      delete globalThis.IntersectionObserver;
+      FakeIntersectionObserver.instances.length = 0;
+    }
+  });
+
+  test("direct confirmé : le chat démarre et masque la section commentaires", async () => {
+    const live = { video: makeVideo("abc", { platform: "youtube" }) };
+    const api = mockApi(
+      routes({ lives: [live], comments: { items: [COMMENT], total: 1, next_cursor: null } }),
+    );
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(6);
+
+    assert.ok(api.find("/chat").length >= 1, "le chat a démarré");
+    const section = findClass(view, "watch-comments");
+    assert.ok(section, "section .watch-comments présente");
+    assert.equal(section.hidden, true, "masquée pendant le direct");
+  });
+});
