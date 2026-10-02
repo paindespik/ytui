@@ -210,6 +210,49 @@ def test_proxy_allows_configured_twitch_proxies(proxied):
     assert resp.status_code == 200
 
 
+def test_proxy_hls_redraws_twitch_master_past_a_preroll(proxied):
+    """The player's own master is a fresh token: one that opens on a stitched
+    preroll is re-fetched before reaching hls.js."""
+    hits: list[str] = []
+    draws = ["ad", "ad", "clean"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(request.url.host)
+        if request.url.host == "eu.luminous.dev":
+            tag = draws.pop(0)
+            return httpx.Response(
+                200,
+                text=(
+                    "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=230000,RESOLUTION=284x160\n"
+                    f"https://{tag}.playlist.ttvnw.net/v1/playlist/160.m3u8\n"
+                ),
+            )
+        if request.url.host == "ad.playlist.ttvnw.net":
+            return httpx.Response(
+                200,
+                text='#EXTM3U\n#EXT-X-DATERANGE:ID="stitched-ad-1-30",CLASS="twitch-stitched-ad"\n',
+            )
+        return httpx.Response(200, text="#EXTM3U\n#EXTINF:2.0,live\nseg.ts\n")
+
+    client = proxied(handler)
+    resp = client.get(
+        "/api/proxy/hls", params={"url": "https://eu.luminous.dev/live/foo?allow_source=true"}
+    )
+    assert resp.status_code == 200
+    assert _enc("https://clean.playlist.ttvnw.net/v1/playlist/160.m3u8") in resp.text
+    assert "ad.playlist" not in resp.text
+    assert hits.count("eu.luminous.dev") == 3
+
+
+def test_proxy_hls_twitch_master_proxy_down(proxied):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="{}")
+
+    client = proxied(handler)
+    resp = client.get("/api/proxy/hls", params={"url": "https://eu.luminous.dev/live/foo"})
+    assert resp.status_code == 502
+
+
 def test_proxy_env_extension(proxied):
     """cdn.example passes only because the fixture extends the allowlist."""
 

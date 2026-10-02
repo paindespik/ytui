@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     # TTV.LOL-compatible playlist proxies for ad-free Twitch streams, tried in
     # order with fallback to the direct (ad-fed) stream. Empty disables.
     twitch_proxies: str = Field(
-        default="https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com",
+        # lb-eu.cdn-perfprod.com dropped 2026-10-02: Cloudflare answers, the
+        # origin hangs until the 10 s timeout.
+        default="https://eu.luminous.dev,https://eu2.luminous.dev,https://lb-as.cdn-perfprod.com",
         validation_alias="YTUI_TWITCH_PROXIES",
     )
     # Extra domains (comma-separated, subdomains included) allowed through

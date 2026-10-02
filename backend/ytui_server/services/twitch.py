@@ -12,12 +12,19 @@ through such a country; only the playlist request transits the proxy — the
 video segments are then pulled directly from Twitch's CDN. This is a
 cat-and-mouse game, so resolution always falls back to a direct (ad-fed)
 stream when every proxy fails.
+
+A proxy still lets a preroll through now and then. The ad decision belongs to
+the playback token and holds for every variant of it (measured 2026-10-02: a
+direct French token got a preroll on all five variants, 6 tokens out of 6),
+so probing the lightest variant tells whether a master is clean; a fresh
+master from the same proxy carries a fresh token, hence a new draw.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import urllib.parse
 from datetime import datetime
 
 import httpx
@@ -31,7 +38,13 @@ GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 TIMEOUT = httpx.Timeout(10.0)
 _BATCH = 30
 
-DEFAULT_PROXIES = "https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com"
+DEFAULT_PROXIES = "https://eu.luminous.dev,https://eu2.luminous.dev,https://lb-as.cdn-perfprod.com"
+
+# Stitched ad segments come with an EXT-X-DATERANGE of CLASS
+# "twitch-stitched-ad" and ID "stitched-ad-<ts>-<duration>".
+_AD_MARKER = "stitched-ad"
+# Fresh tokens drawn from one proxy before moving on to the next.
+AD_FREE_ATTEMPTS = 2
 
 _LIVE_QUERY = (
     "query($logins:[String!]){users(logins:$logins){login displayName "
@@ -173,6 +186,84 @@ def parse_variants(master: str) -> list[tuple[int, str]]:
     return variants
 
 
+def has_ads(media_playlist: str) -> bool:
+    """Whether a Twitch media playlist carries stitched ad segments."""
+    return _AD_MARKER in media_playlist
+
+
+def _is_twitch_cdn(url: str) -> bool:
+    """Probes only follow URLs pointing at Twitch's own CDN: the master comes
+    from a third-party proxy and must not steer server-side fetches elsewhere."""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and host.endswith(".ttvnw.net")
+
+
+async def _fetch_master(client: httpx.AsyncClient, url: str) -> str | None:
+    try:
+        # Redirects stay unfollowed: the proxy client would chase them past
+        # the /api/proxy allowlist.
+        resp = await client.get(url, follow_redirects=False)
+    except httpx.HTTPError as exc:
+        log.info("twitch playlist proxy %s unreachable: %s", url, exc)
+        return None
+    if resp.status_code == 200 and resp.text.startswith("#EXTM3U"):
+        return resp.text
+    log.info("twitch playlist proxy %s returned HTTP %s", url, resp.status_code)
+    return None
+
+
+async def _carries_preroll(client: httpx.AsyncClient, master: str) -> bool:
+    """Probe the lightest variant of a master for stitched ads.
+
+    An inconclusive probe (no variant, foreign host, upstream error) counts as
+    clean: it must never cost a working proxy.
+    """
+    variants = parse_variants(master)
+    if not variants:
+        return False
+    variant = min(variants)[1]
+    if not _is_twitch_cdn(variant):
+        return False
+    try:
+        resp = await client.get(variant, follow_redirects=False)
+    except httpx.HTTPError:
+        return False
+    return resp.status_code == 200 and has_ads(resp.text)
+
+
+async def fetch_ad_free_master(
+    client: httpx.AsyncClient, url: str, attempts: int = AD_FREE_ATTEMPTS
+) -> tuple[str | None, bool]:
+    """(master text, clean) from a playlist proxy URL, re-fetched — fresh
+    token, new ad draw — while its playback session opens on a preroll.
+
+    The text is None when the proxy is unusable; clean is False when every
+    attempt drew a preroll (the last master is still returned).
+    """
+    master: str | None = None
+    for _ in range(max(1, attempts)):
+        master = await _fetch_master(client, url)
+        if master is None:
+            return None, False
+        if not await _carries_preroll(client, master):
+            return master, True
+        log.info("twitch playlist proxy %s served a preroll", url)
+    return master, False
+
+
+def _pick(url: str, master: str, max_height: int) -> tuple[str, int | None]:
+    variants = parse_variants(master)
+    top = max((h for h, _ in variants), default=0)
+    if variants and top > max_height:
+        height, variant = max(
+            (v for v in variants if v[0] <= max_height),
+            default=min(variants),
+        )
+        return variant, height
+    return url, top or None
+
+
 async def resolve_live_playlist(
     client: httpx.AsyncClient, login: str, proxies: list[str], max_height: int = 4320
 ) -> tuple[str, int | None] | None:
@@ -183,26 +274,22 @@ async def resolve_live_playlist(
     fresh master playlist — and fresh segment tokens — when it opens the stream.
     The exception is a cap that excludes variants: then one variant playlist URL
     is handed over instead, since a master carries every quality.
+
+    A proxy whose tokens keep drawing prerolls is skipped for the next one;
+    when they all do, the first answering proxy is still preferred over the
+    direct stream (the player's own fetch is a new draw).
     """
+    fallback: tuple[str, int | None] | None = None
     for base in proxies:
         base = base.strip().rstrip("/")
         if not base:
             continue
         url = f"{base}/live/{login}?allow_source=true&allow_audio_only=true&fast_bread=true"
-        try:
-            resp = await client.get(url)
-        except httpx.HTTPError as exc:
-            log.info("twitch playlist proxy %s unreachable: %s", base, exc)
+        master, clean = await fetch_ad_free_master(client, url)
+        if master is None:
             continue
-        if resp.status_code == 200 and resp.text.startswith("#EXTM3U"):
-            variants = parse_variants(resp.text)
-            top = max((h for h, _ in variants), default=0)
-            if variants and top > max_height:
-                height, variant = max(
-                    (v for v in variants if v[0] <= max_height),
-                    default=min(variants),
-                )
-                return variant, height
-            return url, top or None
-        log.info("twitch playlist proxy %s returned HTTP %s", base, resp.status_code)
-    return None
+        picked = _pick(url, master, max_height)
+        if clean:
+            return picked
+        fallback = fallback or picked
+    return fallback

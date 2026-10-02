@@ -274,6 +274,103 @@ def test_streams_twitch_live_falls_back_to_direct(client):
     assert direct.call_args.args[0] == "https://www.twitch.tv/foo"
 
 
+# ─── preroll avoidance ───
+
+# Shapes measured on a direct (ad-fed) French token, 2026-10-02.
+AD_MEDIA = (
+    "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n"
+    '#EXT-X-DATERANGE:ID="stitched-ad-1790942337-30235000000",CLASS="twitch-stitched-ad",'
+    'START-DATE="2026-10-02T11:58:57.799Z",DURATION=30.235\n'
+    "#EXT-X-DISCONTINUITY\n"
+    "#EXTINF:2.000,Amazon|2474283100494\nhttps://edge.hls.ttvnw.net/v1/segment/ad.mp4\n"
+)
+LIVE_MEDIA = (
+    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:2888\n"
+    '#EXT-X-DATERANGE:ID="source-1790941910",CLASS="twitch-stream-source",'
+    'START-DATE="2026-10-02T11:51:50.356Z",END-ON-NEXT=YES,X-TV-TWITCH-STREAM-SOURCE="live"\n'
+    "#EXTINF:4.167,live\nhttps://edge.hls.ttvnw.net/v1/segment/live.ts\n"
+)
+
+
+def _proxy_world(prerolls: dict[str, list[bool]]):
+    """MockTransport where each proxy host serves masters whose token draws a
+    preroll or not, in order (last draw repeats); returns (client, hits)."""
+    hits: list[str] = []
+    draws = {host: list(seq) for host, seq in prerolls.items()}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        hits.append(f"{host}{request.url.path}")
+        if host in draws:
+            seq = draws[host]
+            ad = seq.pop(0) if len(seq) > 1 else seq[0]
+            tag = "ad" if ad else "clean"
+            return httpx.Response(200, text=MASTER.replace("cdn.ttvnw.net", f"{tag}.ttvnw.net"))
+        if host == "ad.ttvnw.net":
+            return httpx.Response(200, text=AD_MEDIA)
+        if host == "clean.ttvnw.net":
+            return httpx.Response(200, text=LIVE_MEDIA)
+        return httpx.Response(404)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), hits
+
+
+def _resolve(client, proxies, **kwargs) -> tuple[str, int | None]:
+    resolved = asyncio.run(twitch.resolve_live_playlist(client, "foo", proxies, **kwargs))
+    assert resolved is not None
+    return resolved
+
+
+def test_has_ads():
+    assert twitch.has_ads(AD_MEDIA)
+    assert not twitch.has_ads(LIVE_MEDIA)
+
+
+def test_resolve_redraws_past_a_preroll():
+    client, hits = _proxy_world({"p1.example": [True, False]})
+    url, height = _resolve(client, ["https://p1.example"])
+    assert url.startswith("https://p1.example/live/foo") and height == 1080
+    # master, probe of the lightest variant (160p), redraw, probe
+    assert hits == [
+        "p1.example/live/foo",
+        "ad.ttvnw.net/160.m3u8",
+        "p1.example/live/foo",
+        "clean.ttvnw.net/160.m3u8",
+    ]
+
+
+def test_resolve_skips_a_proxy_that_keeps_serving_prerolls():
+    client, _ = _proxy_world({"p1.example": [True], "p2.example": [False]})
+    url, _h = _resolve(client, ["https://p1.example", "https://p2.example"], max_height=720)
+    # capped: the handed-over variant belongs to the clean token
+    assert url == "https://clean.ttvnw.net/720.m3u8"
+
+
+def test_resolve_prefers_a_preroll_proxy_over_the_direct_stream():
+    client, hits = _proxy_world({"p1.example": [True], "p2.example": [True]})
+    url, _h = _resolve(client, ["https://p1.example", "https://p2.example"])
+    assert url.startswith("https://p1.example/live/foo")
+    assert hits.count("p1.example/live/foo") == twitch.AD_FREE_ATTEMPTS
+    assert hits.count("p2.example/live/foo") == twitch.AD_FREE_ATTEMPTS
+
+
+def test_probe_never_leaves_twitch_cdn():
+    """The master comes from a third party: its variant URLs must not steer
+    server-side fetches off Twitch's CDN."""
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url.host))
+        return httpx.Response(
+            200, text=MASTER.replace("https://cdn.ttvnw.net", "http://127.0.0.1:8776")
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    master, clean = asyncio.run(twitch.fetch_ad_free_master(client, "https://p1.example/live/foo"))
+    assert master and clean
+    assert hits == ["p1.example"]
+
+
 def test_streams_twitch_vod_skips_proxy(client):
     direct = AsyncMock(return_value=StreamInfo(kind="hls", url="https://vod/x.m3u8"))
     with patch.object(ytdlp, "resolve_streams", direct):

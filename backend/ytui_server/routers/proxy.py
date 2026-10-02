@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.background import BackgroundTask
 
-from ..services import livehls, ytdlp
+from ..services import livehls, twitch, ytdlp
 
 router = APIRouter()
 
@@ -108,6 +108,17 @@ def _check_url(url: str, settings) -> None:
     if any(host == extra or host.endswith(f".{extra}") for extra in _extra_domains(settings)):
         return
     raise HTTPException(status_code=403, detail="Domain not allowed through the proxy")
+
+
+def _is_twitch_proxy_master(url: str, settings) -> bool:
+    """A live master playlist served by one of the configured Twitch proxies."""
+    parsed = urllib.parse.urlparse(url)
+    hosts = {
+        (urllib.parse.urlparse(p.strip()).hostname or "").lower()
+        for p in settings.twitch_proxies.split(",")
+        if p.strip()
+    }
+    return (parsed.hostname or "").lower() in hosts and parsed.path.startswith("/live/")
 
 
 def _safe_content_type(value: str) -> str:
@@ -296,6 +307,19 @@ async def proxy_hls(url: str, request: Request) -> Response:
     settings = request.app.state.settings
     _check_url(url, settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
+    if _is_twitch_proxy_master(url, settings):
+        # The player's master is a new token, hence a new ad draw (the one
+        # probed by /streams told nothing about it): redraw past a preroll.
+        master, _clean = await twitch.fetch_ad_free_master(
+            client, url, attempts=twitch.AD_FREE_ATTEMPTS + 1
+        )
+        if master is None:
+            raise HTTPException(status_code=502, detail="Twitch playlist proxy failed")
+        return Response(
+            content=rewrite_hls(master, url),
+            media_type="application/vnd.apple.mpegurl",
+            headers=dict(_BASE_HEADERS),
+        )
     try:
         upstream = await _send_allowlisted(
             client, client.build_request("GET", url), settings, stream=False
