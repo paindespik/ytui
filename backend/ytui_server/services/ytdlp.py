@@ -22,6 +22,7 @@ import anyio
 import httpx
 
 from ..models import StreamInfo, SubtitleTrackOut, Video, VideoDetails
+from . import crowdbunker
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) ytui-server/0.2"
 # Only for the signed-in home feed: YouTube tailors that grid to the client.
@@ -33,6 +34,15 @@ _HOME_MAX_PAGES = 12
 
 log = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
+
+
+def _youtube_dl(opts: dict):
+    """A yt_dlp.YoutubeDL with ytui's upstream-extractor fixes applied."""
+    import yt_dlp
+
+    crowdbunker.patch_ytdlp_extractors()
+    return yt_dlp.YoutubeDL(opts)
+
 
 _YDL_FLAT_OPTS = {
     "quiet": True,
@@ -484,15 +494,13 @@ def _extract_info_cached(url: str) -> dict:
 
 def _extract_info_fresh(url: str) -> dict:
     """One full extraction (with the truncation guard), stored in the cache."""
-    import yt_dlp
-
     bitchute = "bitchute.com" in url
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
     if bitchute:
         opts["check_formats"] = False  # see _bitchute_media_url
     info = {}
     for attempt in range(1, _TRUNCATION_ATTEMPTS + 1):
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with _youtube_dl(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         if attempt == _TRUNCATION_ATTEMPTS:
             break  # a capped stream still beats no stream at all
@@ -581,14 +589,12 @@ def entry_to_item(entry: dict) -> Video | None:
 
 
 def _extract_flat(url: str, limit: int | None = None, offset: int = 0) -> list[Video]:
-    import yt_dlp
-
     opts = dict(_YDL_FLAT_OPTS)
     if limit:
         opts["playlist_items"] = f"{offset + 1}:{offset + limit}"
     elif offset:
         opts["playlist_items"] = f"{offset + 1}:"
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with _youtube_dl(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     items: list[Video] = []
     for entry in info.get("entries") or []:
@@ -600,12 +606,10 @@ def _extract_flat(url: str, limit: int | None = None, offset: int = 0) -> list[V
 
 def _extract_flat_info(url: str, limit: int | None = None) -> tuple[list[Video], str]:
     """Like _extract_flat but also returns the container title (playlist name)."""
-    import yt_dlp
-
     opts = dict(_YDL_FLAT_OPTS)
     if limit:
         opts["playlist_items"] = f"1:{limit}"
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with _youtube_dl(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     items: list[Video] = []
     for entry in info.get("entries") or []:
@@ -666,7 +670,6 @@ def _extract_details(url: str) -> VideoDetails:
         # watch page asks for both at once, and a details page followed by
         # "Lire" no longer pays two full yt-dlp runs.
         return _details_from_info(_extract_info_cached(url), url)
-    import yt_dlp
 
     # check_formats: /details never serves a stream URL, so BitChute's seed
     # probing would only cost a pointless HEAD round.
@@ -677,7 +680,7 @@ def _extract_details(url: str) -> VideoDetails:
         "socket_timeout": 15,
         "check_formats": False,
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
+    with _youtube_dl(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return _details_from_info(info, url)
 

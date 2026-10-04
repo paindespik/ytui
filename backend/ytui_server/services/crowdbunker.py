@@ -3,7 +3,8 @@
 The platform exposes an undocumented but stable API (api.crowdbunker.com),
 without authentication. Video playback does not go through this module:
 yt-dlp ships a CrowdBunkerIE for https://crowdbunker.com/v/{uid}, so
-details/streams reuse the regular ytdlp path.
+details/streams reuse the regular ytdlp path (with its API host fixed by
+patch_ytdlp_extractors).
 
 Video identity: video_id = post uid (e.g. "0z4Kms8pi8I"),
 channel_id = organization uid (the @handle, e.g. "PruneDePrune").
@@ -22,6 +23,7 @@ from ..models import Video
 # 2026-09: the API moved from api.divulg.org (now answers 403) to this host;
 # the video CDN stayed on the *.divulg.org domains.
 API_BASE = "https://api.crowdbunker.com"
+LEGACY_API_BASE = "https://api.divulg.org"
 TIMEOUT = httpx.Timeout(10.0)
 HEADERS = {"accept": "application/json, text/plain, */*"}
 # The posts API returns at most 30 items per page.
@@ -36,6 +38,33 @@ log = logging.getLogger(__name__)
 
 class CrowdBunkerError(Exception):
     """A CrowdBunker upstream call failed."""
+
+
+def patch_ytdlp_extractors() -> None:
+    """Point yt-dlp's CrowdBunker extractors at the current API host.
+
+    yt-dlp (up to 2026.8.19 at least) still fetches /post/{uid}/details from
+    the legacy host, which now answers 403, so every CrowdBunker playback
+    failed. The JSON downloads are rewritten to API_BASE; once upstream
+    follows the move the legacy prefix no longer matches and this is a no-op.
+    Idempotent; patches the real classes, which lazy extractors resolve to.
+    """
+    from yt_dlp.extractor.crowdbunker import CrowdBunkerChannelIE, CrowdBunkerIE
+
+    for cls in (CrowdBunkerIE, CrowdBunkerChannelIE):
+        if cls.__dict__.get("_ytui_api_patched"):
+            continue
+        original = cls._download_json
+
+        def _download_json(self, url_or_request, *args, _original=original, **kwargs):
+            if isinstance(url_or_request, str) and url_or_request.startswith(
+                LEGACY_API_BASE + "/"
+            ):
+                url_or_request = API_BASE + url_or_request[len(LEGACY_API_BASE) :]
+            return _original(self, url_or_request, *args, **kwargs)
+
+        cls._download_json = _download_json
+        setattr(cls, "_ytui_api_patched", True)
 
 
 def _post_to_video(item: dict[str, Any], channel_id: str) -> Video | None:

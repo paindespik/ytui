@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import patch
 
 import httpx
@@ -352,3 +353,31 @@ def test_feed_includes_crowdbunker(client):
     assert "vid00005" in ids
     # text and censored posts stay out of the feed
     assert "txt00002" not in ids and "vid00004" not in ids
+
+
+# ─── playback (yt-dlp extractor) ───
+
+
+def test_ytdlp_extractor_uses_current_api_host():
+    """yt-dlp's CrowdBunkerIE still targets the legacy host, which answers 403."""
+    import yt_dlp
+    from yt_dlp.extractor.crowdbunker import CrowdBunkerIE
+
+    crowdbunker.patch_ytdlp_extractors()
+    patched = CrowdBunkerIE.__dict__["_download_json"]
+    crowdbunker.patch_ytdlp_extractors()  # idempotent: no double wrapping
+    assert CrowdBunkerIE.__dict__["_download_json"] is patched
+
+    requested: list[str] = []
+
+    def fake_handle(self, url_or_request, video_id, *args, **kwargs):
+        requested.append(url_or_request)
+        return json.dumps({"video": {"title": "Pope video", "duration": 78}}), None
+
+    with patch.object(CrowdBunkerIE, "_download_webpage_handle", fake_handle):
+        with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+            info = ydl.get_info_extractor("CrowdBunker").extract(
+                "https://crowdbunker.com/v/14Gc7GY7C4"
+            )
+    assert requested == [f"{crowdbunker.API_BASE}/post/14Gc7GY7C4/details"]
+    assert info["title"] == "Pope video"
