@@ -51,7 +51,9 @@ class FakeClient:
         self.unfollowed: str | None = None
         self.channel_offsets: list[int] = []
         self.channel_queries: list[str | None] = []
+        self.channel_sorts: list[str] = []
         self.channel_pages: list[list[Video]] = [[VIDEO]]
+        self.channel_views_pages: list[list[Video]] = [[VIDEO]]
         self.channel_search_pages: list[list[Video]] = [[]]
         self.playlist_pages: list[list[Video]] = [[PLAYLIST]]
         self.playlist_offsets: list[int] = []
@@ -77,11 +79,19 @@ class FakeClient:
         self.last_search_source = source
         return [ODYSEE_VIDEO] if source == "odysee" else [VIDEO]
 
-    async def channel_videos(self, channel_id, platform="youtube", limit=50, offset=0, q=None):
+    async def channel_videos(
+        self, channel_id, platform="youtube", limit=50, offset=0, q=None, sort="date"
+    ):
         """offset counts items already received, as the real endpoint does."""
         self.channel_offsets.append(offset)
         self.channel_queries.append(q)
-        pages = self.channel_pages if q is None else self.channel_search_pages
+        self.channel_sorts.append(sort)
+        if q is not None:
+            pages = self.channel_search_pages
+        elif sort == "views":
+            pages = self.channel_views_pages
+        else:
+            pages = self.channel_pages
         start = 0
         for index, page in enumerate(pages):
             if start == offset:
@@ -448,6 +458,84 @@ async def test_channel_without_playlists_has_no_tabs(app):
         await pilot.pause()
         assert app.client.playlist_offsets == []
         assert screen.query_one("#channel-list", VideoList).video_at_cursor() == VIDEO
+
+
+async def test_channel_sort_toggles_views_order_and_pages_it(app):
+    """'O' reloads the listing most viewed first, 'm' pages that order, and
+    'O' again goes back to the newest first."""
+    popular = Video(video_id="popular0000", title="Most viewed", channel_id="UC123")
+    runner_up = Video(video_id="runnerup000", title="Runner-up", channel_id="UC123")
+    app.client.channel_views_pages = [[popular], [runner_up]]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(CHANNEL)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.video_list import VideoList
+
+        screen = app.screen
+        video_list = screen.query_one("#channel-list", VideoList)
+        assert app.client.channel_sorts == ["date"]
+
+        await pilot.press("O")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.channel_sorts[-1] == "views"
+        assert app.client.channel_offsets[-1] == 0
+        assert video_list.video_at_cursor() == popular
+        assert "most viewed" in screen.sub_title
+
+        await pilot.press("m")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert (app.client.channel_offsets[-1], app.client.channel_sorts[-1]) == (1, "views")
+        assert video_list.row_count == 2
+        assert screen.sub_title.endswith("2 videos, most viewed (end)")
+
+        await pilot.press("O")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.channel_sorts[-1] == "date"
+        assert video_list.video_at_cursor() == VIDEO
+        assert screen.sub_title.endswith("1 videos (end)")
+
+
+async def test_channel_sort_keeps_search_order(app):
+    """A search keeps its own order: 'O' during a search does not reload."""
+    match = Video(video_id="match000000", title="Matching video", channel_id="UC123")
+    app.client.channel_search_pages = [[match]]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(CHANNEL)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("slash", *"match", "enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        requests = len(app.client.channel_sorts)
+        await pilot.press("O")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert len(app.client.channel_sorts) == requests
+        assert app.screen._sort == "date"
+
+
+async def test_channel_sort_unavailable_on_odysee(app):
+    odysee_channel = Video(
+        video_id="@chan:1", title="An Odysee channel", kind="channel", platform="odysee"
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(odysee_channel)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        await pilot.press("O")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.channel_sorts == ["date"]
 
 
 async def test_channel_search_load_more_keeps_query(app):

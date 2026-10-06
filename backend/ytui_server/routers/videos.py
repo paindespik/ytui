@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 
 Platform = Literal["youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbunker"]
 
+# Channel listing order: newest first, or most viewed first.
+ChannelSort = Literal["date", "views"]
+# Platforms whose channel listing can be ordered by views.
+_VIEWS_SORT_PLATFORMS = ("youtube", "bitchute", "crowdbunker")
+
 _ODYSEE_WRITE_DETAIL = "Odysee likes/comments require a LBRY wallet signature (not supported)"
 
 
@@ -70,8 +75,10 @@ async def _search_channel(
         return await ytdlp.channel_search(url, query, limit=limit, offset=offset)
     if platform == "odysee" and len(query.strip()) >= _MIN_ODYSEE_SEARCH_LEN:
         return await odysee.search(query, limit=limit, offset=offset, channel_id=channel_id)
-    # Local title scan: short Odysee queries (Lighthouse 400s under 3 chars)
-    # and every platform without an upstream in-channel search.
+    if platform == "crowdbunker" and len(query.strip()) >= crowdbunker.MIN_SEARCH_LEN:
+        return await crowdbunker.channel_search(channel_id, query, limit=limit, offset=offset)
+    # Local title scan: short Odysee/CrowdBunker queries (their search APIs
+    # 400 on them) and every platform without an upstream in-channel search.
     if platform == "odysee":
         items = await odysee.channel_videos(channel_id, limit=_CHANNEL_SCAN_CAP)
     elif platform == "crowdbunker":
@@ -87,6 +94,16 @@ async def _search_channel(
     return matches[offset : offset + limit]
 
 
+async def _channel_videos_by_views(
+    channel_id: str, platform: Platform, limit: int, offset: int
+) -> list[Video]:
+    if platform == "bitchute":
+        return await bitchute.channel_videos(channel_id, limit=limit, offset=offset, sort="views")
+    if platform == "crowdbunker":
+        return await crowdbunker.popular_videos(channel_id, limit=limit, offset=offset)
+    return await ytdlp.channel_popular_videos(channel_id, limit=limit, offset=offset)
+
+
 @router.get("/channels/{channel_id}/videos", response_model=ChannelVideosResponse)
 async def channel_videos(
     channel_id: str,
@@ -95,7 +112,19 @@ async def channel_videos(
     offset: int = Query(default=0, ge=0),
     platform: Platform = "youtube",
     q: str | None = Query(default=None, min_length=1),
+    sort: ChannelSort = "date",
 ) -> ChannelVideosResponse:
+    """One page of a channel's videos, newest first (`sort=date`) or most
+    viewed first (`sort=views`: YouTube, BitChute, CrowdBunker).
+
+    A search (`q`) keeps the order of the platform's search and ignores
+    `sort`.
+    """
+    by_views = sort == "views" and not q
+    if by_views and platform not in _VIEWS_SORT_PLATFORMS:
+        raise HTTPException(
+            status_code=501, detail=f"Sorting by views is not supported for {platform}"
+        )
     if platform == "tiktok":
         # TikTok channel video pages are not scrapable without auth; channels
         # surface through the lives endpoint only, so answer empty right away.
@@ -113,6 +142,8 @@ async def channel_videos(
     try:
         if q:
             items = await _search_channel(channel_id, platform, q, probe, offset)
+        elif by_views:
+            items = await _channel_videos_by_views(channel_id, platform, probe, offset)
         elif platform == "odysee":
             items = await odysee.channel_videos(channel_id, limit=probe, offset=offset)
         elif platform == "crowdbunker":
@@ -123,7 +154,12 @@ async def channel_videos(
             items = await ytdlp.channel_videos(
                 _channel_url(channel_id, platform), limit=probe, offset=offset
             )
-    except (ytdlp.UpstreamError, odysee.OdyseeError, crowdbunker.CrowdBunkerError) as exc:
+    except (
+        ytdlp.UpstreamError,
+        odysee.OdyseeError,
+        crowdbunker.CrowdBunkerError,
+        bitchute.BitChuteError,
+    ) as exc:
         raise HTTPException(status_code=502, detail=f"Channel listing failed: {exc}") from exc
     has_more = len(items) > limit
     items = items[:limit]
@@ -230,8 +266,24 @@ async def _reject_unplayable_odysee(video_id: str, platform: Platform) -> None:
         )
 
 
+async def _crowdbunker_details(video_id: str) -> VideoDetails:
+    """CrowdBunker details from the API: yt-dlp's carry no channel (it reads
+    the post's `channel`, now empty), which broke "go to channel" and the
+    related listing. yt-dlp stays the fallback."""
+    try:
+        return await crowdbunker.video_details(video_id)
+    except crowdbunker.CrowdBunkerError as exc:
+        log.warning("crowdbunker direct details failed for %s: %s", video_id, exc)
+    try:
+        return await ytdlp.video_details(_video_url(video_id, "crowdbunker"))
+    except ytdlp.UpstreamError as exc:
+        raise HTTPException(status_code=502, detail=f"Details fetch failed: {exc}") from exc
+
+
 @router.get("/videos/{video_id}", response_model=VideoDetails)
 async def video_details(video_id: str, platform: Platform = "youtube") -> VideoDetails:
+    if platform == "crowdbunker":
+        return await _crowdbunker_details(video_id)
     if platform == "odysee":
         # The SDK proxy answers in ~200 ms where yt-dlp's api.lbry.tv takes
         # 10-30 s; fall back to yt-dlp only when the proxy cannot serve it.
@@ -380,7 +432,14 @@ async def related_videos(
     # channel. The channel id comes from the (TTL-cached) video details, and the
     # current video is excluded from the listing.
     try:
-        details = await ytdlp.video_details(_video_url(video_id, platform))
+        if platform == "crowdbunker":
+            details = await _crowdbunker_details(video_id)
+        else:
+            details = await ytdlp.video_details(_video_url(video_id, platform))
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Related fetch failed: {exc.detail}"
+        ) from exc
     except ytdlp.UpstreamError as exc:
         raise HTTPException(
             status_code=502, detail=f"Related fetch failed: {exc}"

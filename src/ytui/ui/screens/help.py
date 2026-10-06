@@ -41,6 +41,7 @@ HELP_TEXT = """\
   m               Load more (older) videos / more playlists
   /               Search this channel's videos
   t               Switch Videos / Playlists tab (YouTube, BitChute)
+  O               Sort videos: newest / most viewed (YouTube, BitChute, CrowdBunker)
   Enter           In the Playlists tab: open the playlist
 
 [b]Home feed[/b]

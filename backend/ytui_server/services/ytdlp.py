@@ -660,6 +660,40 @@ async def channel_videos(channel_url: str, limit: int = 50, offset: int = 0) -> 
     return await _run(_BULK_SEM, _extract_flat, url, limit, offset)
 
 
+# Without the UC id there is no popular playlist: this many newest uploads
+# are ranked locally instead.
+_POPULAR_SCAN_CAP = 200
+
+
+def _extract_popular(url: str, limit: int, offset: int) -> list[Video]:
+    try:
+        return _extract_flat(url, limit, offset)
+    except Exception as exc:
+        # Channels without long-form uploads never get the playlist.
+        if "does not exist" in str(exc):
+            return []
+        raise
+
+
+async def channel_popular_videos(
+    channel_id: str, limit: int = 50, offset: int = 0
+) -> list[Video]:
+    """Most viewed videos of a YouTube channel, most viewed first.
+
+    The Videos tab's "Popular" chip has no URL form (?sort=p is ignored
+    nowadays), but YouTube keeps an auto-generated "Popular videos"
+    playlist per channel: UULP + the channel id without its UC prefix
+    (long-form videos, as the Videos tab; capped at 200 entries upstream).
+    """
+    if not channel_id.startswith("UC"):
+        url = Video(video_id=channel_id, title="", kind="channel").url
+        items = await channel_videos(url, limit=_POPULAR_SCAN_CAP)
+        items.sort(key=lambda v: v.view_count or 0, reverse=True)
+        return items[offset : offset + limit]
+    url = f"https://www.youtube.com/playlist?list=UULP{channel_id[2:]}"
+    return await _run(_BULK_SEM, _extract_popular, url, limit, offset)
+
+
 async def channel_playlists(
     channel_url: str, limit: int = 50, offset: int = 0
 ) -> list[Video]:

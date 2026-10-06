@@ -182,10 +182,13 @@ class YtuiClient:
         limit: int = 50,
         offset: int = 0,
         q: str | None = None,
+        sort: str = "date",
     ) -> tuple[list[Video], bool]:
-        """One page of a channel's videos, plus whether older videos remain.
+        """One page of a channel's videos, plus whether more videos remain.
 
         With ``q``, the page holds only this channel's videos matching the query.
+        ``sort`` is "date" (newest first) or "views" (most viewed first;
+        YouTube, BitChute, CrowdBunker).
         """
         params: dict[str, str | int] = {
             "platform": platform,
@@ -194,6 +197,8 @@ class YtuiClient:
         }
         if q:
             params["q"] = q  # the server rejects an empty q
+        if sort != "date":
+            params["sort"] = sort
         data = (
             await self._request(
                 "GET",

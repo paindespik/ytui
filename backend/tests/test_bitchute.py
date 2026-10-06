@@ -82,7 +82,7 @@ def test_channel_videos_endpoint_has_thumbnails(client):
     assert all(i["thumbnail_url"].startswith("https://") for i in body["items"])
     assert all(i["published"] for i in body["items"])
     assert body["has_more"] is True
-    assert calls == [{"channel_id": CHAN, "offset": 0, "limit": 4}]
+    assert calls == [{"channel_id": CHAN, "offset": 0, "limit": 4, "order_by": "latest"}]
 
 
 def test_channel_videos_pages_past_api_cap(client):
@@ -139,6 +139,38 @@ def test_api_failure_falls_back_to_ytdlp(client):
         f"https://www.bitchute.com/channel/{CHAN}/", limit=51, offset=0
     )
 
+
+def test_channel_videos_sorted_by_views_asks_popular_order(client):
+    """sort=views is served by the API's own "popular" order, offset intact."""
+    post_patch, calls = _mock_api(ITEMS)
+    with post_patch:
+        resp = client.get(
+            f"/api/channels/{CHAN}/videos",
+            params={"platform": "bitchute", "limit": 3, "offset": 6, "sort": "views"},
+        )
+    assert resp.status_code == 200
+    assert [i["video_id"] for i in resp.json()["items"]] == [
+        "vid000000006", "vid000000007", "vid000000008"
+    ]
+    assert calls == [{"channel_id": CHAN, "offset": 6, "limit": 4, "order_by": "popular"}]
+
+def test_views_sort_api_failure_does_not_fall_back_to_newest(client):
+    """yt-dlp only lists newest first: a views listing fails rather than lie."""
+    async def boom(url, **kwargs):
+        return httpx.Response(
+            500, content=json.dumps({"errors": []}), request=httpx.Request("POST", str(url))
+        )
+
+    fallback = AsyncMock(return_value=[])
+    with (
+        patch.object(httpx.AsyncClient, "post", side_effect=boom),
+        patch.object(ytdlp, "channel_videos", new=fallback),
+    ):
+        resp = client.get(
+            f"/api/channels/{CHAN}/videos", params={"platform": "bitchute", "sort": "views"}
+        )
+    assert resp.status_code == 502
+    fallback.assert_not_awaited()
 
 # ─── Channel playlists (/profile/playlists) and playlist videos ───
 

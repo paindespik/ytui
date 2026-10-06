@@ -11,6 +11,7 @@ import 'package:ytui_mobile/state/providers.dart';
 class _PagingAdapter implements HttpClientAdapter {
   final List<Object?> offsets = [];
   final List<Object?> queries = [];
+  final List<Object?> sorts = [];
 
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? _,
@@ -18,6 +19,7 @@ class _PagingAdapter implements HttpClientAdapter {
     final offset = options.queryParameters['offset'] as int;
     offsets.add(offset);
     queries.add(options.queryParameters['q']);
+    sorts.add(options.queryParameters['sort']);
     return ResponseBody.fromString(
       jsonEncode({
         'items': [
@@ -53,7 +55,7 @@ void main() {
     final container = _container(adapter);
     addTearDown(container.dispose);
 
-    const arg = ('UC1', 'youtube', '');
+    const arg = ('UC1', 'youtube', '', 'date');
     container.listen(channelVideosProvider(arg), (_, __) {});
     final first = await container.read(channelVideosProvider(arg).future);
     expect(first.videos.single.videoId, 'v0');
@@ -71,6 +73,8 @@ void main() {
     // An empty query means "list the channel": no q at all, the backend
     // rejects an empty one.
     expect(adapter.queries, [null, null]);
+    // The default order is the backend's: not sent.
+    expect(adapter.sorts, [null, null]);
 
     // No further request once the backend says there is nothing left.
     await notifier.loadMore();
@@ -82,7 +86,7 @@ void main() {
     final container = _container(adapter);
     addTearDown(container.dispose);
 
-    const arg = ('UC1', 'youtube', 'rocket');
+    const arg = ('UC1', 'youtube', 'rocket', 'date');
     container.listen(channelVideosProvider(arg), (_, __) {});
     await container.read(channelVideosProvider(arg).future);
     expect(await container
@@ -91,5 +95,33 @@ void main() {
 
     expect(adapter.offsets, [0, 1]);
     expect(adapter.queries, ['rocket', 'rocket']);
+  });
+
+  test('the views order is forwarded on every page', () async {
+    final adapter = _PagingAdapter();
+    final container = _container(adapter);
+    addTearDown(container.dispose);
+
+    const arg = ('UC1', 'crowdbunker', '', 'views');
+    container.listen(channelVideosProvider(arg), (_, __) {});
+    await container.read(channelVideosProvider(arg).future);
+    expect(await container
+        .read(channelVideosProvider(arg).notifier)
+        .loadMore(), isNull);
+
+    expect(adapter.offsets, [0, 1]);
+    expect(adapter.sorts, ['views', 'views']);
+  });
+
+  test('a search keeps its own order whatever the key says', () async {
+    final adapter = _PagingAdapter();
+    final container = _container(adapter);
+    addTearDown(container.dispose);
+
+    const arg = ('UC1', 'bitchute', 'rocket', 'views');
+    container.listen(channelVideosProvider(arg), (_, __) {});
+    await container.read(channelVideosProvider(arg).future);
+    expect(adapter.queries, ['rocket']);
+    expect(adapter.sorts, [null]);
   });
 }

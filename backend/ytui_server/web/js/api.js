@@ -67,9 +67,10 @@ export const api = {
   lives: () => request("GET", "/api/lives"),
   liveChat: (videoId, platform = "youtube", cursor = 0) =>
     request("GET", `/api/lives/${id(videoId)}/chat`, { query: { platform, cursor } }),
-  channelVideos: (channelId, platform = "youtube", limit = 50, offset = 0, q = "") =>
+  // sort : "date" (plus récentes, défaut, non envoyé) ou "views" (plus vues).
+  channelVideos: (channelId, platform = "youtube", limit = 50, offset = 0, q = "", sort = "date") =>
     request("GET", `/api/channels/${id(channelId)}/videos`, {
-      query: { platform, limit, offset, q },
+      query: { platform, limit, offset, q, sort: sort === "date" ? "" : sort },
     }),
   channelPlaylists: (channelId, platform = "youtube", limit = 50, offset = 0) =>
     request("GET", `/api/channels/${id(channelId)}/playlists`, {

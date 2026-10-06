@@ -133,6 +133,89 @@ def test_channel_videos_query_hits_youtube_search_tab(client):
     assert [i["video_id"] for i in resp.json()["items"]] == ["vid000000001"]
 
 
+class _RecordingYDL(FakeYDL):
+    def extract_info(self, url, download=False):
+        self.url = url
+        return super().extract_info(url, download)
+
+
+def test_channel_videos_by_views_reads_popular_playlist(client):
+    """sort=views lists the channel's auto-generated "Popular videos"
+    playlist (UULP + id without UC), paged like the Videos tab."""
+    entries = [
+        {"id": "vid000000001", "title": "Hit", "view_count": 9000},
+        {"id": "vid000000002", "title": "Less", "view_count": 10},
+    ]
+    ydl = _RecordingYDL({"entries": entries, "title": "Popular videos"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl):
+        resp = client.get(
+            "/api/channels/UCtest000000000000000000/videos",
+            params={"sort": "views", "limit": 3, "offset": 10},
+        )
+    assert resp.status_code == 200
+    assert ydl.url == "https://www.youtube.com/playlist?list=UULPtest000000000000000000"
+    assert ydl._opts["playlist_items"] == "11:14"
+    assert [i["video_id"] for i in resp.json()["items"]] == ["vid000000001", "vid000000002"]
+
+
+def test_channel_videos_by_views_without_popular_playlist(client):
+    """Channels without long-form uploads have no popular playlist: empty."""
+    error = RuntimeError("ERROR: [youtube:tab] UULPx: YouTube said: The playlist does not exist.")
+    with _patch_ydl(error):
+        resp = client.get(
+            "/api/channels/UCtest000000000000000000/videos", params={"sort": "views"}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+    assert resp.json()["has_more"] is False
+
+
+def test_channel_videos_by_views_non_uc_id_ranks_locally(client):
+    entries = [
+        {"id": "vid000000001", "title": "Low", "view_count": 5},
+        {"id": "vid000000002", "title": "High", "view_count": 500},
+        {"id": "vid000000003", "title": "Unknown"},
+    ]
+    ydl = _RecordingYDL({"entries": entries, "title": "Chan"})
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl):
+        resp = client.get("/api/channels/legacyid/videos", params={"sort": "views"})
+    assert resp.status_code == 200
+    assert ydl.url == "https://www.youtube.com/channel/legacyid/videos"
+    assert [i["video_id"] for i in resp.json()["items"]] == [
+        "vid000000002", "vid000000001", "vid000000003"
+    ]
+
+
+def test_channel_videos_by_views_unsupported_platform(client):
+    resp = client.get(
+        "/api/channels/chan0000/videos", params={"platform": "odysee", "sort": "views"}
+    )
+    assert resp.status_code == 501
+    # Unknown sort keys are rejected by validation.
+    assert client.get(
+        "/api/channels/UCtest000000000000000000/videos", params={"sort": "oldest"}
+    ).status_code == 422
+
+
+def test_channel_videos_search_ignores_views_sort(client):
+    """A search keeps its own order: sort=views does not reroute it."""
+    entries = [
+        {"id": "aaaaaaaaaaaa", "title": "Cooking pasta", "view_count": 1},
+        {"id": "bbbbbbbbbbbb", "title": "PASTA machine review", "view_count": 99},
+    ]
+    with _patch_ydl({"entries": entries, "title": "Chan"}):
+        resp = client.get(
+            "/api/channels/chan0000/videos",
+            params={"platform": "twitch", "q": "pasta", "sort": "views"},
+        )
+    assert resp.status_code == 200
+    assert [i["video_id"] for i in resp.json()["items"]] == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+
+
 def test_channel_videos_query_filters_platforms_without_search(client):
     """Twitch has no in-channel search: the listing is filtered on title."""
     entries = [

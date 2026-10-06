@@ -93,6 +93,19 @@ async def test_channel_videos_sends_query(client):
 
 
 @respx.mock
+async def test_channel_videos_sort(client):
+    route = respx.get(f"{BASE}/api/channels/UC1/videos").mock(
+        return_value=httpx.Response(200, json={"items": [VIDEO_JSON]})
+    )
+    await client.channel_videos("UC1")
+    assert "sort" not in route.calls.last.request.url.params  # default order
+    await client.channel_videos("UC1", sort="views", offset=50)
+    params = route.calls.last.request.url.params
+    assert params["sort"] == "views"
+    assert params["offset"] == "50"
+
+
+@respx.mock
 async def test_video_streams_sends_max_height(client):
     respx.get(f"{BASE}/api/videos/abc/streams").mock(
         return_value=httpx.Response(200, json={"kind": "progressive", "url": "u", "height": 720})

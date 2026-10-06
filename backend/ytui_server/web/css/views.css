@@ -14,6 +14,8 @@
 /* Page chaîne : onglets Vidéos / Playlists ; seule la recherche (onglet
    Vidéos) les sépare de la grille, sinon l'espace vient d'ici. */
 .filter-bar.channel-tabs { margin-bottom: 14px; }
+/* Tri des vidéos (plus récentes / plus vues), entre la recherche et la grille. */
+.filter-bar.channel-sort { margin: -8px 0 14px; }
 
 /* ─── Musique : étagères horizontales façon YouTube Music ─── */
 

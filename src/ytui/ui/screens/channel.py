@@ -1,5 +1,5 @@
-"""Channel view: latest videos of one channel, its playlists (YouTube,
-BitChute) in a second tab, with 'follow channel' action."""
+"""Channel view: videos of one channel (newest or most viewed first), its
+playlists (YouTube, BitChute) in a second tab, with 'follow channel' action."""
 
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ from .browse import BrowseScreen
 
 # Platforms whose channels list their playlists (GET /channels/{id}/playlists).
 PLAYLIST_PLATFORMS = ("youtube", "bitchute")
+# Platforms whose video listing can be ordered by views (sort=views).
+SORT_PLATFORMS = ("youtube", "bitchute", "crowdbunker")
+SORT_LABELS = {"date": "newest first", "views": "most viewed"}
 
 VIDEOS_TAB = "tab-videos"
 PLAYLISTS_TAB = "tab-playlists"
@@ -37,6 +40,7 @@ class ChannelScreen(BrowseScreen):
         Binding("a", "add_this_channel", "Follow channel"),
         Binding("m", "load_more", "Load more"),
         Binding("t", "toggle_tab", "Videos/Playlists"),
+        Binding("O", "toggle_sort", "Sort date/views"),
     ]
 
     DEFAULT_CSS = """
@@ -65,6 +69,8 @@ class ChannelScreen(BrowseScreen):
         self._has_more = False
         self._loading_page = False
         self._query: str | None = None
+        # Listing order: "date" (newest first) or "views" (most viewed first).
+        self._sort = "date"
         self._is_live = False
         self._videos_shown = False
         # Playlists tab: fetched on first activation only.
@@ -83,6 +89,15 @@ class ChannelScreen(BrowseScreen):
     @property
     def has_playlists(self) -> bool:
         return self.channel.platform in PLAYLIST_PLATFORMS
+
+    @property
+    def can_sort(self) -> bool:
+        return self.channel.platform in SORT_PLATFORMS
+
+    @property
+    def listing_sort(self) -> str:
+        """The order asked from the server: a search keeps its own order."""
+        return "date" if self._query else self._sort
 
     @property
     def on_playlists_tab(self) -> bool:
@@ -121,6 +136,8 @@ class ChannelScreen(BrowseScreen):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "toggle_tab" and not self.has_playlists:
             return False  # no Playlists tab on this platform: hide the key
+        if action == "toggle_sort" and not self.can_sort:
+            return False  # no views order upstream: hide the key
         return True
 
     # -- videos tab --
@@ -133,6 +150,7 @@ class ChannelScreen(BrowseScreen):
                 platform=self.channel.platform,
                 limit=self.PAGE_SIZE,
                 q=self._query,
+                sort=self.listing_sort,
             )
         except YtuiApiError as exc:
             self._show_error(exc.detail)
@@ -168,6 +186,7 @@ class ChannelScreen(BrowseScreen):
     async def load_more_videos(self) -> None:
         loading = self.query_one("#channel-loading", LoadingIndicator)
         loading.display = True
+        listing = (self._query, self._sort)
         try:
             videos, has_more = await self.app.client.channel_videos(
                 self.channel_ref,
@@ -175,6 +194,7 @@ class ChannelScreen(BrowseScreen):
                 limit=self.PAGE_SIZE,
                 offset=len(self._loaded),
                 q=self._query,
+                sort=self.listing_sort,
             )
         except YtuiApiError as exc:
             self.app.notify(f"Failed to load more: {exc.detail}", severity="error", timeout=8)
@@ -182,6 +202,8 @@ class ChannelScreen(BrowseScreen):
         finally:
             self._loading_page = False
             loading.display = False
+        if listing != (self._query, self._sort):
+            return  # a new search or order restarted the listing meanwhile
         self._has_more = has_more
         self._loaded.extend(videos)
         video_list = self.query_one("#channel-list", VideoList)
@@ -330,8 +352,28 @@ class ChannelScreen(BrowseScreen):
         count = len(self._loaded)
         if self._query:
             self.sub_title = f"{name} — {count} results for '{self._query}'{suffix}"
+        elif self._sort != "date":
+            order = SORT_LABELS[self._sort]
+            self.sub_title = f"{name} — {count} videos, {order}{suffix}"
         else:
             self.sub_title = f"{name} — {count} videos{suffix}"
+
+    def action_toggle_sort(self) -> None:
+        """Switch the videos listing between newest and most viewed first."""
+        if not self.can_sort:
+            return
+        if self._query:
+            self.app.notify(
+                "Search results keep their own order — Escape clears the search",
+                timeout=4,
+            )
+            return
+        if self.on_playlists_tab:
+            # The order applies to the videos: show the tab it reorders.
+            self.query_one("#channel-tabs", TabbedContent).active = VIDEOS_TAB
+        self._sort = "views" if self._sort == "date" else "date"
+        self.app.notify(f"Videos: {SORT_LABELS[self._sort]}", timeout=3)
+        self._restart_listing()
 
     def action_add_this_channel(self) -> None:
         self.app.follow_channel(self.channel)
@@ -371,6 +413,9 @@ class ChannelScreen(BrowseScreen):
     def _set_query(self, query: str | None) -> None:
         """Restart the listing from page one, searching when a query is given."""
         self._query = query
+        self._restart_listing()
+
+    def _restart_listing(self) -> None:
         self._loaded = []
         self._has_more = False
         self.query_one("#channel-loading", LoadingIndicator).display = True

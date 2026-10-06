@@ -1,5 +1,6 @@
-/// Channel screen: latest videos, in-channel search and follow button, plus a
-/// Playlists tab on platforms that list them (YouTube, BitChute).
+/// Channel screen: videos (newest or most viewed first), in-channel search and
+/// follow button, plus a Playlists tab on platforms that list them (YouTube,
+/// BitChute).
 library;
 
 import 'package:flutter/material.dart';
@@ -39,6 +40,12 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen>
   /// Submitted query; empty means "list the whole channel".
   String _query = '';
 
+  /// Listing order: 'date' (newest first) or 'views' (most viewed first),
+  /// on [kChannelSortPlatforms] only. A search keeps its own order.
+  String _sort = 'date';
+
+  bool get _canSort => kChannelSortPlatforms.contains(widget.platform);
+
   final _controller = TextEditingController();
 
   /// Vidéos / Playlists tabs; null on platforms without channel playlists.
@@ -59,9 +66,14 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen>
     super.dispose();
   }
 
-  /// The family key of the list currently displayed.
-  (String, String, String) get _arg =>
-      (widget.channelId, widget.platform, _query);
+  /// The family key of the list currently displayed (a search ignores the
+  /// order, so its key does not depend on it).
+  (String, String, String, String) get _arg => (
+        widget.channelId,
+        widget.platform,
+        _query,
+        _query.isEmpty ? _sort : 'date',
+      );
 
   /// The search looks for videos: bring their tab to the front.
   void _showVideosTab() {
@@ -90,7 +102,11 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen>
     final isLive = (ref.watch(livesProvider).valueOrNull ?? const <LiveItem>[])
         .any((l) => l.video.channelId == widget.channelId);
     final isTikTok = widget.platform == 'tiktok';
-    final videosBody = _buildBody(data, colorScheme);
+    final listBody = _buildBody(data, colorScheme);
+    // The order bar stays above the list while a new order loads.
+    final videosBody = _canSort && _query.isEmpty
+        ? Column(children: [_sortBar(), Expanded(child: listBody)])
+        : listBody;
     final tabs = _tabs;
     final body = tabs == null
         ? videosBody
@@ -262,6 +278,30 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen>
     );
   }
 
+  Widget _sortBar() => ResponsiveCenter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, 0),
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'date',
+                label: Text('Plus récentes'),
+                icon: Icon(Icons.schedule),
+              ),
+              ButtonSegment(
+                value: 'views',
+                label: Text('Plus vues'),
+                icon: Icon(Icons.trending_up),
+              ),
+            ],
+            selected: {_sort},
+            showSelectedIcon: false,
+            onSelectionChanged: (selection) =>
+                setState(() => _sort = selection.first),
+          ),
+        ),
+      );
+
   Widget _buildBody(AsyncValue<ChannelVideos> data, ColorScheme colorScheme) {
     return data.when(
         loading: () => const AppLoading(),
@@ -318,9 +358,11 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen>
                   if (videoIndex == videos.length) {
                     return _LoadMoreFooter(
                       loading: result.loadingMore,
-                      label: _query.isEmpty
-                          ? 'Charger des vidéos plus anciennes'
-                          : 'Charger plus de résultats',
+                      label: _query.isNotEmpty
+                          ? 'Charger plus de résultats'
+                          : _arg.$4 == 'views'
+                              ? 'Charger plus de vidéos'
+                              : 'Charger des vidéos plus anciennes',
                       onPressed: _loadMore,
                     );
                   }

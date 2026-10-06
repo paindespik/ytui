@@ -91,6 +91,9 @@ const kChannelPageSize = 50;
 /// Platforms whose channels list their playlists (Playlists tab).
 const kChannelPlaylistPlatforms = {'youtube', 'bitchute'};
 
+/// Platforms whose channel videos can be listed most viewed first.
+const kChannelSortPlatforms = {'youtube', 'bitchute', 'crowdbunker'};
+
 /// A paginated channel listing (videos or playlists): page 1 on build, the
 /// next ones through [loadMore]. Subclasses only say how a page is fetched.
 abstract class ChannelListingNotifier<A>
@@ -125,14 +128,17 @@ abstract class ChannelListingNotifier<A>
   }
 }
 
-/// Family key: (channelId, platform, query). An empty query lists the whole
-/// channel; a non-empty one searches within it.
-final channelVideosProvider = AsyncNotifierProvider.autoDispose
-    .family<ChannelVideosNotifier, ChannelVideos, (String, String, String)>(
-        ChannelVideosNotifier.new);
+/// Family key: (channelId, platform, query, sort). An empty query lists the
+/// whole channel, ordered by sort ('date': newest first, 'views': most
+/// viewed first); a non-empty one searches within it, in the search's own
+/// order (callers pass 'date' then).
+final channelVideosProvider = AsyncNotifierProvider.autoDispose.family<
+    ChannelVideosNotifier,
+    ChannelVideos,
+    (String, String, String, String)>(ChannelVideosNotifier.new);
 
 class ChannelVideosNotifier
-    extends ChannelListingNotifier<(String, String, String)> {
+    extends ChannelListingNotifier<(String, String, String, String)> {
   @override
   Future<(List<Video>, String, bool)> fetchPage(YtuiApi api, int offset) =>
       api.channelVideos(
@@ -141,6 +147,7 @@ class ChannelVideosNotifier
         limit: kChannelPageSize,
         offset: offset,
         q: arg.$3.isEmpty ? null : arg.$3,
+        sort: arg.$3.isEmpty ? arg.$4 : 'date',
       );
 }
 

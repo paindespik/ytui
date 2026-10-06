@@ -371,9 +371,21 @@ void main() {
         await api.channelVideos('UC1', limit: 50, offset: 50);
     expect(adapter.requests.single.queryParameters['offset'], 50);
     expect(adapter.requests.single.queryParameters['limit'], 50);
+    expect(adapter.requests.single.queryParameters.containsKey('sort'), isFalse);
     expect(videos.single.videoId, 'b');
     expect(title, 'Chan');
     expect(hasMore, isTrue);
+  });
+
+  test('channelVideos sends the views order', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/channels/UC1/videos': (200, {'items': [], 'has_more': false}),
+    });
+    final api = _api({}, adapter: adapter);
+    await api.channelVideos('UC1', platform: 'bitchute', sort: 'views');
+    final query = adapter.requests.single.queryParameters;
+    expect(query['sort'], 'views');
+    expect(query['platform'], 'bitchute');
   });
 
   test('channelPlaylists hits /playlists with platform and offset', () async {

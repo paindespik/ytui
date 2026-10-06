@@ -12,6 +12,7 @@ A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch, TikTok and C
 - **Live notifications** — the server polls followed channels' `/live` pages every 5 min; clients poll `/api/lives` and surface desktop/mobile notifications, pinning live videos in the feed.
 - **YouTube interactions** — an OAuth2 "token push" model: the desktop client completes OAuth consent and uploads the token to the server, which then acts for every client through the YouTube Data API v3 — like (a toggle, so it can be undone), read paginated comments, post one. In the mobile app and the browser SPA both live in the player: the comments panel takes over the queue/suggestions column without interrupting playback.
 - **Search** — YouTube, Odysee and CrowdBunker search via `yt-dlp`/the LBRY API/the CrowdBunker search API, from any client.
+- **Channel sort** — YouTube, BitChute and CrowdBunker channel pages list their videos newest first or most viewed first (`GET /api/channels/{id}/videos?sort=views`): TUI `O`, web and mobile "Plus récentes / Plus vues" toggle. A search inside the channel keeps its own order.
 - **Four clients, one backend** — a Textual TUI (with thumbnail rendering via sixel/kitty/Unicode fallback), an argparse CLI (`ytui play/search/import/auth`), a Flutter Android app (Riverpod + GoRouter + WorkManager background live polling), and a zero-build browser SPA (vanilla ES modules; dash.js/hls.js/mpegts.js playback through a same-origin stream proxy, server-generated DASH manifests for >360p YouTube, session-cookie auth, TUI-style keyboard shortcuts).
 
 ## Platform support
@@ -19,9 +20,10 @@ A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch, TikTok and C
 | Feature | YouTube | BitChute | Odysee | Twitch | TikTok | CrowdBunker |
 |---|---|---|---|---|---|---|
 | Followed-channel feed | ✅ RSS | ✅ RSS | ✅ RSS | ✅ (lives) | ✅ (lives) | ✅ posts API (2 pages) |
-| Global search | ✅ yt-dlp | ❌ anti-bot | ✅ Lighthouse | ❌ | ❌ | ✅ search API |
+| Global search | ✅ yt-dlp | ❌ anti-bot | ✅ Lighthouse | ❌ | ❌ | ✅ search API (videos + channels, ≥2 chars) |
 | Channel videos | ✅ | ✅ | ✅ | ✅ VODs | ❌ lives only | ✅ |
-| In-channel search | ✅ upstream | ✅ local scan | ✅ Lighthouse (≥3 chars) | ✅ local scan | — | ✅ local scan |
+| Channel videos, most viewed first | ✅ "Popular videos" playlist (top 200) | ✅ API `popular` order | ❌ 501 | ❌ 501 | ❌ 501 | ✅ all-time top 10 + 200 newest ranked |
+| In-channel search | ✅ upstream | ✅ local scan | ✅ Lighthouse (≥3 chars) | ✅ local scan | — | ✅ upstream (≥2 chars) |
 | Channel playlists tab | ✅ Playlists tab | ✅ owner profile API | ❌ 501 | ❌ 501 | ❌ 501 | ❌ 501 |
 | VOD playback | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Lives | ✅ | ❌ | ❌ no API | ✅ ad-free proxies | ✅ webcast | ❌ no API |

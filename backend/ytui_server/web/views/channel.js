@@ -1,5 +1,5 @@
-// Page chaîne : onglets Vidéos (dernières vidéos, recherche dans la chaîne,
-// Tout lire) et Playlists (YouTube, BitChute), plus Suivre.
+// Page chaîne : onglets Vidéos (plus récentes ou plus vues, recherche dans la
+// chaîne, Tout lire) et Playlists (YouTube, BitChute), plus Suivre.
 
 import { api } from "../js/api.js";
 import { navigate } from "../js/router.js";
@@ -21,15 +21,20 @@ import { icon } from "../js/icons.js";
 // (GET /api/channels/{id}/playlists).
 export const PLAYLIST_PLATFORMS = new Set(["youtube", "bitchute"]);
 
+// Plateformes dont les vidéos se trient par nombre de vues (?sort=views).
+export const SORT_PLATFORMS = new Set(["youtube", "bitchute", "crowdbunker"]);
+
 const PAGE_SIZE = 50;
 
 /// Chemin d'un onglet de la chaîne ; l'onglet vit dans le hash comme la
-/// recherche, donc l'URL reste partageable et le retour arrière y ramène.
-export function channelTabPath(id, platform, title, tab, q = "") {
+/// recherche et le tri, donc l'URL reste partageable et le retour arrière y
+/// ramène.
+export function channelTabPath(id, platform, title, tab, q = "", sort = "date") {
   let target = channelPath(id, platform, title);
   const params = [];
   if (tab === "playlists") params.push("tab=playlists");
   if (q) params.push(`q=${encodeURIComponent(q)}`);
+  if (tab !== "playlists" && sort === "views") params.push("sort=views");
   if (params.length) target += (target.includes("?") ? "&" : "?") + params.join("&");
   return target;
 }
@@ -42,6 +47,10 @@ export async function render(view, { params, query }) {
   // La recherche vit dans le hash : l'URL reste partageable et un nouveau terme
   // re-rend la vue depuis zéro, donc la pagination repart proprement.
   const q = tab === "videos" ? (query.get("q") || "").trim() : "";
+  // Tri des vidéos ; une recherche garde l'ordre de la plateforme, mais le
+  // tri reste dans l'URL pour revenir au même ordre en l'effaçant.
+  const canSort = tab === "videos" && SORT_PLATFORMS.has(platform);
+  const sort = canSort && query.get("sort") === "views" ? "views" : "date";
   const title = el("h1", { text: channelName || "Chaîne" });
   // Nom de la chaîne tel que l'API le corrige, repris dans l'URL des onglets.
   let name = channelName;
@@ -100,7 +109,28 @@ export async function render(view, { params, query }) {
       ),
     );
   }
-  if (tab === "videos") view.append(searchForm(id, platform, channelName, q));
+  if (tab === "videos") view.append(searchForm(id, platform, channelName, q, sort));
+  if (canSort && !q) {
+    const sortBtn = (label, value) =>
+      el("button", {
+        class: sort === value ? "chip-btn active" : "chip-btn",
+        type: "button",
+        "aria-pressed": sort === value ? "true" : "false",
+        text: label,
+        onclick: () => {
+          if (sort === value) return;
+          navigate(channelTabPath(id, platform, name, "videos", "", value));
+        },
+      });
+    view.append(
+      el(
+        "div",
+        { class: "filter-bar channel-sort", role: "group", "aria-label": "Trier les vidéos" },
+        sortBtn("Plus récentes", "date"),
+        sortBtn("Plus vues", "views"),
+      ),
+    );
+  }
   view.append(body);
 
   // Non bloquant : le badge s'affiche si la chaîne est dans les lives.
@@ -133,7 +163,7 @@ export async function render(view, { params, query }) {
   // des cartes déjà rendues restent valides après chaque page.
   const videos = [];
   const shown = await renderListing(body, onChannel, {
-    fetchPage: (offset) => api.channelVideos(id, platform, PAGE_SIZE, offset, q),
+    fetchPage: (offset) => api.channelVideos(id, platform, PAGE_SIZE, offset, q, q ? "date" : sort),
     collect: videos,
     card: (v, index) => videoCard(v, { onOpen: () => playVideos(videos, index) }),
     empty: q ? `Aucune vidéo pour « ${q} »` : "Cette chaîne n'a aucune vidéo",
@@ -145,7 +175,7 @@ export async function render(view, { params, query }) {
   }
 }
 
-function searchForm(id, platform, channelName, q) {
+function searchForm(id, platform, channelName, q, sort) {
   const searchInput = el("input", {
     class: "input page-search",
     type: "search",
@@ -161,14 +191,14 @@ function searchForm(id, platform, channelName, q) {
         e.preventDefault();
         const term = searchInput.value.trim();
         if (term === q) return;
-        navigate(channelTabPath(id, platform, channelName, "videos", term));
+        navigate(channelTabPath(id, platform, channelName, "videos", term, sort));
       },
     },
     searchInput,
     el("button", { class: "btn", type: "submit" }, icon("search"), el("span", { text: "Rechercher" })),
     q ? el("button", { class: "btn", type: "button", text: "Effacer", onclick: () => {
       searchInput.value = "";
-      navigate(channelPath(id, platform, channelName));
+      navigate(channelTabPath(id, platform, channelName, "videos", "", sort));
     } }) : null,
   );
 }

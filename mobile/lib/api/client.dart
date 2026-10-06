@@ -107,6 +107,9 @@ class YtuiApi {
     int limit = 50,
     int offset = 0,
     String? q,
+    // 'date' (newest first, the backend default: not sent) or 'views' (most
+    // viewed first; YouTube, BitChute, CrowdBunker).
+    String sort = 'date',
   }) async {
     final r = await _request('GET', '/api/channels/${_enc(channelId)}/videos',
         query: {
@@ -116,6 +119,7 @@ class YtuiApi {
           // The backend rejects an empty q (min_length=1): omit it entirely
           // when listing the whole channel.
           if (q != null && q.isNotEmpty) 'q': q,
+          if (sort != 'date') 'sort': sort,
         });
     final data = r.data as Map<String, dynamic>;
     final items = (data['items'] as List<dynamic>? ?? const [])

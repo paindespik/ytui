@@ -106,13 +106,23 @@ async def _post(client: httpx.AsyncClient, path: str, body: dict[str, Any]) -> d
     return data
 
 
+# Channel listing orders accepted by /channel/videos (the SPA's Latest /
+# Popular / Oldest), keyed by ytui's sort names.
+ORDER_BY = {"date": "latest", "views": "popular"}
+
+
 async def _fetch_page(
-    client: httpx.AsyncClient, channel_id: str, offset: int, limit: int
+    client: httpx.AsyncClient, channel_id: str, offset: int, limit: int, order_by: str
 ) -> list[dict]:
     try:
         resp = await client.post(
             f"{API_BASE}/channel/videos",
-            json={"channel_id": channel_id, "offset": offset, "limit": limit},
+            json={
+                "channel_id": channel_id,
+                "offset": offset,
+                "limit": limit,
+                "order_by": order_by,
+            },
             headers=HEADERS,
         )
         resp.raise_for_status()
@@ -121,14 +131,16 @@ async def _fetch_page(
         raise BitChuteError(f"channel videos fetch failed: {exc}") from exc
 
 
-async def _api_channel_videos(channel_id: str, limit: int, offset: int) -> list[Video]:
+async def _api_channel_videos(
+    channel_id: str, limit: int, offset: int, order_by: str
+) -> list[Video]:
     """The API is offset-paginated over published videos only, so `offset`
     maps 1:1 to the listing index; pages are walked until `limit` is met."""
     videos: list[Video] = []
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         while len(videos) < limit:
             want = min(PAGE_SIZE, limit - len(videos))
-            items = await _fetch_page(client, channel_id, offset, want)
+            items = await _fetch_page(client, channel_id, offset, want, order_by)
             offset += len(items)
             for item in items:
                 video = _item_to_video(item, channel_id)
@@ -139,15 +151,22 @@ async def _api_channel_videos(channel_id: str, limit: int, offset: int) -> list[
     return videos[:limit]
 
 
-async def channel_videos(channel_id: str, limit: int = 50, offset: int = 0) -> list[Video]:
-    """Videos of a channel, newest first, with thumbnails and dates.
+async def channel_videos(
+    channel_id: str, limit: int = 50, offset: int = 0, sort: str = "date"
+) -> list[Video]:
+    """Videos of a channel with thumbnails and dates: newest first, or most
+    viewed first with sort="views" (ordered server-side).
 
     Falls back to yt-dlp's (thumbnail-less) scraper when the API fails, so a
-    change on BitChute's side degrades the cards instead of the listing.
+    change on BitChute's side degrades the cards instead of the listing. The
+    scraper only lists newest first: a views listing raises BitChuteError
+    rather than come back in the wrong order.
     """
     try:
-        return await _api_channel_videos(channel_id, limit, offset)
+        return await _api_channel_videos(channel_id, limit, offset, ORDER_BY[sort])
     except BitChuteError as exc:
+        if sort != "date":
+            raise
         log.warning("bitchute API listing failed for %s, using yt-dlp: %s", channel_id, exc)
     url = Video(video_id=channel_id, title="", kind="channel", platform="bitchute").url
     return await ytdlp.channel_videos(url, limit=limit, offset=offset)

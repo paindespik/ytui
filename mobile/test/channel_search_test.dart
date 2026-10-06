@@ -13,6 +13,7 @@ import 'package:ytui_mobile/state/providers.dart';
 /// Anything else (watched ids…) gets an empty payload.
 class _ChannelAdapter implements HttpClientAdapter {
   final List<Object?> queries = [];
+  final List<Object?> sorts = [];
   final List<String> playlistPlatforms = [];
 
   @override
@@ -22,7 +23,12 @@ class _ChannelAdapter implements HttpClientAdapter {
     if (options.path.endsWith('/videos')) {
       final q = options.queryParameters['q'] as String?;
       queries.add(q);
-      const titles = ['Rocket launch', 'Cooking pasta'];
+      final sort = options.queryParameters['sort'];
+      sorts.add(sort);
+      // Most viewed first: the second video is the popular one.
+      final titles = sort == 'views'
+          ? const ['Cooking pasta', 'Rocket launch']
+          : const ['Rocket launch', 'Cooking pasta'];
       final items = [
         for (final t in titles)
           if (q == null || t.toLowerCase().contains(q.toLowerCase()))
@@ -143,6 +149,48 @@ void main() {
     // Searching brings the videos back to the front.
     await tester.tap(find.byIcon(Icons.search));
     await tester.pumpAndSettle();
+    expect(find.text('Rocket launch'), findsOneWidget);
+  });
+
+  testWidgets('the order bar lists the channel most viewed first',
+      (tester) async {
+    final adapter = _ChannelAdapter();
+    await tester.pumpWidget(_app(adapter, platform: 'crowdbunker'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Plus récentes'), findsOneWidget);
+    expect(adapter.sorts, [null]);
+    double top(String title) => tester.getTopLeft(find.text(title)).dy;
+    expect(top('Rocket launch'), lessThan(top('Cooking pasta')));
+
+    await tester.tap(find.text('Plus vues'));
+    await tester.pumpAndSettle();
+    expect(adapter.sorts, [null, 'views']);
+    expect(top('Cooking pasta'), lessThan(top('Rocket launch')));
+
+    // A search keeps its own order: the bar hides, no sort is sent.
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'rocket');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(find.text('Plus vues'), findsNothing);
+    expect(adapter.queries.last, 'rocket');
+    expect(adapter.sorts.last, isNull);
+
+    // Leaving the search brings the chosen order back.
+    await tester.tap(find.byIcon(Icons.close));
+    await tester.pumpAndSettle();
+    expect(find.text('Plus vues'), findsOneWidget);
+    expect(adapter.sorts.last, 'views');
+    expect(top('Cooking pasta'), lessThan(top('Rocket launch')));
+  });
+
+  testWidgets('no order bar where views cannot be sorted', (tester) async {
+    final adapter = _ChannelAdapter();
+    await tester.pumpWidget(_app(adapter, platform: 'odysee'));
+    await tester.pumpAndSettle();
+    expect(find.text('Plus vues'), findsNothing);
     expect(find.text('Rocket launch'), findsOneWidget);
   });
 
