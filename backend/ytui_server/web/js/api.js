@@ -71,6 +71,10 @@ export const api = {
     request("GET", `/api/channels/${id(channelId)}/videos`, {
       query: { platform, limit, offset, q },
     }),
+  channelPlaylists: (channelId, platform = "youtube", limit = 50, offset = 0) =>
+    request("GET", `/api/channels/${id(channelId)}/playlists`, {
+      query: { platform, limit, offset },
+    }),
   playlistVideos: (playlistId, platform = "youtube", limit = 200) =>
     request("GET", `/api/ytplaylists/${id(playlistId)}/videos`, { query: { platform, limit } }),
 

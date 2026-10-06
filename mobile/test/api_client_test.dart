@@ -376,6 +376,32 @@ void main() {
     expect(hasMore, isTrue);
   });
 
+  test('channelPlaylists hits /playlists with platform and offset', () async {
+    final adapter = _FakeAdapter({
+      'GET /api/channels/itv/playlists': (
+        200,
+        {
+          'items': [
+            {'video_id': 'pl1', 'title': 'Terre', 'kind': 'playlist',
+             'platform': 'bitchute'},
+          ],
+          'channel': {'title': 'ITV'},
+          'has_more': false,
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final (items, title, hasMore) =
+        await api.channelPlaylists('itv', platform: 'bitchute', offset: 50);
+    final query = adapter.requests.single.queryParameters;
+    expect(query['platform'], 'bitchute');
+    expect(query['offset'], 50);
+    expect(items.single.kind, 'playlist');
+    expect(items.single.platform, 'bitchute');
+    expect(title, 'ITV');
+    expect(hasMore, isFalse);
+  });
+
   test('playlistVideos tolerates null items', () async {
     final api = _api({
       'GET /api/ytplaylists/PL1/videos': (200, {'items': null, 'title': 'x'}),

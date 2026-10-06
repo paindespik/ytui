@@ -13,6 +13,7 @@ import 'package:ytui_mobile/state/providers.dart';
 /// Anything else (watched ids…) gets an empty payload.
 class _ChannelAdapter implements HttpClientAdapter {
   final List<Object?> queries = [];
+  final List<String> playlistPlatforms = [];
 
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? _,
@@ -32,6 +33,21 @@ class _ChannelAdapter implements HttpClientAdapter {
         'channel': {'title': 'Chan'},
         'has_more': false,
       };
+    } else if (options.path.endsWith('/playlists')) {
+      final platform = options.queryParameters['platform'] as String;
+      playlistPlatforms.add(platform);
+      body = {
+        'items': [
+          {
+            'video_id': 'PL1',
+            'title': 'Best of',
+            'kind': 'playlist',
+            'platform': platform,
+          },
+        ],
+        'channel': {'title': 'Chan'},
+        'has_more': false,
+      };
     }
     return ResponseBody.fromString(
       jsonEncode(body),
@@ -46,7 +62,7 @@ class _ChannelAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-Widget _app(_ChannelAdapter adapter) {
+Widget _app(_ChannelAdapter adapter, {String platform = 'youtube'}) {
   final dio = Dio(BaseOptions(baseUrl: 'https://server.test'))
     ..httpClientAdapter = adapter;
   return ProviderScope(
@@ -54,7 +70,8 @@ Widget _app(_ChannelAdapter adapter) {
       apiProvider.overrideWithValue(
           YtuiApi(baseUrl: 'https://server.test', token: 'sekret', dio: dio)),
     ],
-    child: const MaterialApp(home: ChannelScreen(channelId: 'UC1')),
+    child: MaterialApp(
+        home: ChannelScreen(channelId: 'UC1', platform: platform)),
   );
 }
 
@@ -98,5 +115,45 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Aucune vidéo pour « zzz »'), findsOneWidget);
+  });
+
+  testWidgets('the Playlists tab lists the channel playlists on demand',
+      (tester) async {
+    final adapter = _ChannelAdapter();
+    await tester.pumpWidget(_app(adapter, platform: 'bitchute'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Vidéos'), findsOneWidget);
+    expect(adapter.playlistPlatforms, isEmpty); // not fetched up front
+
+    await tester.tap(find.text('Playlists'));
+    await tester.pumpAndSettle();
+    expect(adapter.playlistPlatforms, ['bitchute']);
+    expect(find.text('Best of'), findsOneWidget);
+    expect(find.text('Rocket launch'), findsNothing);
+
+    // Back and forth: the tab is kept, not fetched again.
+    await tester.tap(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    expect(find.text('Rocket launch'), findsOneWidget);
+    await tester.tap(find.text('Playlists'));
+    await tester.pumpAndSettle();
+    expect(adapter.playlistPlatforms, ['bitchute']);
+
+    // Searching brings the videos back to the front.
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+    expect(find.text('Rocket launch'), findsOneWidget);
+  });
+
+  testWidgets('no tabs on platforms without channel playlists',
+      (tester) async {
+    final adapter = _ChannelAdapter();
+    await tester.pumpWidget(_app(adapter, platform: 'odysee'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TabBar), findsNothing);
+    expect(find.text('Rocket launch'), findsOneWidget);
+    expect(adapter.playlistPlatforms, isEmpty);
   });
 }

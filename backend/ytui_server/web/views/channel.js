@@ -1,4 +1,5 @@
-// Page chaîne : dernières vidéos, recherche dans la chaîne, Suivre et Tout lire.
+// Page chaîne : onglets Vidéos (dernières vidéos, recherche dans la chaîne,
+// Tout lire) et Playlists (YouTube, BitChute), plus Suivre.
 
 import { api } from "../js/api.js";
 import { navigate } from "../js/router.js";
@@ -16,13 +17,37 @@ import {
 } from "../js/ui.js";
 import { icon } from "../js/icons.js";
 
+// Plateformes dont les chaînes exposent leurs playlists
+// (GET /api/channels/{id}/playlists).
+export const PLAYLIST_PLATFORMS = new Set(["youtube", "bitchute"]);
+
+const PAGE_SIZE = 50;
+
+/// Chemin d'un onglet de la chaîne ; l'onglet vit dans le hash comme la
+/// recherche, donc l'URL reste partageable et le retour arrière y ramène.
+export function channelTabPath(id, platform, title, tab, q = "") {
+  let target = channelPath(id, platform, title);
+  const params = [];
+  if (tab === "playlists") params.push("tab=playlists");
+  if (q) params.push(`q=${encodeURIComponent(q)}`);
+  if (params.length) target += (target.includes("?") ? "&" : "?") + params.join("&");
+  return target;
+}
+
 export async function render(view, { params, query }) {
   const { platform, id } = params;
   const channelName = query.get("title") || "";
+  const hasPlaylists = PLAYLIST_PLATFORMS.has(platform);
+  const tab = hasPlaylists && query.get("tab") === "playlists" ? "playlists" : "videos";
   // La recherche vit dans le hash : l'URL reste partageable et un nouveau terme
   // re-rend la vue depuis zéro, donc la pagination repart proprement.
-  const q = (query.get("q") || "").trim();
+  const q = tab === "videos" ? (query.get("q") || "").trim() : "";
   const title = el("h1", { text: channelName || "Chaîne" });
+  // Nom de la chaîne tel que l'API le corrige, repris dans l'URL des onglets.
+  let name = channelName;
+  const onChannel = (channel) => {
+    if (channel && channel.title) title.textContent = name = channel.title;
+  };
   // Badge « en direct » : la chaîne apparaît dans /api/lives.
   const liveBadge = el("span", { class: `chip live-chip ${platform}`, text: "EN DIRECT" });
   liveBadge.hidden = true;
@@ -32,36 +57,10 @@ export async function render(view, { params, query }) {
   // Bascule : une chaîne suivie doit pouvoir être quittée d'ici, sans passer
   // par les Réglages.
   const followBtn = followButton(platform, id);
-  const playAllBtn = iconBtn("play", "Tout lire", { class: "primary", disabled: true });
+  // « Tout lire » enchaîne des vidéos : sans objet sur l'onglet Playlists.
+  const playAllBtn =
+    tab === "videos" ? iconBtn("play", "Tout lire", { class: "primary", disabled: true }) : null;
   const body = el("div");
-
-  const searchInput = el("input", {
-    class: "input page-search",
-    type: "search",
-    placeholder: "Rechercher dans la chaîne…",
-    "aria-label": "Rechercher dans la chaîne",
-    value: q,
-  });
-  const searchForm = el(
-    "form",
-    {
-      class: "search-form",
-      onsubmit: (e) => {
-        e.preventDefault();
-        const term = searchInput.value.trim();
-        if (term === q) return;
-        let target = channelPath(id, platform, channelName);
-        if (term) target += (target.includes("?") ? "&" : "?") + `q=${encodeURIComponent(term)}`;
-        navigate(target);
-      },
-    },
-    searchInput,
-    el("button", { class: "btn", type: "submit" }, icon("search"), el("span", { text: "Rechercher" })),
-    q ? el("button", { class: "btn", type: "button", text: "Effacer", onclick: () => {
-      searchInput.value = "";
-      navigate(channelPath(id, platform, channelName));
-    } }) : null,
-  );
 
   view.append(
     el(
@@ -79,7 +78,30 @@ export async function render(view, { params, query }) {
       el("div", { class: "channel-banner", text: "Chaîne en direct uniquement — voir l'onglet Lives" }),
     );
   }
-  view.append(searchForm, body);
+  if (hasPlaylists) {
+    const tabBtn = (label, value) =>
+      el("button", {
+        class: tab === value ? "chip-btn active" : "chip-btn",
+        type: "button",
+        role: "tab",
+        "aria-selected": tab === value ? "true" : "false",
+        text: label,
+        onclick: () => {
+          if (tab === value) return;
+          navigate(channelTabPath(id, platform, name, value));
+        },
+      });
+    view.append(
+      el(
+        "div",
+        { class: "filter-bar channel-tabs", role: "tablist", "aria-label": "Contenu de la chaîne" },
+        tabBtn("Vidéos", "videos"),
+        tabBtn("Playlists", "playlists"),
+      ),
+    );
+  }
+  if (tab === "videos") view.append(searchForm(id, platform, channelName, q));
+  view.append(body);
 
   // Non bloquant : le badge s'affiche si la chaîne est dans les lives.
   api
@@ -96,18 +118,70 @@ export async function render(view, { params, query }) {
     .catch(() => {});
   body.append(skeletonGrid(8));
 
+  if (tab === "playlists") {
+    await renderListing(body, onChannel, {
+      fetchPage: (offset) => api.channelPlaylists(id, platform, PAGE_SIZE, offset),
+      // Une carte de playlist ouvre sa page (openVideo par défaut).
+      card: (v) => videoCard(v),
+      empty: "Cette chaîne n'a aucune playlist",
+      failure: "Impossible de charger les playlists",
+    });
+    return;
+  }
+
   // Pagination : `videos` grandit sur place, donc « Tout lire » et les index
   // des cartes déjà rendues restent valides après chaque page.
-  const PAGE_SIZE = 50;
   const videos = [];
+  const shown = await renderListing(body, onChannel, {
+    fetchPage: (offset) => api.channelVideos(id, platform, PAGE_SIZE, offset, q),
+    collect: videos,
+    card: (v, index) => videoCard(v, { onOpen: () => playVideos(videos, index) }),
+    empty: q ? `Aucune vidéo pour « ${q} »` : "Cette chaîne n'a aucune vidéo",
+    failure: "Impossible de charger la chaîne",
+  });
+  if (shown) {
+    playAllBtn.disabled = false;
+    playAllBtn.addEventListener("click", () => playVideos(videos));
+  }
+}
+
+function searchForm(id, platform, channelName, q) {
+  const searchInput = el("input", {
+    class: "input page-search",
+    type: "search",
+    placeholder: "Rechercher dans la chaîne…",
+    "aria-label": "Rechercher dans la chaîne",
+    value: q,
+  });
+  return el(
+    "form",
+    {
+      class: "search-form",
+      onsubmit: (e) => {
+        e.preventDefault();
+        const term = searchInput.value.trim();
+        if (term === q) return;
+        navigate(channelTabPath(id, platform, channelName, "videos", term));
+      },
+    },
+    searchInput,
+    el("button", { class: "btn", type: "submit" }, icon("search"), el("span", { text: "Rechercher" })),
+    q ? el("button", { class: "btn", type: "button", text: "Effacer", onclick: () => {
+      searchInput.value = "";
+      navigate(channelPath(id, platform, channelName));
+    } }) : null,
+  );
+}
+
+/// Grille paginée (« Charger plus ») d'un listing de chaîne. Les éléments
+/// reçus s'ajoutent à `collect` ; renvoie vrai si au moins un est affiché.
+async function renderListing(body, onChannel, { fetchPage, collect = [], card, empty, failure }) {
   const grid = el("div", { class: "grid" });
 
   function appendPage(items) {
-    const base = videos.length;
-    videos.push(...items);
-    grid.append(
-      ...items.map((v, i) => videoCard(v, { onOpen: () => playVideos(videos, base + i) })),
-    );
+    const base = collect.length;
+    collect.push(...items);
+    grid.append(...items.map((v, i) => card(v, base + i)));
   }
 
   const moreBtn = el("button", {
@@ -117,7 +191,7 @@ export async function render(view, { params, query }) {
       moreBtn.disabled = true;
       moreBtn.textContent = "Chargement…";
       try {
-        const page = await api.channelVideos(id, platform, PAGE_SIZE, videos.length, q);
+        const page = await fetchPage(collect.length);
         appendPage(page.items || []);
         if (!page.has_more) {
           moreBtn.remove();
@@ -132,21 +206,19 @@ export async function render(view, { params, query }) {
   });
 
   try {
-    const out = await api.channelVideos(id, platform, PAGE_SIZE, 0, q);
-    if (out.channel && out.channel.title) title.textContent = out.channel.title;
+    const out = await fetchPage(0);
+    onChannel(out.channel);
     if (!(out.items || []).length) {
-      body.replaceChildren(
-        emptyState(q ? `Aucune vidéo pour « ${q} »` : "Cette chaîne n'a aucune vidéo"),
-      );
-      return;
+      body.replaceChildren(emptyState(empty));
+      return false;
     }
-    playAllBtn.disabled = false;
-    playAllBtn.addEventListener("click", () => playVideos(videos));
     appendPage(out.items);
     body.replaceChildren(grid);
     if (out.has_more) body.append(moreBtn);
+    return true;
   } catch (err) {
     errorToast(err);
-    body.replaceChildren(emptyState("Impossible de charger la chaîne"));
+    body.replaceChildren(emptyState(failure));
+    return false;
   }
 }

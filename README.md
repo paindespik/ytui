@@ -22,6 +22,7 @@ A self-hosted, multi-client YouTube (plus BitChute, Odysee, Twitch, TikTok and C
 | Global search | ✅ yt-dlp | ❌ anti-bot | ✅ Lighthouse | ❌ | ❌ | ✅ search API |
 | Channel videos | ✅ | ✅ | ✅ | ✅ VODs | ❌ lives only | ✅ |
 | In-channel search | ✅ upstream | ✅ local scan | ✅ Lighthouse (≥3 chars) | ✅ local scan | — | ✅ local scan |
+| Channel playlists tab | ✅ Playlists tab | ✅ owner profile API | ❌ 501 | ❌ 501 | ❌ 501 | ❌ 501 |
 | VOD playback | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Lives | ✅ | ❌ | ❌ no API | ✅ ad-free proxies | ✅ webcast | ❌ no API |
 | Live chat | ✅ | — | — | ✅ IRC | ❌ infeasible | — |

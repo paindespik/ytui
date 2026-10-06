@@ -53,6 +53,9 @@ class FakeClient:
         self.channel_queries: list[str | None] = []
         self.channel_pages: list[list[Video]] = [[VIDEO]]
         self.channel_search_pages: list[list[Video]] = [[]]
+        self.playlist_pages: list[list[Video]] = [[PLAYLIST]]
+        self.playlist_offsets: list[int] = []
+        self.opened_playlists: list[str] = []
 
     async def close(self) -> None:
         pass
@@ -86,7 +89,17 @@ class FakeClient:
             start += len(page)
         return [], False
 
+    async def channel_playlists(self, channel_id, platform="youtube", limit=50, offset=0):
+        self.playlist_offsets.append(offset)
+        start = 0
+        for index, page in enumerate(self.playlist_pages):
+            if start == offset:
+                return page, index + 1 < len(self.playlist_pages)
+            start += len(page)
+        return [], False
+
     async def playlist_videos(self, playlist_id, platform="youtube", limit=200):
+        self.opened_playlists.append(playlist_id)
         return [VIDEO]
 
     async def video_details(self, video_id, platform="youtube") -> VideoDetails:
@@ -365,6 +378,76 @@ async def test_channel_search_filters_then_escape_restores_listing(app):
         await pilot.press("escape")  # no search left: leaves the screen
         await pilot.pause()
         assert app.screen is not screen
+
+
+async def test_channel_playlists_tab_loads_lazily_and_opens(app):
+    """'t' shows the Playlists tab, fetched on first visit only; 'm' pages it;
+    Enter opens the playlist instead of playing it."""
+    other = Video(video_id="PLother", title="Another playlist", kind="playlist")
+    app.client.playlist_pages = [[PLAYLIST], [other]]
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(CHANNEL)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from textual.widgets import TabbedContent
+
+        from ytui.ui.widgets.video_list import VideoList
+
+        screen = app.screen
+        tabs = screen.query_one("#channel-tabs", TabbedContent)
+        assert tabs.active == "tab-videos"
+        assert app.client.playlist_offsets == []  # not fetched up front
+
+        await pilot.press("t")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert tabs.active == "tab-playlists"
+        playlists = screen.query_one("#channel-playlists", VideoList)
+        assert playlists.has_focus
+        assert playlists.video_at_cursor() == PLAYLIST
+        assert screen.sub_title.endswith("1 playlists")
+
+        await pilot.press("m")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert playlists.row_count == 2
+        assert app.client.playlist_offsets == [0, 1]
+        assert screen.sub_title.endswith("2 playlists (end)")
+
+        await pilot.press("t", "t")  # back and forth: no refetch
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.client.playlist_offsets == [0, 1]
+
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.screen.__class__.__name__ == "PlaylistScreen"
+        assert app.client.opened_playlists == ["PLabc"]
+
+
+async def test_channel_without_playlists_has_no_tabs(app):
+    odysee_channel = Video(
+        video_id="@chan:1", title="An Odysee channel", kind="channel", platform="odysee"
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_channel(odysee_channel)
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from textual.widgets import TabbedContent
+
+        from ytui.ui.widgets.video_list import VideoList
+
+        screen = app.screen
+        assert not screen.query(TabbedContent)
+        await pilot.press("t")
+        await pilot.pause()
+        assert app.client.playlist_offsets == []
+        assert screen.query_one("#channel-list", VideoList).video_at_cursor() == VIDEO
 
 
 async def test_channel_search_load_more_keeps_query(app):

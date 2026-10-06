@@ -11,6 +11,10 @@
 }
 .search-form .input { flex: 1; min-width: 220px; border-radius: 999px; padding: 9px 16px; }
 
+/* Page chaîne : onglets Vidéos / Playlists ; seule la recherche (onglet
+   Vidéos) les sépare de la grille, sinon l'espace vient d'ici. */
+.filter-bar.channel-tabs { margin-bottom: 14px; }
+
 /* ─── Musique : étagères horizontales façon YouTube Music ─── */
 
 .shelf { margin-bottom: 30px; }

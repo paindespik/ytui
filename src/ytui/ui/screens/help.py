@@ -38,7 +38,10 @@ HELP_TEXT = """\
   Q               Max video height
 
 [b]Channel view[/b]
-  m               Load more (older) videos on a channel
+  m               Load more (older) videos / more playlists
+  /               Search this channel's videos
+  t               Switch Videos / Playlists tab (YouTube, BitChute)
+  Enter           In the Playlists tab: open the playlist
 
 [b]Home feed[/b]
   r               Refresh feed

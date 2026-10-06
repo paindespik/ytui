@@ -1,4 +1,5 @@
-/// Channel screen: latest videos, in-channel search and follow button.
+/// Channel screen: latest videos, in-channel search and follow button, plus a
+/// Playlists tab on platforms that list them (YouTube, BitChute).
 library;
 
 import 'package:flutter/material.dart';
@@ -30,7 +31,8 @@ class ChannelScreen extends ConsumerStatefulWidget {
   ConsumerState<ChannelScreen> createState() => _ChannelScreenState();
 }
 
-class _ChannelScreenState extends ConsumerState<ChannelScreen> {
+class _ChannelScreenState extends ConsumerState<ChannelScreen>
+    with SingleTickerProviderStateMixin {
   /// Search bar shown in place of the title.
   bool _searching = false;
 
@@ -39,8 +41,20 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
 
   final _controller = TextEditingController();
 
+  /// Vidéos / Playlists tabs; null on platforms without channel playlists.
+  TabController? _tabs;
+
+  bool get _hasPlaylists => kChannelPlaylistPlatforms.contains(widget.platform);
+
+  @override
+  void initState() {
+    super.initState();
+    if (_hasPlaylists) _tabs = TabController(length: 2, vsync: this);
+  }
+
   @override
   void dispose() {
+    _tabs?.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -49,7 +63,16 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
   (String, String, String) get _arg =>
       (widget.channelId, widget.platform, _query);
 
-  void _submit(String value) => setState(() => _query = value.trim());
+  /// The search looks for videos: bring their tab to the front.
+  void _showVideosTab() {
+    final tabs = _tabs;
+    if (tabs != null && tabs.index != 0) tabs.animateTo(0);
+  }
+
+  void _submit(String value) {
+    _showVideosTab();
+    setState(() => _query = value.trim());
+  }
 
   void _closeSearch() {
     _controller.clear();
@@ -67,7 +90,34 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
     final isLive = (ref.watch(livesProvider).valueOrNull ?? const <LiveItem>[])
         .any((l) => l.video.channelId == widget.channelId);
     final isTikTok = widget.platform == 'tiktok';
-    final body = _buildBody(data, colorScheme);
+    final videosBody = _buildBody(data, colorScheme);
+    final tabs = _tabs;
+    final body = tabs == null
+        ? videosBody
+        : AnimatedBuilder(
+            animation: tabs,
+            builder: (context, _) => TabBarView(
+              controller: tabs,
+              children: [
+                // Kept alive: coming back to a tab keeps its scroll position
+                // and its loaded pages. The hidden page stays in the tree, so
+                // it is kept out of D-pad traversal.
+                ExcludeFocus(
+                  excluding: tabs.index != 0,
+                  child: _KeepAlive(child: videosBody),
+                ),
+                ExcludeFocus(
+                  excluding: tabs.index != 1,
+                  child: _KeepAlive(
+                    child: _ChannelPlaylistsTab(
+                      channelId: widget.channelId,
+                      platform: widget.platform,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
 
     return Scaffold(
       appBar: AppBar(
@@ -137,7 +187,10 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                 IconButton(
                   icon: const Icon(Icons.search),
                   tooltip: 'Rechercher dans la chaîne',
-                  onPressed: () => setState(() => _searching = true),
+                  onPressed: () {
+                    _showVideosTab();
+                    setState(() => _searching = true);
+                  },
                 ),
                 IconButton(
                   icon: const Icon(Icons.person_add),
@@ -163,6 +216,15 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                   },
                 ),
               ],
+        bottom: tabs == null
+            ? null
+            : TabBar(
+                controller: tabs,
+                tabs: const [
+                  Tab(text: 'Vidéos'),
+                  Tab(text: 'Playlists'),
+                ],
+              ),
       ),
       body: ScreenFocus(child: isTikTok
           ? Column(
@@ -221,17 +283,9 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
           return ResponsiveCenter(
             // Reaching the end pulls the next page in, so neither a thumb nor a
             // D-pad has to hunt for the footer button after 50 tiles.
-            child: NotificationListener<ScrollUpdateNotification>(
-              onNotification: (notification) {
-                final m = notification.metrics;
-                if (result.hasMore &&
-                    !result.loadingMore &&
-                    m.axis == Axis.vertical &&
-                    m.pixels > m.maxScrollExtent - 800) {
-                  _loadMore();
-                }
-                return false;
-              },
+            child: _PagedListener(
+              result: result,
+              onLoadMore: _loadMore,
               child: ListView.builder(
                 padding: const EdgeInsets.only(bottom: kGutter),
                 // header + videos (+ load-more footer while more pages remain)
@@ -262,7 +316,13 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
                   }
                   final videoIndex = index - 1;
                   if (videoIndex == videos.length) {
-                    return _loadMoreFooter(result);
+                    return _LoadMoreFooter(
+                      loading: result.loadingMore,
+                      label: _query.isEmpty
+                          ? 'Charger des vidéos plus anciennes'
+                          : 'Charger plus de résultats',
+                      onPressed: _loadMore,
+                    );
                   }
                   return VideoTile(
                     video: videos[videoIndex],
@@ -285,10 +345,112 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
       messenger.showSnackBar(SnackBar(content: Text('$error')));
     }
   }
+}
 
-  /// Footer below the last video: fetches the next page of older videos.
-  Widget _loadMoreFooter(ChannelVideos result) {
-    if (result.loadingMore) {
+/// The channel's playlists: fetched the first time the tab is shown, paged
+/// like the videos. A tile opens the playlist (VideoTile's default tap).
+class _ChannelPlaylistsTab extends ConsumerWidget {
+  final String channelId;
+  final String platform;
+
+  const _ChannelPlaylistsTab({required this.channelId, required this.platform});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final arg = (channelId, platform);
+    final data = ref.watch(channelPlaylistsProvider(arg));
+
+    Future<void> loadMore() async {
+      final messenger = ScaffoldMessenger.of(context);
+      final error =
+          await ref.read(channelPlaylistsProvider(arg).notifier).loadMore();
+      if (error != null) {
+        messenger.showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+
+    return data.when(
+      loading: () => const AppLoading(),
+      error: (e, _) => AppError.from(e,
+          onRetry: () => ref.invalidate(channelPlaylistsProvider(arg))),
+      data: (result) {
+        final playlists = result.videos;
+        if (playlists.isEmpty) {
+          return const AppEmpty(
+            message: 'Cette chaîne n’a aucune playlist',
+            icon: Icons.playlist_remove,
+          );
+        }
+        return ResponsiveCenter(
+          child: _PagedListener(
+            result: result,
+            onLoadMore: loadMore,
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: playlists.length + (result.hasMore ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index == playlists.length) {
+                  return _LoadMoreFooter(
+                    loading: result.loadingMore,
+                    label: 'Charger plus de playlists',
+                    onPressed: loadMore,
+                  );
+                }
+                return VideoTile(video: playlists[index]);
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Calls [onLoadMore] when the list nears its end while pages remain.
+class _PagedListener extends StatelessWidget {
+  final ChannelVideos result;
+  final Future<void> Function() onLoadMore;
+  final Widget child;
+
+  const _PagedListener({
+    required this.result,
+    required this.onLoadMore,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return NotificationListener<ScrollUpdateNotification>(
+      onNotification: (notification) {
+        final m = notification.metrics;
+        if (result.hasMore &&
+            !result.loadingMore &&
+            m.axis == Axis.vertical &&
+            m.pixels > m.maxScrollExtent - 800) {
+          onLoadMore();
+        }
+        return false;
+      },
+      child: child,
+    );
+  }
+}
+
+/// Footer below the last item: fetches the next page.
+class _LoadMoreFooter extends StatelessWidget {
+  final bool loading;
+  final String label;
+  final VoidCallback onPressed;
+
+  const _LoadMoreFooter({
+    required this.loading,
+    required this.label,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
       return const Padding(
         padding: EdgeInsets.all(kGutter),
         child: Center(child: CircularProgressIndicator()),
@@ -297,13 +459,34 @@ class _ChannelScreenState extends ConsumerState<ChannelScreen> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(kGutter, 8, kGutter, kGutter),
       child: OutlinedButton.icon(
-        onPressed: _loadMore,
+        onPressed: onPressed,
         icon: const Icon(Icons.expand_more),
-        label: Text(_query.isEmpty
-            ? 'Charger des vidéos plus anciennes'
-            : 'Charger plus de résultats'),
+        label: Text(label),
         style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
       ),
     );
+  }
+}
+
+/// Keeps a TabBarView page (and the providers it watches) alive while
+/// another tab is shown.
+class _KeepAlive extends StatefulWidget {
+  final Widget child;
+
+  const _KeepAlive({required this.child});
+
+  @override
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
   }
 }

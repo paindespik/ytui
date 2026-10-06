@@ -203,6 +203,24 @@ class YtuiClient:
         ).json()
         return [Video.model_validate(v) for v in data["items"]], data.get("has_more", False)
 
+    async def channel_playlists(
+        self,
+        channel_id: str,
+        platform: str = "youtube",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[Video], bool]:
+        """One page of a channel's playlists (YouTube, BitChute), plus whether
+        more remain."""
+        data = (
+            await self._request(
+                "GET",
+                f"/api/channels/{_encode(channel_id)}/playlists",
+                params={"platform": platform, "limit": limit, "offset": offset},
+            )
+        ).json()
+        return [Video.model_validate(v) for v in data["items"]], data.get("has_more", False)
+
     async def playlist_videos(
         self, playlist_id: str, platform: str = "youtube", limit: int = 200
     ) -> list[Video]:

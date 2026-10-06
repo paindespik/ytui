@@ -14,7 +14,7 @@ from ..models import (
     Video,
     playlist_id_from_url,
 )
-from ..services import ytdlp
+from ..services import bitchute, ytdlp
 
 router = APIRouter()
 
@@ -62,6 +62,9 @@ async def import_playlist(body: PlaylistImportIn, request: Request) -> PlaylistI
             items, source_title = await request.app.state.music_service.youtube_playlist(
                 source, limit=limit
             )
+        elif body.platform == "bitchute":
+            # The API keeps thumbnails/dates in the copied entries.
+            items, source_title = await bitchute.playlist_videos(source, limit=limit)
         else:
             items, source_title = await ytdlp.playlist_videos(url, limit=limit)
     except ytdlp.UpstreamError as exc:

@@ -1,9 +1,14 @@
-"""BitChute service: channel listings via the public JSON API.
+"""BitChute service: channel and playlist listings via the public JSON API.
 
-yt-dlp's BitChuteChannelIE scrapes old.bitchute.com and yields entries
-without thumbnail or upload date, so channel pages showed blank cards. The
-API behind the current bitchute.com SPA (api.bitchute.com/api/beta, no auth)
-returns both. Playback and details still go through yt-dlp (BitChuteIE).
+yt-dlp's BitChuteChannelIE/BitChutePlaylistIE scrape old.bitchute.com and
+yield entries without thumbnail or upload date, so channel and playlist pages
+showed blank cards. The API behind the current bitchute.com SPA
+(api.bitchute.com/api/beta, no auth) returns both. Playback and details still
+go through yt-dlp (BitChuteIE).
+
+Playlists belong to the channel owner's *profile*, not to the channel: the
+channel record gives the profile_id, whose public playlists are listed by
+/profile/playlists (fixed 10-item pages, `limit` ignored upstream).
 
 Channel identity: the API accepts both the channel slug ("itv_john_doe",
 what `bitchute:` refs store) and the hash id yt-dlp reports as channel_id
@@ -26,12 +31,20 @@ TIMEOUT = httpx.Timeout(10.0)
 HEADERS = {"accept": "application/json"}
 # The channel videos endpoint silently caps every page at 50 items.
 PAGE_SIZE = 50
+# /profile/playlists ignores `limit` and always answers 10 items.
+PLAYLISTS_PAGE_SIZE = 10
+# /playlist/videos caps its pages like /channel/videos.
+PLAYLIST_VIDEOS_PAGE_SIZE = 50
 
 log = logging.getLogger(__name__)
 
 
 class BitChuteError(Exception):
     """A BitChute API call failed."""
+
+
+class BitChuteNotFound(BitChuteError):
+    """The API answered 404: unknown channel or playlist."""
 
 
 def _parse_duration(text: Any) -> int | None:
@@ -56,7 +69,9 @@ def _parse_date(stamp: Any) -> datetime | None:
         return None
 
 
-def _item_to_video(item: dict[str, Any], channel_id: str) -> Video | None:
+def _item_to_video(
+    item: dict[str, Any], channel_id: str, channel_title: str = ""
+) -> Video | None:
     video_id = item.get("video_id") or ""
     if not video_id or item.get("state_id", "published") != "published":
         return None
@@ -64,6 +79,7 @@ def _item_to_video(item: dict[str, Any], channel_id: str) -> Video | None:
     return Video(
         video_id=video_id,
         title=item.get("video_name") or "",
+        channel_title=channel_title,
         channel_id=channel_id,
         published=_parse_date(item.get("date_published")),
         duration=_parse_duration(item.get("duration")),
@@ -72,6 +88,22 @@ def _item_to_video(item: dict[str, Any], channel_id: str) -> Video | None:
         kind="video",
         platform="bitchute",
     )
+
+
+async def _post(client: httpx.AsyncClient, path: str, body: dict[str, Any]) -> dict:
+    try:
+        resp = await client.post(f"{API_BASE}/{path}", json=body, headers=HEADERS)
+        if resp.status_code == 404:
+            raise BitChuteNotFound(f"{path}: not found")
+        resp.raise_for_status()
+        data = resp.json()
+    except BitChuteError:
+        raise
+    except Exception as exc:
+        raise BitChuteError(f"{path} fetch failed: {exc}") from exc
+    if not isinstance(data, dict):
+        raise BitChuteError(f"{path}: unexpected payload")
+    return data
 
 
 async def _fetch_page(
@@ -119,3 +151,96 @@ async def channel_videos(channel_id: str, limit: int = 50, offset: int = 0) -> l
         log.warning("bitchute API listing failed for %s, using yt-dlp: %s", channel_id, exc)
     url = Video(video_id=channel_id, title="", kind="channel", platform="bitchute").url
     return await ytdlp.channel_videos(url, limit=limit, offset=offset)
+
+
+def _playlist_to_item(
+    item: dict[str, Any], channel_id: str, channel_title: str
+) -> Video | None:
+    playlist_id = item.get("playlist_id") or ""
+    if not playlist_id or item.get("is_public") is False:
+        return None
+    return Video(
+        video_id=playlist_id,
+        title=item.get("playlist_name") or "",
+        channel_title=channel_title,
+        channel_id=channel_id,
+        published=_parse_date(item.get("date_created")),
+        thumbnail_url=item.get("thumbnail_url") or "",
+        kind="playlist",
+        platform="bitchute",
+    )
+
+
+async def channel_playlists(channel_id: str, limit: int = 50, offset: int = 0) -> list[Video]:
+    """Public playlists of a channel's owner, in BitChute's order.
+
+    `offset` indexes the upstream listing; pages are walked until `limit` is
+    met or the reported playlist_count is reached. Raises BitChuteNotFound
+    for an unknown channel. No yt-dlp fallback: it has no such listing.
+    """
+    playlists: list[Video] = []
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        channel = await _post(client, "channel", {"channel_id": channel_id})
+        profile_id = channel.get("profile_id") or ""
+        if not profile_id:
+            return []
+        channel_title = channel.get("channel_name") or ""
+        while len(playlists) < limit:
+            data = await _post(
+                client,
+                "profile/playlists",
+                {"profile_id": profile_id, "offset": offset, "limit": PLAYLISTS_PAGE_SIZE},
+            )
+            items = data.get("playlists") or []
+            offset += len(items)
+            for item in items:
+                playlist = _playlist_to_item(item, channel_id, channel_title)
+                if playlist:
+                    playlists.append(playlist)
+            total = data.get("playlist_count")
+            if not items or (isinstance(total, int) and offset >= total):
+                break
+    return playlists[:limit]
+
+
+async def _api_playlist_videos(playlist_id: str, limit: int) -> tuple[list[Video], str]:
+    videos: list[Video] = []
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        meta = await _post(client, "playlist", {"playlist_id": playlist_id})
+        offset = 0
+        while len(videos) < limit:
+            want = min(PLAYLIST_VIDEOS_PAGE_SIZE, limit - len(videos))
+            data = await _post(
+                client,
+                "playlist/videos",
+                {"playlist_id": playlist_id, "offset": offset, "limit": want},
+            )
+            entries = data.get("videos") or []
+            offset += len(entries)
+            for entry in entries:
+                item = entry.get("video") if isinstance(entry, dict) else None
+                if not isinstance(item, dict):
+                    continue
+                channel = item.get("channel") or {}
+                video = _item_to_video(
+                    item, channel.get("channel_id") or "", channel.get("channel_name") or ""
+                )
+                if video:
+                    videos.append(video)
+            if len(entries) < want:
+                break
+    return videos[:limit], meta.get("playlist_name") or ""
+
+
+async def playlist_videos(playlist_id: str, limit: int = 200) -> tuple[list[Video], str]:
+    """Videos of a playlist (with thumbnails, dates, channels) and its title.
+
+    Falls back to yt-dlp's thumbnail-less scraper when the API fails, like
+    channel_videos.
+    """
+    try:
+        return await _api_playlist_videos(playlist_id, limit)
+    except BitChuteError as exc:
+        log.warning("bitchute API playlist failed for %s, using yt-dlp: %s", playlist_id, exc)
+    url = Video(video_id=playlist_id, title="", kind="playlist", platform="bitchute").url
+    return await ytdlp.playlist_videos(url, limit=limit)

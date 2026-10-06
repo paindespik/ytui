@@ -588,7 +588,10 @@ def entry_to_item(entry: dict) -> Video | None:
     )
 
 
-def _extract_flat(url: str, limit: int | None = None, offset: int = 0) -> list[Video]:
+def _flat_listing(
+    url: str, limit: int | None = None, offset: int = 0
+) -> tuple[list[Video], dict]:
+    """Flat entries of a container (search, channel tab, playlist) and its info."""
     opts = dict(_YDL_FLAT_OPTS)
     if limit:
         opts["playlist_items"] = f"{offset + 1}:{offset + limit}"
@@ -601,22 +604,35 @@ def _extract_flat(url: str, limit: int | None = None, offset: int = 0) -> list[V
         item = entry_to_item(entry)
         if item:
             items.append(item)
-    return items
+    return items, info
+
+
+def _extract_flat(url: str, limit: int | None = None, offset: int = 0) -> list[Video]:
+    return _flat_listing(url, limit, offset)[0]
 
 
 def _extract_flat_info(url: str, limit: int | None = None) -> tuple[list[Video], str]:
     """Like _extract_flat but also returns the container title (playlist name)."""
-    opts = dict(_YDL_FLAT_OPTS)
-    if limit:
-        opts["playlist_items"] = f"1:{limit}"
-    with _youtube_dl(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-    items: list[Video] = []
-    for entry in info.get("entries") or []:
-        item = entry_to_item(entry)
-        if item:
-            items.append(item)
+    items, info = _flat_listing(url, limit)
     return items, info.get("title") or ""
+
+
+def _extract_channel_playlists(url: str, limit: int, offset: int) -> list[Video]:
+    try:
+        items, info = _flat_listing(url, limit, offset)
+    except Exception as exc:
+        # A channel without playlists has no Playlists tab at all.
+        if "does not have a playlists tab" in str(exc):
+            return []
+        raise
+    # Playlist lockups carry no owner: yt-dlp reports "Playlist" as their
+    # channel. The tab's own info names the channel.
+    channel_title = info.get("channel") or info.get("uploader") or ""
+    channel_id = info.get("channel_id") or ""
+    for item in items:
+        item.channel_title = channel_title
+        item.channel_id = channel_id or item.channel_id
+    return items
 
 
 async def _run(sem: asyncio.Semaphore, func, *args):
@@ -642,6 +658,17 @@ async def channel_videos(channel_url: str, limit: int = 50, offset: int = 0) -> 
     ):
         url += "/videos"
     return await _run(_BULK_SEM, _extract_flat, url, limit, offset)
+
+
+async def channel_playlists(
+    channel_url: str, limit: int = 50, offset: int = 0
+) -> list[Video]:
+    """Playlists of a YouTube channel (its Playlists tab), in the tab's order.
+
+    Only YouTube serves this tab; callers must not route other platforms here.
+    """
+    url = f"{channel_url.rstrip('/')}/playlists"
+    return await _run(_BULK_SEM, _extract_channel_playlists, url, limit, offset)
 
 
 async def channel_search(

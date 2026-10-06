@@ -137,6 +137,51 @@ async def channel_videos(
     )
 
 
+# Platforms whose channels expose their playlists: YouTube (the channel's
+# Playlists tab) and BitChute (the owner profile's public playlists).
+_CHANNEL_PLAYLIST_PLATFORMS = ("youtube", "bitchute")
+
+
+@router.get("/channels/{channel_id}/playlists", response_model=ChannelVideosResponse)
+async def channel_playlists(
+    channel_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    platform: Platform = "youtube",
+) -> ChannelVideosResponse:
+    """One page of a channel's playlists (items of kind "playlist")."""
+    if platform not in _CHANNEL_PLAYLIST_PLATFORMS:
+        raise HTTPException(
+            status_code=501, detail=f"Channel playlists are not supported for {platform}"
+        )
+    # One extra item is fetched to tell "more available" from "exhausted".
+    probe = limit + 1
+    try:
+        if platform == "bitchute":
+            items = await bitchute.channel_playlists(channel_id, limit=probe, offset=offset)
+        else:
+            items = await ytdlp.channel_playlists(
+                _channel_url(channel_id, platform), limit=probe, offset=offset
+            )
+    except bitchute.BitChuteNotFound as exc:
+        raise HTTPException(status_code=404, detail="Channel not found") from exc
+    except (ytdlp.UpstreamError, bitchute.BitChuteError) as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Channel playlists listing failed: {exc}"
+        ) from exc
+    has_more = len(items) > limit
+    items = items[:limit]
+    title = request.app.state.db.get_channel_name(channel_id) or ""
+    if not title and items:
+        title = items[0].channel_title
+    return ChannelVideosResponse(
+        items=items,
+        channel=Channel(channel_id=channel_id, title=title, platform=platform),
+        has_more=has_more,
+    )
+
+
 @router.get("/ytplaylists/{playlist_id}/videos", response_model=PlaylistVideosResponse)
 async def playlist_videos(
     playlist_id: str,
@@ -156,6 +201,9 @@ async def playlist_videos(
             items, title = await request.app.state.music_service.youtube_playlist(
                 playlist_id, limit=limit
             )
+        elif platform == "bitchute":
+            # The API carries thumbnails and dates; yt-dlp is its fallback.
+            items, title = await bitchute.playlist_videos(playlist_id, limit=limit)
         else:
             url = Video(video_id=playlist_id, title="", kind="playlist", platform=platform).url
             items, title = await ytdlp.playlist_videos(url, limit=limit)

@@ -88,40 +88,30 @@ class ChannelVideos {
 
 const kChannelPageSize = 50;
 
-/// Family key: (channelId, platform, query). An empty query lists the whole
-/// channel; a non-empty one searches within it.
-final channelVideosProvider = AsyncNotifierProvider.autoDispose
-    .family<ChannelVideosNotifier, ChannelVideos, (String, String, String)>(
-        ChannelVideosNotifier.new);
+/// Platforms whose channels list their playlists (Playlists tab).
+const kChannelPlaylistPlatforms = {'youtube', 'bitchute'};
 
-class ChannelVideosNotifier extends AutoDisposeFamilyAsyncNotifier<ChannelVideos,
-    (String, String, String)> {
-  String? get _query => arg.$3.isEmpty ? null : arg.$3;
+/// A paginated channel listing (videos or playlists): page 1 on build, the
+/// next ones through [loadMore]. Subclasses only say how a page is fetched.
+abstract class ChannelListingNotifier<A>
+    extends AutoDisposeFamilyAsyncNotifier<ChannelVideos, A> {
+  Future<(List<Video>, String, bool)> fetchPage(YtuiApi api, int offset);
 
   @override
-  Future<ChannelVideos> build((String, String, String) arg) async {
-    final (videos, title, hasMore) = await ref.watch(apiProvider).channelVideos(
-        arg.$1,
-        platform: arg.$2,
-        limit: kChannelPageSize,
-        q: _query);
+  Future<ChannelVideos> build(A arg) async {
+    final (videos, title, hasMore) = await fetchPage(ref.watch(apiProvider), 0);
     return ChannelVideos(videos: videos, title: title, hasMore: hasMore);
   }
 
-  /// Appends the next page, keeping the loaded videos on failure.
+  /// Appends the next page, keeping the loaded items on failure.
   /// Returns the error when the page could not be fetched, else null.
   Future<Object?> loadMore() async {
     final current = state.valueOrNull;
     if (current == null || !current.hasMore || current.loadingMore) return null;
     state = AsyncData(current.copyWith(loadingMore: true));
     try {
-      final (videos, _, hasMore) = await ref.read(apiProvider).channelVideos(
-            arg.$1,
-            platform: arg.$2,
-            limit: kChannelPageSize,
-            offset: current.videos.length,
-            q: _query,
-          );
+      final (videos, _, hasMore) =
+          await fetchPage(ref.read(apiProvider), current.videos.length);
       state = AsyncData(current.copyWith(
         videos: [...current.videos, ...videos],
         hasMore: hasMore,
@@ -133,6 +123,41 @@ class ChannelVideosNotifier extends AutoDisposeFamilyAsyncNotifier<ChannelVideos
       return e;
     }
   }
+}
+
+/// Family key: (channelId, platform, query). An empty query lists the whole
+/// channel; a non-empty one searches within it.
+final channelVideosProvider = AsyncNotifierProvider.autoDispose
+    .family<ChannelVideosNotifier, ChannelVideos, (String, String, String)>(
+        ChannelVideosNotifier.new);
+
+class ChannelVideosNotifier
+    extends ChannelListingNotifier<(String, String, String)> {
+  @override
+  Future<(List<Video>, String, bool)> fetchPage(YtuiApi api, int offset) =>
+      api.channelVideos(
+        arg.$1,
+        platform: arg.$2,
+        limit: kChannelPageSize,
+        offset: offset,
+        q: arg.$3.isEmpty ? null : arg.$3,
+      );
+}
+
+/// Family key: (channelId, platform). Only for [kChannelPlaylistPlatforms].
+final channelPlaylistsProvider = AsyncNotifierProvider.autoDispose
+    .family<ChannelPlaylistsNotifier, ChannelVideos, (String, String)>(
+        ChannelPlaylistsNotifier.new);
+
+class ChannelPlaylistsNotifier extends ChannelListingNotifier<(String, String)> {
+  @override
+  Future<(List<Video>, String, bool)> fetchPage(YtuiApi api, int offset) =>
+      api.channelPlaylists(
+        arg.$1,
+        platform: arg.$2,
+        limit: kChannelPageSize,
+        offset: offset,
+      );
 }
 
 final ytPlaylistProvider = FutureProvider.autoDispose

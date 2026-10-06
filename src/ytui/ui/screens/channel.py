@@ -1,4 +1,5 @@
-"""Channel view: latest videos of one channel, with 'follow channel' action."""
+"""Channel view: latest videos of one channel, its playlists (YouTube,
+BitChute) in a second tab, with 'follow channel' action."""
 
 from __future__ import annotations
 
@@ -6,7 +7,14 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer, Header, Input, LoadingIndicator
+from textual.widgets import (
+    Footer,
+    Header,
+    Input,
+    LoadingIndicator,
+    TabbedContent,
+    TabPane,
+)
 
 from ...api_client import YtuiApiError
 from ...models import Video
@@ -15,6 +23,12 @@ from ..widgets.player_bar import PlayerBar
 from ..widgets.video_list import VideoList
 from .browse import BrowseScreen
 
+# Platforms whose channels list their playlists (GET /channels/{id}/playlists).
+PLAYLIST_PLATFORMS = ("youtube", "bitchute")
+
+VIDEOS_TAB = "tab-videos"
+PLAYLISTS_TAB = "tab-playlists"
+
 
 class ChannelScreen(BrowseScreen):
     BINDINGS = [
@@ -22,7 +36,25 @@ class ChannelScreen(BrowseScreen):
         Binding("slash", "search", "Search"),
         Binding("a", "add_this_channel", "Follow channel"),
         Binding("m", "load_more", "Load more"),
+        Binding("t", "toggle_tab", "Videos/Playlists"),
     ]
+
+    DEFAULT_CSS = """
+    ChannelScreen #channel-tabs {
+        width: 1fr;
+        height: 1fr;
+    }
+    ChannelScreen #channel-tabs > ContentSwitcher {
+        height: 1fr;
+    }
+    ChannelScreen #channel-tabs TabPane {
+        height: 1fr;
+        padding: 0;
+    }
+    ChannelScreen #channel-tabs VideoList {
+        height: 1fr;
+    }
+    """
 
     PAGE_SIZE = 50
 
@@ -34,12 +66,29 @@ class ChannelScreen(BrowseScreen):
         self._loading_page = False
         self._query: str | None = None
         self._is_live = False
+        self._videos_shown = False
+        # Playlists tab: fetched on first activation only.
+        self._playlists: list[Video] = []
+        self._playlists_has_more = False
+        self._playlists_requested = False
+        self._playlists_done = False
+        self._loading_playlists_page = False
 
     @property
     def channel_ref(self) -> str:
         return (
             self.channel.video_id if self.channel.kind == "channel" else self.channel.channel_id
         )
+
+    @property
+    def has_playlists(self) -> bool:
+        return self.channel.platform in PLAYLIST_PLATFORMS
+
+    @property
+    def on_playlists_tab(self) -> bool:
+        if not self.has_playlists:
+            return False
+        return self.query_one("#channel-tabs", TabbedContent).active == PLAYLISTS_TAB
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -48,7 +97,14 @@ class ChannelScreen(BrowseScreen):
         yield search
         yield LoadingIndicator(id="channel-loading")
         with Horizontal():
-            yield VideoList(id="channel-list")
+            if self.has_playlists:
+                with TabbedContent(id="channel-tabs", initial=VIDEOS_TAB):
+                    with TabPane("Videos", id=VIDEOS_TAB):
+                        yield VideoList(id="channel-list")
+                    with TabPane("Playlists", id=PLAYLISTS_TAB):
+                        yield VideoList(id="channel-playlists", mark_watched=False)
+            else:
+                yield VideoList(id="channel-list")
             yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
         yield PlayerBar()
         yield Footer()
@@ -61,6 +117,13 @@ class ChannelScreen(BrowseScreen):
                 "Chaîne en direct uniquement — voir l'onglet Lives", timeout=8
             )
         self.load_videos()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "toggle_tab" and not self.has_playlists:
+            return False  # no Playlists tab on this platform: hide the key
+        return True
+
+    # -- videos tab --
 
     @work(exclusive=True, group="reload")
     async def load_videos(self) -> None:
@@ -87,6 +150,9 @@ class ChannelScreen(BrowseScreen):
         return any(v.channel_id == self.channel_ref for v in lives)
 
     def action_load_more(self) -> None:
+        if self.on_playlists_tab:
+            self._load_more_playlists()
+            return
         if self._loading_page:
             self.app.notify("Already loading…", timeout=2)
             return
@@ -133,13 +199,133 @@ class ChannelScreen(BrowseScreen):
         self.query_one("#channel-loading", LoadingIndicator).display = False
         video_list = self.query_one("#channel-list", VideoList)
         video_list.set_videos(list(videos), self.app.watched)
-        video_list.focus()
+        self._videos_shown = True
+        if not self.on_playlists_tab:  # never steal focus into a hidden pane
+            video_list.focus()
         self._update_sub_title()
+
+    # -- playlists tab --
+
+    def action_toggle_tab(self) -> None:
+        if not self.has_playlists:
+            return
+        tabs = self.query_one("#channel-tabs", TabbedContent)
+        tabs.active = VIDEOS_TAB if tabs.active == PLAYLISTS_TAB else PLAYLISTS_TAB
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        event.stop()
+        if event.pane.id == PLAYLISTS_TAB:
+            if not self._playlists_requested:
+                self._playlists_requested = True
+                self.query_one("#channel-loading", LoadingIndicator).display = True
+                self.load_playlists()
+            self.query_one("#channel-playlists", VideoList).focus()
+        else:
+            self.query_one("#channel-list", VideoList).focus()
+        self._show_highlighted()
+        self._update_sub_title()
+
+    def _show_highlighted(self) -> None:
+        """The detail panel follows the list of the tab just shown."""
+        video = self._highlighted()
+        if video is not None:
+            for panel in self.query(DetailPanel):
+                panel.show_video(video)
+
+    @work(exclusive=True, group="playlists")
+    async def load_playlists(self) -> None:
+        try:
+            playlists, has_more = await self.app.client.channel_playlists(
+                self.channel_ref, platform=self.channel.platform, limit=self.PAGE_SIZE
+            )
+        except YtuiApiError as exc:
+            # Asked again on the next visit of the tab.
+            self._playlists_requested = False
+            self.query_one("#channel-loading", LoadingIndicator).display = False
+            self.app.notify(
+                f"Failed to load playlists: {exc.detail}", severity="error", timeout=8
+            )
+            return
+        self.query_one("#channel-loading", LoadingIndicator).display = False
+        self._playlists = list(playlists)
+        self._playlists_has_more = has_more
+        self._playlists_done = True
+        playlist_list = self.query_one("#channel-playlists", VideoList)
+        playlist_list.set_videos(list(playlists))
+        if self.on_playlists_tab:
+            playlist_list.focus()
+            self._show_highlighted()
+        if not playlists:
+            self.app.notify("This channel has no playlists", timeout=4)
+        self._update_sub_title()
+
+    def _load_more_playlists(self) -> None:
+        if self._loading_playlists_page or not self._playlists_done:
+            self.app.notify("Already loading…", timeout=2)
+            return
+        if not self._playlists_has_more:
+            self.app.notify("No more playlists", timeout=2)
+            return
+        self._loading_playlists_page = True  # synchronous guard, as for videos
+        self.load_more_playlists()
+
+    @work(exclusive=True, group="playlists-page")
+    async def load_more_playlists(self) -> None:
+        loading = self.query_one("#channel-loading", LoadingIndicator)
+        loading.display = True
+        try:
+            playlists, has_more = await self.app.client.channel_playlists(
+                self.channel_ref,
+                platform=self.channel.platform,
+                limit=self.PAGE_SIZE,
+                offset=len(self._playlists),
+            )
+        except YtuiApiError as exc:
+            self.app.notify(f"Failed to load more: {exc.detail}", severity="error", timeout=8)
+            return
+        finally:
+            self._loading_playlists_page = False
+            loading.display = False
+        self._playlists_has_more = has_more
+        self._playlists.extend(playlists)
+        playlist_list = self.query_one("#channel-playlists", VideoList)
+        row = playlist_list.cursor_row
+        playlist_list.append_videos(playlists)
+        if 0 <= row < len(self._playlists):
+            playlist_list.move_cursor(row=row)
+        self._update_sub_title()
+
+    def on_video_list_video_selected(self, event: VideoList.VideoSelected) -> None:
+        # In the Playlists tab, Enter browses the playlist (like the Music
+        # view), whose screen plays it whole with 'p'. Everything else falls through to
+        # BrowseScreen's handler, which Textual runs after this one unless
+        # the default is prevented.
+        if event.video.kind == "playlist" and self.on_playlists_tab:
+            event.prevent_default()
+            self.app.open_playlist(event.video)
+
+    def _highlighted(self) -> Video | None:
+        if self.has_playlists:
+            list_id = "#channel-playlists" if self.on_playlists_tab else "#channel-list"
+            return self.query_one(list_id, VideoList).video_at_cursor()
+        return super()._highlighted()
+
+    # -- header --
 
     def _update_sub_title(self) -> None:
         name = self.channel.channel_title or self.channel.title or "Channel"
         if self._is_live:
             name = f"● LIVE — {name}"
+        if self.on_playlists_tab:
+            if not self._playlists_done:
+                self.sub_title = f"{name} — playlists…"
+                return
+            suffix = "" if self._playlists_has_more else " (end)"
+            self.sub_title = f"{name} — {len(self._playlists)} playlists{suffix}"
+            return
+        if not self._videos_shown:  # first page still loading
+            self.sub_title = name
+            return
         suffix = "" if self._has_more else " (end)"
         count = len(self._loaded)
         if self._query:
@@ -163,6 +349,9 @@ class ChannelScreen(BrowseScreen):
         self.app.pop_screen()
 
     def action_search(self) -> None:
+        if self.on_playlists_tab:
+            # The search looks for videos: show the tab it fills.
+            self.query_one("#channel-tabs", TabbedContent).active = VIDEOS_TAB
         search = self.query_one("#channel-search", Input)
         search.display = True
         search.value = self._query or ""

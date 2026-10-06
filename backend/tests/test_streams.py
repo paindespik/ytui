@@ -156,6 +156,67 @@ def test_channel_videos_rejects_empty_query(client):
     assert resp.status_code == 422
 
 
+class RecordingYDL(FakeYDL):
+    def extract_info(self, url, download=False):
+        self.url = url
+        return super().extract_info(url, download)
+
+
+def test_channel_playlists_youtube_tab(client):
+    """The Playlists tab is listed flat; lockups' bogus "Playlist" channel is
+    replaced by the tab's own channel."""
+    entries = [
+        {"id": f"PLtest{i}", "title": f"List {i}", "_type": "url", "ie_key": "YoutubeTab",
+         "channel": "Playlist", "uploader": "Playlist",
+         "url": f"https://www.youtube.com/playlist?list=PLtest{i}",
+         "thumbnails": [{"url": f"https://i.ytimg.com/vi/x{i}/hqdefault.jpg"}]}
+        for i in range(3)
+    ]
+    ydl = RecordingYDL({
+        "entries": entries, "title": "Chan - Playlists", "channel": "Chan",
+        "channel_id": "UCtest000000000000000000",
+    })
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", ydl):
+        resp = client.get(
+            "/api/channels/UCtest000000000000000000/playlists",
+            params={"limit": 2, "offset": 4},
+        )
+    assert resp.status_code == 200
+    assert ydl.url == "https://www.youtube.com/channel/UCtest000000000000000000/playlists"
+    assert ydl._opts["playlist_items"] == "5:7"
+    body = resp.json()
+    assert [i["video_id"] for i in body["items"]] == ["PLtest0", "PLtest1"]
+    assert all(i["kind"] == "playlist" for i in body["items"])
+    assert body["items"][0]["channel_title"] == "Chan"
+    assert body["items"][0]["channel_id"] == "UCtest000000000000000000"
+    assert body["items"][0]["thumbnail_url"] == "https://i.ytimg.com/vi/x0/hqdefault.jpg"
+    assert body["has_more"] is True
+    assert body["channel"]["title"] == "Chan"
+
+
+def test_channel_playlists_without_tab_is_empty(client):
+    err = RuntimeError("ERROR: [youtube:tab] UCx: This channel does not have a playlists tab")
+    with _patch_ydl(err):
+        resp = client.get("/api/channels/UCtest000000000000000000/playlists")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+    assert resp.json()["has_more"] is False
+
+
+def test_channel_playlists_upstream_error(client):
+    with _patch_ydl(RuntimeError("boom")):
+        resp = client.get("/api/channels/UCtest000000000000000000/playlists")
+    assert resp.status_code == 502
+
+
+@pytest.mark.parametrize("platform", ["odysee", "twitch", "tiktok", "crowdbunker"])
+def test_channel_playlists_unsupported_platforms(client, platform):
+    resp = client.get("/api/channels/chan/playlists", params={"platform": platform})
+    assert resp.status_code == 501
+
+
 def test_playlist_videos(client):
     entries = [{"id": "vid000000001", "title": "V1"}]
     with _patch_ydl({"entries": entries, "title": "My List"}):
