@@ -624,3 +624,62 @@ describe("vue lecture — commentaires sous la vidéo", () => {
     assert.equal(section.hidden, true, "masquée pendant le direct");
   });
 });
+
+// ─── Lien ytui (/s/{token}) : bouton distinct du partage public ───
+
+describe("vue lecture — lien ytui privé", () => {
+  beforeEach(resetWatch);
+  afterEach(async () => {
+    delete globalThis.navigator.clipboard;
+    await unmountAll();
+  });
+
+  const button = (view, prefix) =>
+    view.querySelectorAll("button").find((b) => (b.getAttribute("title") || "").startsWith(prefix));
+
+  test("crée le lien côté serveur et copie l'URL complète /s/{token}", async () => {
+    const copied = [];
+    globalThis.navigator.clipboard = { writeText: async (t) => copied.push(t) };
+    const api = mockApi([
+      {
+        match: "/api/shares",
+        method: "POST",
+        json: { token: "tok", path: "/s/tok", expires_at: "2030-01-08T00:00:00Z" },
+      },
+      ...routes(),
+    ]);
+    const view = document.getElementById("view");
+    await mount(view, { platform: "odysee", id: "clip:1" });
+    await flush(4);
+
+    const share = button(view, "Partager le lien public");
+    const ytui = button(view, "Lien ytui");
+    assert.ok(share, "le bouton Partager d'origine est toujours là");
+    assert.ok(ytui, "nouveau bouton Lien ytui");
+    assert.notEqual(share, ytui);
+
+    ytui.dispatchEvent(new Event("click"));
+    await flush(4);
+    const [req] = api.find("/api/shares", "POST");
+    assert.equal(req.body.video.video_id, "clip:1");
+    assert.equal(req.body.video.platform, "odysee");
+    assert.deepEqual(copied, ["http://localhost:8000/s/tok"]);
+    assert.match(textOf(document.getElementById("toasts")), /Lien ytui copié/);
+  });
+
+  test("live terminé (409) → message, rien de copié", async () => {
+    const copied = [];
+    globalThis.navigator.clipboard = { writeText: async (t) => copied.push(t) };
+    mockApi([
+      { match: "/api/shares", method: "POST", status: 409, json: { detail: "no longer live" } },
+      ...routes(),
+    ]);
+    const view = document.getElementById("view");
+    await mount(view);
+    await flush(4);
+    button(view, "Lien ytui").dispatchEvent(new Event("click"));
+    await flush(4);
+    assert.deepEqual(copied, []);
+    assert.match(textOf(document.getElementById("toasts")), /plus en cours/);
+  });
+});

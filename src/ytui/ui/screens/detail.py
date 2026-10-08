@@ -51,6 +51,7 @@ class VideoDetailScreen(Screen):
         Binding("A", "play_audio", "Audio only"),
         Binding("e", "enqueue", "Enqueue"),
         Binding("y", "copy_url", "Copy URL"),
+        Binding("Y", "copy_share_link", "ytui link", show=False),
         Binding("o", "open_channel", "Open channel"),
         Binding("d", "download", "Download"),
         Binding("s", "save_to_playlist", "Save to playlist", show=False),
@@ -201,6 +202,9 @@ class VideoDetailScreen(Screen):
     def action_copy_url(self) -> None:
         self.app.copy_to_clipboard(self.video.url)  # emits OSC 52 (works over SSH in foot)
         self.app.notify("URL copied to clipboard.", timeout=4)
+
+    def action_copy_share_link(self) -> None:
+        self.app.share_link_action(self.video)
 
     def action_open_channel(self) -> None:
         self.app.open_channel(self.video)

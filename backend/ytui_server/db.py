@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import secrets
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .models import FollowedChannel, Video
@@ -131,7 +133,42 @@ _MIGRATIONS: list[str] = [
     DROP TABLE channels;
     ALTER TABLE channels_new RENAME TO channels;
     """,
+    # 6: public share links — one video viewable without the API token.
+    # expires_at NULL: the link never expires (YTUI_SHARE_TTL_DAYS=0).
+    """
+    CREATE TABLE IF NOT EXISTS shares (
+        token TEXT PRIMARY KEY,
+        platform TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        channel_title TEXT NOT NULL DEFAULT '',
+        thumbnail_url TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL,
+        expires_at REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_shares_video ON shares(platform, video_id);
+    """,
 ]
+
+
+@dataclass(frozen=True)
+class ShareRow:
+    token: str
+    platform: str
+    video_id: str
+    title: str
+    channel_title: str
+    thumbnail_url: str
+    created_at: float
+    expires_at: float | None
+
+    def expired(self, now: float | None = None) -> bool:
+        return self.expires_at is not None and (now or time.time()) >= self.expires_at
+
+
+_SHARE_COLUMNS = (
+    "token, platform, video_id, title, channel_title, thumbnail_url, created_at, expires_at"
+)
 
 
 class PlaylistRow:
@@ -698,3 +735,84 @@ class Database:
                     )
             self._conn.commit()
         return True
+
+    # -- public share links --
+
+    def share_video(
+        self, video: Video, ttl_seconds: int, now: float | None = None
+    ) -> ShareRow:
+        """The share link of a video, created or extended (ttl 0: no expiry).
+
+        Re-sharing a video reuses its unexpired link (the URL already sent
+        keeps working) and pushes its expiry back. An expired link is
+        purged and replaced by a new token: a dead link never comes back.
+        """
+        now = time.time() if now is None else now
+        expires_at = now + ttl_seconds if ttl_seconds > 0 else None
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM shares WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                (now,),
+            )
+            row = self._conn.execute(
+                "SELECT token FROM shares WHERE platform = ? AND video_id = ?",
+                (video.platform, video.video_id),
+            ).fetchone()
+            if row is not None:
+                token = row[0]
+                # Keep a known title over an empty one (direct links carry none).
+                self._conn.execute(
+                    "UPDATE shares SET expires_at = ?, "
+                    "title = COALESCE(NULLIF(?, ''), title), "
+                    "channel_title = COALESCE(NULLIF(?, ''), channel_title), "
+                    "thumbnail_url = COALESCE(NULLIF(?, ''), thumbnail_url) "
+                    "WHERE token = ?",
+                    (
+                        expires_at,
+                        video.title,
+                        video.channel_title,
+                        video.thumbnail_url,
+                        token,
+                    ),
+                )
+            else:
+                token = secrets.token_urlsafe(16)
+                self._conn.execute(
+                    f"INSERT INTO shares ({_SHARE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        token,
+                        video.platform,
+                        video.video_id,
+                        video.title,
+                        video.channel_title,
+                        video.thumbnail_url,
+                        now,
+                        expires_at,
+                    ),
+                )
+            self._conn.commit()
+            found = self._conn.execute(
+                f"SELECT {_SHARE_COLUMNS} FROM shares WHERE token = ?", (token,)
+            ).fetchone()
+        return ShareRow(*found)
+
+    def get_share(self, token: str) -> ShareRow | None:
+        """A share by token, expired or not (callers check `expired()`)."""
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_SHARE_COLUMNS} FROM shares WHERE token = ?", (token,)
+            ).fetchone()
+        return ShareRow(*row) if row else None
+
+    def list_shares(self) -> list[ShareRow]:
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_SHARE_COLUMNS} FROM shares ORDER BY created_at DESC"
+            ).fetchall()
+        return [ShareRow(*row) for row in rows]
+
+    def delete_share(self, token: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM shares WHERE token = ?", (token,))
+            self._conn.commit()
+        return cur.rowcount > 0

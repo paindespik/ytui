@@ -1301,6 +1301,32 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     }
   }
 
+  /// Private ytui link (`/s/{token}`): this video only, played through the
+  /// server by someone who has no token. Unlike [_share] (the platform's
+  /// public page), the link is created server-side first.
+  Future<void> _shareYtuiLink(Video video) async {
+    final ShareLink link;
+    try {
+      link = await ref.read(apiProvider).createShare(video);
+    } on ApiException catch (e) {
+      _notify(
+        e.statusCode == 409
+            ? "Ce live n'est plus en cours"
+            : 'Lien impossible : ${e.detail}',
+        alsoOnTv: true,
+      );
+      return;
+    }
+    if (!mounted) return;
+    try {
+      await const MethodChannel(_kDeviceChannel).invokeMethod<void>(
+          'share', {'text': link.url, 'subject': video.title});
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: link.url));
+      _notify('Lien ytui copié', alsoOnTv: true);
+    }
+  }
+
   /// Opens the channel of [video] over the player, which keeps playing
   /// underneath; a video started from there pops back to it ([openPlayer]).
   Future<void> _openChannel(Video video) async {
@@ -1866,6 +1892,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         label: 'Partager',
         tooltip: 'Partager le lien de la vidéo',
         onPressed: () => _share(video),
+      ),
+      PlayerAction(
+        icon: Icons.link_rounded,
+        label: 'Lien ytui',
+        tooltip: 'Lien ytui privé : cette vidéo seule, lisible sans clé',
+        onPressed: () => _shareYtuiLink(video),
       ),
       PlayerAction(
         icon: Icons.account_circle_outlined,

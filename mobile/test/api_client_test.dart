@@ -292,6 +292,45 @@ void main() {
     expect(ok, isFalse);
   });
 
+  test('createShare posts the video and builds the full link', () async {
+    final adapter = _FakeAdapter({
+      'POST /api/shares': (
+        200,
+        {
+          'token': 'tok',
+          'path': '/s/tok',
+          'expires_at': '2030-01-08T00:00:00Z',
+        }
+      ),
+    });
+    final api = _api({}, adapter: adapter);
+    final link = await api.createShare(Video.fromJson(
+        {'video_id': 'clip:1', 'title': 't', 'platform': 'odysee'}));
+    expect(link.url, 'https://server.test/s/tok');
+    expect(link.expiresAt, DateTime.utc(2030, 1, 8).toLocal());
+    final body = adapter.requests.single.data as Map<String, dynamic>;
+    expect((body['video'] as Map)['video_id'], 'clip:1');
+    expect((body['video'] as Map)['platform'], 'odysee');
+  });
+
+  test('createShare surfaces 409 for an ended live', () async {
+    final api = _api({
+      'POST /api/shares': (409, {'detail': 'This channel is no longer live'}),
+    });
+    expect(
+      api.createShare(Video.fromJson(
+          {'video_id': 'login:1', 'title': 't', 'platform': 'twitch'})),
+      throwsA(isA<ApiException>()
+          .having((e) => e.statusCode, 'statusCode', 409)),
+    );
+  });
+
+  test('shareLinkUrl keeps a sub-path and drops trailing slashes', () {
+    expect(shareLinkUrl('https://h.test/', '/s/a'), 'https://h.test/s/a');
+    expect(shareLinkUrl('https://h.test/ytui//', '/s/a'),
+        'https://h.test/ytui/s/a');
+  });
+
   test('watchedIds returns a set', () async {
     final api = _api({
       'GET /api/history/watched-ids': (

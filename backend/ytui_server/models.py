@@ -392,3 +392,38 @@ class SponsorSegment(BaseModel):
 
 class SponsorSegmentsOut(BaseModel):
     segments: list[SponsorSegment] = []
+
+
+# ─── public share links ───
+
+
+class ShareIn(BaseModel):
+    video: Video
+
+
+class ShareOut(BaseModel):
+    token: str
+    # Server-relative page path ("/s/{token}"): clients prefix the server URL
+    # they are configured with (the server can't know its public origin).
+    path: str
+    video: Video
+    created_at: datetime
+    # None: the link never expires (YTUI_SHARE_TTL_DAYS=0).
+    expires_at: datetime | None = None
+
+
+class ShareSource(BaseModel):
+    """One way to play a shared video, every URL already scoped to the share."""
+
+    engine: Literal["dash", "hls", "flv", "progressive"]
+    url: str
+
+
+class ShareStreamsOut(BaseModel):
+    title: str = ""
+    duration: int | None = None
+    height: int | None = None
+    is_live: bool = False
+    # Ordered: the player tries the next one when an engine fails.
+    sources: list[ShareSource]
+    subtitles: list[SubtitleTrackOut] = []

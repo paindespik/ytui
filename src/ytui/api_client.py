@@ -312,6 +312,21 @@ class YtuiClient:
     async def record_watch(self, video: Video) -> None:
         await self._request("POST", "/api/history", json={"video": video.model_dump(mode="json")})
 
+    # -- share links --
+
+    async def create_share(self, video: Video) -> tuple[str, str | None]:
+        """(full URL, ISO expiry or None) of the private ytui link of a video.
+
+        The link (/s/{token} on this server) plays that video only, without the
+        token; sharing the same video again returns the same link, extended.
+        """
+        data = (
+            await self._request(
+                "POST", "/api/shares", json={"video": video.model_dump(mode="json")}
+            )
+        ).json()
+        return f"{self.base_url}{data['path']}", data.get("expires_at")
+
     async def watched_ids(self) -> set[str]:
         data = (await self._request("GET", "/api/history/watched-ids")).json()
         return set(data["ids"])

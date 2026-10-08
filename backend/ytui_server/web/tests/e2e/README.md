@@ -28,6 +28,11 @@ node backend/ytui_server/web/tests/e2e/resume.mjs
 
 # Enchaînement d'une file de lecture de 3 vidéos
 node backend/ytui_server/web/tests/e2e/playlist.mjs
+
+# Lien de partage /s/{token} ouvert SANS session (lecture, aucun appel /api,
+# qualité, révocation) — toute plateforme via YTUI_PLATFORM / YTUI_VIDEO
+node backend/ytui_server/web/tests/e2e/share.mjs
+YTUI_PLATFORM=twitch YTUI_VIDEO=ponce:0 node backend/ytui_server/web/tests/e2e/share.mjs
 ```
 
 Variables utiles :

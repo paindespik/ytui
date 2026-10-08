@@ -225,6 +225,37 @@ async def test_record_watch_serializes_video(client):
 
 
 @respx.mock
+async def test_create_share_returns_full_link(client):
+    import json
+
+    from ytui.models import Video
+
+    route = respx.post(f"{BASE}/api/shares").mock(
+        return_value=httpx.Response(
+            200,
+            json={"token": "tok", "path": "/s/tok", "expires_at": "2030-01-08T00:00:00Z"},
+        )
+    )
+    url, expires = await client.create_share(Video.model_validate(VIDEO_JSON))
+    assert url == f"{BASE}/s/tok"
+    assert expires == "2030-01-08T00:00:00Z"
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["video"]["video_id"] == "dQw4w9WgXcQ"
+
+
+@respx.mock
+async def test_create_share_ended_live_is_an_api_error(client):
+    from ytui.models import Video
+
+    respx.post(f"{BASE}/api/shares").mock(
+        return_value=httpx.Response(409, json={"detail": "This channel is no longer live"})
+    )
+    with pytest.raises(YtuiApiError) as exc:
+        await client.create_share(Video.model_validate(VIDEO_JSON))
+    assert exc.value.status_code == 409
+
+
+@respx.mock
 async def test_watched_ids_returns_set(client):
     respx.get(f"{BASE}/api/history/watched-ids").mock(
         return_value=httpx.Response(200, json={"ids": ["a", "b", "a"]})

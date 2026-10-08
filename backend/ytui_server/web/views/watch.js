@@ -433,6 +433,11 @@ export async function render(view, { params }) {
     title: "Partager le lien public",
     onclick: () => shareVideo(),
   });
+  const ytuiLinkBtn = iconBtn("link", "Lien ytui", {
+    class: "compact-1",
+    title: "Lien ytui privé : cette vidéo seule, lisible sans clé",
+    onclick: () => shareYtuiLink(),
+  });
   const plBtn = iconBtn("list-plus", "Playlist", {
     class: "compact-1",
     title: "Ajouter à une playlist",
@@ -482,6 +487,42 @@ export async function render(view, { params }) {
       toast("Lien copié");
     } catch {
       toast("Copie impossible", { error: true });
+    }
+  }
+
+  // Lien ytui (/s/{token}) : la vidéo lue via ce serveur par quelqu'un qui
+  // n'a pas la clé — et rien d'autre. Distinct du partage public ci-dessus.
+  async function shareYtuiLink() {
+    let share;
+    try {
+      share = await api.createShare(video);
+    } catch (err) {
+      const msg =
+        err.status === 409 ? "Ce live n'est plus en cours" : `Lien impossible : ${err.detail || err.message}`;
+      toast(msg, { error: true });
+      return;
+    }
+    const url = new URL(share.path, location.origin).href;
+    const until = share.expires_at
+      ? ` (valable jusqu'au ${new Date(share.expires_at).toLocaleDateString("fr-FR", {
+          day: "numeric",
+          month: "long",
+        })})`
+      : "";
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: video.title || "ytui", url });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return; // partage annulé
+        // Sinon (geste expiré pendant la création du lien…) : presse-papiers.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast(`Lien ytui copié${until}`);
+    } catch {
+      toast(`Lien ytui : ${url}`, { ms: 15000 });
     }
   }
 
@@ -628,6 +669,7 @@ export async function render(view, { params }) {
           el("div", { class: "btn-group" }, prevBtn, nextBtn),
           likeBtn,
           shareBtn,
+          ytuiLinkBtn,
           plBtn,
           // Groupe de droite : puces d'état + réglages + « plus », qui passent
           // ensemble à la ligne sur une colonne étroite.

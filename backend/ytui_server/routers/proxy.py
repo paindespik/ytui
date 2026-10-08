@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from collections.abc import Callable
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -80,6 +81,20 @@ _ALLOWED_SUFFIXES = (
     ".divulg.org",
     ".crowdbunker.com",
 )
+
+
+# CDNs that refuse a request without a Referer: player.odycdn.com answers 401
+# to a bare GET and 206 with any Referer (measured 2026-10-08). A browser
+# playing the URL directly always sends one; the relay has to as well.
+_REFERERS = {".odycdn.com": "https://odysee.com/"}
+
+
+def _upstream_headers(url: str) -> dict[str, str]:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    for suffix, referer in _REFERERS.items():
+        if host == suffix[1:] or host.endswith(suffix):
+            return {"Referer": referer}
+    return {}
 
 
 def _extra_domains(settings) -> set[str]:
@@ -156,17 +171,23 @@ async def _send_allowlisted(
     raise HTTPException(status_code=502, detail="Too many upstream redirects")
 
 
-def _proxied(url: str, *, playlist: bool) -> str:
+#: Maps an absolute upstream URL to the URL the player should fetch instead;
+#: ``playlist`` tells another m3u8 (to rewrite in turn) from raw bytes.
+ProxyUrl = Callable[[str, bool], str]
+
+
+def _proxied(url: str, playlist: bool) -> str:
     endpoint = "/api/proxy/hls" if playlist else "/api/proxy"
     return f"{endpoint}?url={urllib.parse.quote(url, safe='')}"
 
 
-def rewrite_hls(text: str, base_url: str) -> str:
+def rewrite_hls(text: str, base_url: str, proxied: ProxyUrl = _proxied) -> str:
     """Rewrite every URI in an m3u8 playlist so it goes through this proxy.
 
     Bare lines are variant playlists or media segments (relative URLs are
     resolved against ``base_url``); ``URI="..."`` attributes cover alternate
-    renditions, init sections and keys.
+    renditions, init sections and keys. ``proxied`` builds the served URLs
+    (the share links sign theirs, see routers/share_public.py).
     """
     out: list[str] = []
     for line in text.splitlines():
@@ -174,13 +195,13 @@ def rewrite_hls(text: str, base_url: str) -> str:
         if stripped and not stripped.startswith("#"):
             absolute = urllib.parse.urljoin(base_url, stripped)
             path = urllib.parse.urlparse(absolute).path
-            out.append(_proxied(absolute, playlist=path.endswith(".m3u8")))
+            out.append(proxied(absolute, path.endswith(".m3u8")))
         elif 'URI="' in stripped:
             playlist = stripped.startswith(_PLAYLIST_URI_TAGS)
 
             def _sub(match: re.Match[str], *, playlist: bool = playlist) -> str:
                 absolute = urllib.parse.urljoin(base_url, match.group(1))
-                return f'URI="{_proxied(absolute, playlist=playlist)}"'
+                return f'URI="{proxied(absolute, playlist)}"'
 
             out.append(_URI_ATTR_RE.sub(_sub, line))
         else:
@@ -276,10 +297,21 @@ async def live_segment(
 @router.get("/proxy")
 async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
     """Stream upstream bytes as-is, forwarding Range for seekable media."""
+    return await relay_bytes(url, request)
+
+
+@router.get("/proxy/hls")
+async def proxy_hls(url: str, request: Request) -> Response:
+    """Fetch an m3u8 playlist and rewrite its URIs through the proxy."""
+    return await relay_playlist(url, request)
+
+
+async def relay_bytes(url: str, request: Request) -> StreamingResponse:
+    """Relay one allowlisted upstream resource (shared with the share links)."""
     settings = request.app.state.settings
     _check_url(url, settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
-    upstream_headers = {"Accept-Encoding": "identity"}
+    upstream_headers = {"Accept-Encoding": "identity", **_upstream_headers(url)}
     range_header = request.headers.get("Range")
     if range_header:
         upstream_headers["Range"] = range_header
@@ -301,9 +333,10 @@ async def proxy_bytes(url: str, request: Request) -> StreamingResponse:
     )
 
 
-@router.get("/proxy/hls")
-async def proxy_hls(url: str, request: Request) -> Response:
-    """Fetch an m3u8 playlist and rewrite its URIs through the proxy."""
+async def relay_playlist(
+    url: str, request: Request, proxied: ProxyUrl = _proxied
+) -> Response:
+    """Fetch an allowlisted m3u8 and rewrite its URIs with ``proxied``."""
     settings = request.app.state.settings
     _check_url(url, settings)
     client: httpx.AsyncClient = request.app.state.proxy_client
@@ -316,13 +349,16 @@ async def proxy_hls(url: str, request: Request) -> Response:
         if master is None:
             raise HTTPException(status_code=502, detail="Twitch playlist proxy failed")
         return Response(
-            content=rewrite_hls(master, url),
+            content=rewrite_hls(master, url, proxied),
             media_type="application/vnd.apple.mpegurl",
             headers=dict(_BASE_HEADERS),
         )
     try:
         upstream = await _send_allowlisted(
-            client, client.build_request("GET", url), settings, stream=False
+            client,
+            client.build_request("GET", url, headers=_upstream_headers(url)),
+            settings,
+            stream=False,
         )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Proxy fetch failed: {exc}") from exc
@@ -333,7 +369,7 @@ async def proxy_hls(url: str, request: Request) -> Response:
             status_code=upstream.status_code, detail="Upstream playlist error"
         )
     return Response(
-        content=rewrite_hls(upstream.text, str(upstream.url)),
+        content=rewrite_hls(upstream.text, str(upstream.url), proxied),
         media_type="application/vnd.apple.mpegurl",
         headers=dict(_BASE_HEADERS),
     )

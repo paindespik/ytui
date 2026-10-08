@@ -111,6 +111,11 @@ export const api = {
       body: { text },
     }),
 
+  // ─── public share links (/s/{token}) ───
+  // Lien ytui privé : cette vidéo seule, lisible sans clé. Re-partager la même
+  // vidéo renvoie le même lien, prolongé.
+  createShare: (video) => request("POST", "/api/shares", { body: { video } }),
+
   // ─── followed channels ───
   channels: () => request("GET", "/api/channels"),
   followChannel: (ref) => request("POST", "/api/channels", { body: { ref } }),

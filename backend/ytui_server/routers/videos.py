@@ -7,6 +7,7 @@ import asyncio
 import functools
 import logging
 import urllib.parse
+from collections.abc import Callable
 from typing import Literal
 
 import anyio
@@ -390,26 +391,38 @@ async def video_mpd(
     platform: Platform = "youtube",
     max_height: int = Query(default=1440, ge=144, le=4320),
 ) -> Response:
+    proxy = lambda u: "/api/proxy?url=" + urllib.parse.quote(u, safe="")  # noqa: E731
+    mpd_xml = await render_mpd(
+        _video_url(video_id, platform), max_height, request.app.state.proxy_client, proxy
+    )
+    return Response(
+        content=mpd_xml,
+        media_type="application/dash+xml",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def render_mpd(
+    url: str, max_height: int, client: httpx.AsyncClient, proxy: Callable[[str], str]
+) -> str:
+    """DASH manifest of a video's split MP4 pair, media URLs mapped by ``proxy``.
+
+    Raises 404 when the video has no usable split pair (callers fall back to
+    progressive) and 502 when the resolution itself fails.
+    """
     try:
-        split = await ytdlp.resolve_split_mp4(_video_url(video_id, platform), max_height)
+        split = await ytdlp.resolve_split_mp4(url, max_height)
     except ytdlp.UpstreamError as exc:
         raise HTTPException(status_code=502, detail=f"Stream resolution failed: {exc}") from exc
     if split is None:
         raise HTTPException(status_code=404, detail="No split MP4 formats")
-    client = request.app.state.proxy_client
     video_ranges, audio_ranges = await asyncio.gather(
         dash.probe_ranges(client, split.video_url),
         dash.probe_ranges(client, split.audio_url),
     )
     if video_ranges is None or audio_ranges is None:
         raise HTTPException(status_code=404, detail="sidx not found")
-    proxy = lambda u: "/api/proxy?url=" + urllib.parse.quote(u, safe="")  # noqa: E731
-    mpd_xml = dash.build_mpd(split, proxy, video_ranges, audio_ranges)
-    return Response(
-        content=mpd_xml,
-        media_type="application/dash+xml",
-        headers={"Cache-Control": "no-store"},
-    )
+    return dash.build_mpd(split, proxy, video_ranges, audio_ranges)
 
 
 @router.get("/videos/{video_id}/related", response_model=SearchResponse)

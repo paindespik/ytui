@@ -55,6 +55,9 @@ class Settings(BaseSettings):
         default="", validation_alias="YTUI_PROXY_ALLOWED_DOMAINS"
     )
     history_max_rows: int = Field(default=20000, validation_alias="YTUI_HISTORY_MAX_ROWS")
+    # Lifetime of a public share link (/s/{token}); re-sharing the same video
+    # extends the existing link. 0: links never expire (revocation only).
+    share_ttl_days: int = Field(default=7, ge=0, validation_alias="YTUI_SHARE_TTL_DAYS")
     log_level: str = Field(default="INFO", validation_alias="YTUI_LOG_LEVEL")
     sponsorblock_categories: str = Field(
         default="sponsor,selfpromo,interaction",

@@ -197,6 +197,27 @@ def test_proxy_allows_builtin_cdns(proxied):
         assert client.get("/api/proxy", params={"url": url}).status_code == 200, url
 
 
+def test_proxy_sends_a_referer_to_odycdn_only(proxied):
+    """player.odycdn.com answers 401 to a GET without Referer."""
+    seen: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[request.url.host] = request.headers.get("Referer")
+        if request.url.path.endswith(".m3u8"):
+            return httpx.Response(200, text="#EXTM3U\nseg.ts\n")
+        return httpx.Response(206, content=b"x", headers={"Content-Type": "video/mp4"})
+
+    client = proxied(handler)
+    client.get("/api/proxy", params={"url": "https://player.odycdn.com/v6/streams/a/b.mp4"})
+    client.get("/api/proxy/hls", params={"url": "https://secure.odycdn.com/x/master.m3u8"})
+    client.get("/api/proxy", params={"url": "https://rr3---sn-abc.googlevideo.com/v?x=1"})
+    assert seen == {
+        "player.odycdn.com": "https://odysee.com/",
+        "secure.odycdn.com": "https://odysee.com/",
+        "rr3---sn-abc.googlevideo.com": None,
+    }
+
+
 def test_proxy_allows_configured_twitch_proxies(proxied):
     """Hosts of YTUI_TWITCH_PROXIES pass without being hardcoded."""
 

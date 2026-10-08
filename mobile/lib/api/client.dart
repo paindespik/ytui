@@ -427,4 +427,38 @@ class YtuiApi {
         query: {'platform': platform, 'cursor': cursor});
     return ChatPage.fromJson(r.data as Map<String, dynamic>);
   }
+
+  // ─── Share links ───
+
+  /// Private ytui link of [video] (`/s/{token}` on this server): that video
+  /// only, playable without the token. Re-sharing the same video returns the
+  /// same link, extended. A Twitch/TikTok live that ended answers 409.
+  Future<ShareLink> createShare(Video video) async {
+    final r = await _request('POST', '/api/shares',
+        data: {'video': video.toJson()});
+    final data = r.data as Map<String, dynamic>;
+    final expires = data['expires_at'] as String?;
+    return ShareLink(
+      url: shareLinkUrl(dio.options.baseUrl, data['path'] as String),
+      expiresAt: expires == null ? null : DateTime.parse(expires).toLocal(),
+    );
+  }
+}
+
+/// A created share link: full URL to send, and its expiry (null: permanent).
+class ShareLink {
+  final String url;
+  final DateTime? expiresAt;
+
+  const ShareLink({required this.url, this.expiresAt});
+}
+
+/// Full link from the configured server URL and the server-relative page
+/// path — the server cannot know the public origin it is reached through.
+String shareLinkUrl(String baseUrl, String path) {
+  var base = baseUrl.trim();
+  while (base.endsWith('/')) {
+    base = base.substring(0, base.length - 1);
+  }
+  return '$base$path';
 }

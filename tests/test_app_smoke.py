@@ -794,6 +794,27 @@ async def test_detail_ctrl_enter_play_also(app, monkeypatch):
     assert launched == [(VIDEO.url, None)]
 
 
+async def test_detail_shift_y_copies_the_ytui_link(app, monkeypatch):
+    shared: list[Video] = []
+
+    async def create_share(video):
+        shared.append(video)
+        return "https://fake/s/tok", "2030-01-08T00:00:00Z"
+
+    app.client.create_share = create_share
+    copied: list[str] = []
+    monkeypatch.setattr(app, "copy_to_clipboard", copied.append)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.open_detail(VIDEO)
+        await pilot.pause()
+        await pilot.press("Y")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    assert [v.video_id for v in shared] == [VIDEO.video_id]
+    assert copied == ["https://fake/s/tok"]
+
 async def _open_music(app, pilot):
     await pilot.pause()
     app.push_screen("music")

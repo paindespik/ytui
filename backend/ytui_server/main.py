@@ -23,6 +23,8 @@ from .routers import (
     playlists,
     proxy,
     session,
+    share_public,
+    shares,
     status,
     suggestions,
     videos,
@@ -150,11 +152,14 @@ def create_app(settings: Settings | None = None, start_pollers: bool = True) -> 
         auth,
         status,
         proxy,
+        shares,
     ):
         app.include_router(
             router.router, prefix="/api", dependencies=[Depends(require_token)]
         )
     app.include_router(session.router, prefix="/api")
+    # Public share links (/s/{token}): no token, scoped to one video each.
+    app.include_router(share_public.router)
 
     web_dir = Path(__file__).parent / "web"
     if web_dir.is_dir():

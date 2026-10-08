@@ -81,6 +81,7 @@ HELP_TEXT = """\
 
 [b]Video details[/b]
   Enter play · Ctrl+Enter play too · A audio only · e enqueue · y copy URL
+  Y copy a private ytui link (this video only, playable without the token)
   o open channel · d download · s save to playlist
   L like · C comment (YouTube account)
   c               Reload comments (YouTube / Odysee, read-only)

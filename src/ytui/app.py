@@ -656,6 +656,21 @@ class YtuiApp(App):
             return
         self.notify(f"Liked: {video.title}", timeout=5)
 
+    def share_link_action(self, video: Video) -> None:
+        """Copy the private ytui link of a video (playable without the token)."""
+        self.run_worker(self._share_link_async(video), group="share-link")
+
+    async def _share_link_async(self, video: Video) -> None:
+        try:
+            url, expires_at = await self.client.create_share(video)
+        except YtuiApiError as exc:
+            detail = "This live has ended." if exc.status_code == 409 else exc.detail
+            self.notify(f"ytui link failed: {detail}", severity="error", timeout=8)
+            return
+        self.copy_to_clipboard(url)  # OSC 52, like "y"
+        until = f" (valid until {expires_at[:10]})" if expires_at else ""
+        self.notify(f"ytui link copied{until}: {url}", timeout=8)
+
     def comment_video_action(self, video: Video) -> None:
         if not self._youtube_video_or_notify(video):
             return
