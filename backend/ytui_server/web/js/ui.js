@@ -598,6 +598,8 @@ export function cardMenu(evt, video) {
   ]);
 }
 
+/// Ajoute `video` à une playlist locale existante, ou à une nouvelle créée à
+/// la volée (comme la feuille du mobile et le sélecteur de la TUI).
 export async function addToPlaylistModal(video) {
   let lists;
   try {
@@ -606,37 +608,75 @@ export async function addToPlaylistModal(video) {
     errorToast(err);
     return;
   }
-  if (!lists.length) {
-    toast("Aucune playlist — créez-en une dans l'onglet Playlists");
-    return;
-  }
+
+  const addTo = async (p) => {
+    try {
+      await api.addPlaylistItem(p.id, video);
+      toast(`Ajouté à « ${p.name} »`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        toast(`Déjà dans « ${p.name} »`);
+      } else {
+        errorToast(err);
+      }
+    }
+  };
+
+  const createAndAdd = async () => {
+    const name = await promptModal("Nouvelle playlist", {
+      placeholder: "Nom de la playlist",
+      submitLabel: "Créer et ajouter",
+    });
+    if (!name) return;
+    let target;
+    try {
+      target = await api.createPlaylist(name);
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 409)) {
+        errorToast(err);
+        return;
+      }
+      // Nom déjà pris : la vidéo va dans la playlist de ce nom (comme la TUI).
+      target = lists.find((p) => p.name === name);
+      if (!target) {
+        try {
+          target = (await api.playlists()).find((p) => p.name === name);
+        } catch {
+          /* signalé ci-dessous */
+        }
+      }
+      if (!target) {
+        toast("Nom déjà pris", { error: true });
+        return;
+      }
+    }
+    await addTo(target);
+  };
+
+  const pick = (action) => () => {
+    close();
+    action();
+  };
   const { close } = openModal(
     "Ajouter à une playlist",
     el(
       "div",
       { class: "list-pick" },
-      lists.map((p) =>
-        el(
-          "button",
-          {
-            class: "btn",
-            onclick: async () => {
-              close();
-              try {
-                await api.addPlaylistItem(p.id, video);
-                toast(`Ajouté à « ${p.name} »`);
-              } catch (err) {
-                if (err instanceof ApiError && err.status === 409) {
-                  toast("Déjà dans cette playlist");
-                } else {
-                  errorToast(err);
-                }
-              }
-            },
-          },
-          `${p.name} (${p.count})`,
-        ),
+      el(
+        "button",
+        { class: "btn primary", type: "button", onclick: pick(createAndAdd) },
+        icon("plus"),
+        el("span", { text: "Nouvelle playlist" }),
       ),
+      lists.length
+        ? lists.map((p) =>
+            el(
+              "button",
+              { class: "btn", type: "button", onclick: pick(() => addTo(p)) },
+              `${p.name} (${p.count})`,
+            ),
+          )
+        : el("p", { class: "sub", text: "Aucune playlist pour l'instant." }),
     ),
   );
 }
