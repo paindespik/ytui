@@ -1,14 +1,22 @@
 """Thumbnail fetcher tests: disk cache, in-flight dedup, LRU eviction."""
 
 import asyncio
+import io
 import os
 from pathlib import Path
 
 import httpx
+from PIL import Image
 
 from ytui.thumbnails.fetcher import ThumbnailFetcher, evict_lru
 
 URL = "https://i.ytimg.com/vi/abc123/mqdefault.jpg"
+
+
+def jpeg_bytes(width: int = 64, height: int = 36) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), (200, 100, 50)).save(buf, format="JPEG")
+    return buf.getvalue()
 
 
 def make_fetcher(tmp_path: Path, handler) -> tuple[ThumbnailFetcher, list]:
@@ -24,9 +32,13 @@ def make_fetcher(tmp_path: Path, handler) -> tuple[ThumbnailFetcher, list]:
 
 
 async def test_fetch_downloads_and_caches(tmp_path: Path):
-    fetcher, requests = make_fetcher(tmp_path, lambda r: httpx.Response(200, content=b"jpegdata"))
+    content = jpeg_bytes()
+    fetcher, requests = make_fetcher(tmp_path, lambda r: httpx.Response(200, content=content))
     path = await fetcher.fetch(URL)
-    assert path is not None and path.read_bytes() == b"jpegdata"
+    assert path is not None
+    # Stored as a (possibly down-sized) JPEG.
+    assert Image.open(path).format == "JPEG"
+    assert path.read_bytes() == ThumbnailFetcher._shrink(content)
     assert fetcher.cached_path(URL) == path
     # Second fetch is served from disk, no new request.
     assert await fetcher.fetch(URL) == path
@@ -34,8 +46,23 @@ async def test_fetch_downloads_and_caches(tmp_path: Path):
     await fetcher.close()
 
 
+async def test_fetch_downsizes_large_images(tmp_path: Path):
+    fetcher, _ = make_fetcher(tmp_path, lambda r: httpx.Response(200, content=jpeg_bytes(1280, 720)))
+    path = await fetcher.fetch(URL)
+    assert path is not None
+    assert Image.open(path).size == (320, 180)
+    await fetcher.close()
+
+
+async def test_fetch_unreadable_content_returns_none(tmp_path: Path):
+    fetcher, _ = make_fetcher(tmp_path, lambda r: httpx.Response(200, content=b"not an image"))
+    assert await fetcher.fetch(URL) is None
+    assert fetcher.cached_path(URL) is None
+    await fetcher.close()
+
+
 async def test_in_flight_dedup(tmp_path: Path):
-    fetcher, requests = make_fetcher(tmp_path, lambda r: httpx.Response(200, content=b"x"))
+    fetcher, requests = make_fetcher(tmp_path, lambda r: httpx.Response(200, content=jpeg_bytes()))
     results = await asyncio.gather(fetcher.fetch(URL), fetcher.fetch(URL), fetcher.fetch(URL))
     assert all(r == results[0] for r in results)
     assert len(requests) == 1

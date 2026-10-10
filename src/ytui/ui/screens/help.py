@@ -87,10 +87,11 @@ HELP_TEXT = """\
   c               Reload comments (YouTube / Odysee, read-only)
 
 [b]Settings[/b]
-  Enter open channel · a add channel · x remove channel · m audio-only · t thumbnails
+  Enter open channel · a add channel · x remove channel · m audio-only · t list thumbnails
 
-The panel on the right shows the highlighted item's thumbnail
-(sixel/kitty/half-block; disable with ui.thumbnails = false).
+List thumbnails (ui.thumbnails, default on): web-style list, one thumbnail per
+row (sixel/kitty, or half-block text on plain terminals). Off: compact list
+with an info panel on the right.
 
 Press any key to close."""
 

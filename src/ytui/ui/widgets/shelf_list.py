@@ -32,7 +32,7 @@ class ShelfList(VideoList):
     ]
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+        super().__init__(thumbnails=False, **kwargs)  # music stays a compact list
         self._shelves: Sequence[Shelf] = []
         # One entry per table row: None for a shelf header.
         self._rows: list[Video | None] = []
@@ -53,7 +53,7 @@ class ShelfList(VideoList):
             )
             self._rows.append(None)
             for video in shelf.items:
-                self._add_video_row(video, watched)
+                self._add_video_row(video, watched, len(self._rows))
                 self._rows.append(video)
         self._videos = [video for video in self._rows if video is not None]
         first = self._nearest_item(0, +1)

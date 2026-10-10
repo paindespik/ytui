@@ -25,8 +25,9 @@ class HistoryScreen(BrowseScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal():
-            yield VideoList(id="history-list", mark_watched=False)
-            yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+            yield VideoList(id="history-list", mark_watched=False, thumbnails=self.app.config.ui.thumbnails)
+            if not self.app.config.ui.thumbnails:
+                yield DetailPanel(thumbnails_enabled=False)
         yield PlayerBar()
         yield Footer()
 

@@ -1,6 +1,14 @@
-"""Video list widget: title / channel / age / source columns with vim-style navigation."""
+"""Video list widget: title / channel / age / source columns with vim-style navigation.
+
+With ``thumbnails=True`` (web-style mode) the list gains a thumbnail column
+rendered through the terminal image protocol (sixel/kitty) or as half-block
+text; rows are taller and carry the full item info, so the side DetailPanel
+is not needed in that mode.
+"""
 
 from __future__ import annotations
+
+from typing import Protocol, cast
 
 from rich.text import Text
 from textual.binding import Binding
@@ -8,6 +16,8 @@ from textual.message import Message
 from textual.widgets import DataTable
 
 from ...models import Video
+from ...thumbnails.fetcher import ThumbnailFetcher
+from .thumbs import ThumbImage, centered
 
 _KIND_MARKS = {"playlist": "▶ ", "channel": "@ "}
 _PLATFORM_LABELS = {
@@ -29,7 +39,14 @@ def _source_label(video: Video) -> str:
     return mark + _PLATFORM_LABELS.get(video.platform, video.platform)
 
 
+class _ThumbnailApp(Protocol):
+    thumbnails: ThumbnailFetcher
+
+
 class VideoList(DataTable):
+    THUMB_WIDTH = 11  # cells; 11x6 ~= 16:9
+    THUMB_ROWS = 6
+
     BINDINGS = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
@@ -48,45 +65,126 @@ class VideoList(DataTable):
             self.video = video
             super().__init__()
 
-    def __init__(self, mark_watched: bool = True, **kwargs) -> None:
+    def __init__(self, mark_watched: bool = True, thumbnails: bool = True, **kwargs) -> None:
         super().__init__(cursor_type="row", zebra_stripes=True, **kwargs)
         self._videos: list[Video] = []
         self._mark_watched = mark_watched
+        self._thumbnails = thumbnails
+        # Bumped on every full rebuild so in-flight thumbnail fetches for the
+        # previous list are dropped instead of updating stale rows.
+        self._gen = 0
+        self._fetching: set[str] = set()
+
+    @property
+    def thumbnails(self) -> bool:
+        return self._thumbnails
 
     def on_mount(self) -> None:
         self.add_column(" ", key="watched")
+        if self._thumbnails:
+            self.add_column(" ", key="thumb")
         self.add_column("Title", key="title")
         self.add_column("Channel", key="channel")
         self.add_column("Age", key="age")
         self.add_column("Source", key="source")
 
-    def _add_video_row(self, video: Video, watched: set[str]) -> None:
+    @staticmethod
+    def _row_key(row: int, video: Video) -> str:
+        """Stable per-position key (position prefix disambiguates duplicates)."""
+        return f"r:{row}:{video.platform}:{video.video_id}"
+
+    def _thumb_cell(self, video: Video, row: int):
+        if not video.thumbnail_url or self.app is None:
+            return centered("–" if video.thumbnail_url else "–", self.THUMB_ROWS)
+        app = cast("_ThumbnailApp", self.app)
+        path = app.thumbnails.cached_path(video.thumbnail_url)
+        if path is not None:
+            try:
+                return ThumbImage(path, width=self.THUMB_WIDTH, height=self.THUMB_ROWS)
+            except Exception:
+                return centered("–", self.THUMB_ROWS)
+        self._ensure_fetch(video, row)
+        return centered("…", self.THUMB_ROWS)
+
+    def _ensure_fetch(self, video: Video, row: int) -> None:
+        key = f"{video.platform}:{video.video_id}"
+        if key in self._fetching or not video.thumbnail_url:
+            return
+        self._fetching.add(key)
+        gen = self._gen
+        app = cast("_ThumbnailApp", self.app)
+
+        async def fetch() -> None:
+            try:
+                path = await app.thumbnails.fetch(video.thumbnail_url)
+            except Exception:
+                path = None
+            finally:
+                self._fetching.discard(key)
+            if path is None or self._gen != gen:
+                return
+            try:
+                self.update_cell(
+                    self._row_key(row, video),
+                    "thumb",
+                    ThumbImage(path, width=self.THUMB_WIDTH, height=self.THUMB_ROWS),
+                    update_width=True,
+                )
+            except Exception:
+                pass  # widget detached or row gone meanwhile
+
+        self.run_worker(fetch(), group="thumb-fetch")
+
+    def _add_video_row(self, video: Video, watched: set[str], row: int) -> None:
         seen = f"{video.platform}:{video.video_id}" in watched
         style = "dim" if seen else ""
+        source = Text(
+            _source_label(video),
+            style=f"{style} {_PLATFORM_STYLES.get(video.platform, '')}".strip(),
+        )
+        cells: list = [Text("✓" if seen else "", style=style)]
+        if self._thumbnails:
+            cells.append(self._thumb_cell(video, row))
+            cells.extend(
+                centered(cell, self.THUMB_ROWS)
+                for cell in (
+                    Text(video.title, style=style),
+                    Text(video.channel_title, style=style),
+                    Text(video.age, style=style),
+                    source,
+                )
+            )
+        else:
+            cells.extend(
+                (
+                    Text(video.title, style=style),
+                    Text(video.channel_title, style=style),
+                    Text(video.age, style=style),
+                    source,
+                )
+            )
         self.add_row(
-            Text("✓" if seen else "", style=style),
-            Text(video.title, style=style),
-            Text(video.channel_title, style=style),
-            Text(video.age, style=style),
-            Text(
-                _source_label(video),
-                style=f"{style} {_PLATFORM_STYLES.get(video.platform, '')}".strip(),
-            ),
+            *cells,
+            height=self.THUMB_ROWS if self._thumbnails else 1,
+            key=self._row_key(row, video),
         )
 
     def set_videos(self, videos: list[Video], watched: set[str] | None = None) -> None:
         self._videos = videos
+        self._gen += 1
+        self._fetching.clear()
         watched = watched or set()
         self.clear()
-        for video in videos:
-            self._add_video_row(video, watched)
+        for row, video in enumerate(videos):
+            self._add_video_row(video, watched, row)
 
     def append_videos(self, videos: list[Video], watched: set[str] | None = None) -> None:
         """Add a page of videos below the current ones, keeping the table intact."""
         watched = watched or set()
+        base = len(self._videos)
         self._videos.extend(videos)
-        for video in videos:
-            self._add_video_row(video, watched)
+        for offset, video in enumerate(videos):
+            self._add_video_row(video, watched, base + offset)
 
     def refresh_watched(self, watched: set[str]) -> None:
         """Re-render watched markers, keeping the cursor position."""

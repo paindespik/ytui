@@ -36,8 +36,9 @@ class SearchScreen(BrowseScreen):
         yield Input(placeholder="Search YouTube…", id="search-input")
         yield LoadingIndicator(id="search-loading")
         with Horizontal():
-            yield VideoList(id="search-results")
-            yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+            yield VideoList(id="search-results", thumbnails=self.app.config.ui.thumbnails)
+            if not self.app.config.ui.thumbnails:
+                yield DetailPanel(thumbnails_enabled=False)
         yield PlayerBar()
         yield Footer()
 

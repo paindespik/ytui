@@ -5,6 +5,7 @@ by the screens.
 """
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,7 @@ VIDEO = Video(
     channel_title="Some Channel",
     channel_id="UC123",
     published=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    thumbnail_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
 )
 PLAYLIST = Video(video_id="PLabc", title="A playlist", kind="playlist")
 CHANNEL = Video(video_id="UCabc", title="A channel", kind="channel")
@@ -236,6 +238,67 @@ async def test_home_list_shows_source_column(app):
         assert "Type" not in labels
         row = video_list.get_row_at(0)
         assert str(row[-1]) == "YouTube"
+
+
+def _make_thumb_file(path: Path) -> None:
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 36), (200, 100, 50)).save(path, format="JPEG")
+
+
+async def test_home_list_web_style_thumbnails(app):
+    """ui.thumbnails (default): list gains a thumbnail column, no side panel."""
+    from ytui.thumbnails.fetcher import _cache_path, thumbs_dir
+
+    _make_thumb_file(_cache_path(VIDEO.thumbnail_url, thumbs_dir()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.detail_panel import DetailPanel
+        from ytui.ui.widgets.thumbs import ThumbImage
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = app.screen.query_one("#feed-list", VideoList)
+        assert len(video_list.columns) == 6
+        assert len(app.screen.query(DetailPanel)) == 0
+        cell = video_list.get_cell(f"r:0:youtube:{VIDEO.video_id}", "thumb")
+        assert isinstance(cell, ThumbImage)
+
+
+async def test_home_list_compact_when_thumbnails_disabled(app):
+    app.config.ui.thumbnails = False
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.detail_panel import DetailPanel
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = app.screen.query_one("#feed-list", VideoList)
+        assert len(video_list.columns) == 5
+        assert len(app.screen.query(DetailPanel)) == 1
+
+
+async def test_home_list_fetches_missing_thumbnail(app, tmp_path):
+    thumb = tmp_path / "fetched.jpg"
+    _make_thumb_file(thumb)
+
+    async def fake_fetch(url: str) -> Path:
+        return thumb
+
+    app.thumbnails.fetch = fake_fetch
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        from ytui.ui.widgets.thumbs import ThumbImage
+        from ytui.ui.widgets.video_list import VideoList
+
+        video_list = app.screen.query_one("#feed-list", VideoList)
+        cell = video_list.get_cell(f"r:0:youtube:{VIDEO.video_id}", "thumb")
+        assert isinstance(cell, ThumbImage)
 
 
 async def test_search_odysee_row_shows_odysee_source(app):

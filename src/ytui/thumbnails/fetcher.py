@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 from pathlib import Path
 
 import httpx
+from PIL import Image as PILImage
 
 from ..config import cache_dir
 
 MAX_CACHE_BYTES = 100 * 1024 * 1024  # ~100 MB
 TIMEOUT = httpx.Timeout(5.0)
+# Terminal thumbnails never need more than this; downsizing at download time
+# keeps the cache small and sixel/TGP encoding cheap (re-encoded on every
+# redraw of a row, e.g. while scrolling).
+MAX_WIDTH, MAX_HEIGHT = 320, 180
+JPEG_QUALITY = 80
 
 
 def thumbs_dir() -> Path:
@@ -97,8 +104,24 @@ class ThumbnailFetcher:
             resp.raise_for_status()
         except Exception:
             return None
+        data = self._shrink(resp.content)
+        if data is None:
+            return None
         tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(resp.content)
+        tmp.write_bytes(data)
         tmp.replace(path)
         evict_lru(self.directory, self.max_bytes)
         return path
+
+    @staticmethod
+    def _shrink(content: bytes) -> bytes | None:
+        """Decode and re-encode as a small JPEG. Returns None if unreadable."""
+        try:
+            image = PILImage.open(io.BytesIO(content))
+            image = image.convert("RGB")
+            image.thumbnail((MAX_WIDTH, MAX_HEIGHT))
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=JPEG_QUALITY)
+            return buf.getvalue()
+        except Exception:
+            return None

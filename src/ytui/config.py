@@ -32,6 +32,8 @@ sponsorblock = true
 subtitle_langs = "fr,en"
 
 [ui]
+# Web-style list with a thumbnail per row (sixel/kitty or half-block text,
+# depending on the terminal). When disabled: compact list + side info panel.
 thumbnails = true
 
 [auth]

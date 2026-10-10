@@ -28,7 +28,8 @@ class MusicScreen(BrowseScreen):
         yield LoadingIndicator(id="music-loading")
         with Horizontal():
             yield ShelfList(id="music-list")
-            yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+            if not self.app.config.ui.thumbnails:
+                yield DetailPanel(thumbnails_enabled=False)
         yield PlayerBar()
         yield Footer()
 

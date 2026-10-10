@@ -193,7 +193,7 @@ class SettingsScreen(Screen):
         config = self.app.config
         config.ui.thumbnails = not config.ui.thumbnails
         set_option("ui", "thumbnails", config.ui.thumbnails)
-        self.app.notify("Thumbnail change applies to newly opened screens.", timeout=5)
+        self.app.notify("Applies to screens opened from now on (list with / without thumbnails).", timeout=5)
         self._reload()
 
     def action_quality(self) -> None:

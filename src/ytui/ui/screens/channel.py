@@ -115,12 +115,13 @@ class ChannelScreen(BrowseScreen):
             if self.has_playlists:
                 with TabbedContent(id="channel-tabs", initial=VIDEOS_TAB):
                     with TabPane("Videos", id=VIDEOS_TAB):
-                        yield VideoList(id="channel-list")
+                        yield VideoList(id="channel-list", thumbnails=self.app.config.ui.thumbnails)
                     with TabPane("Playlists", id=PLAYLISTS_TAB):
-                        yield VideoList(id="channel-playlists", mark_watched=False)
+                        yield VideoList(id="channel-playlists", mark_watched=False, thumbnails=self.app.config.ui.thumbnails)
             else:
-                yield VideoList(id="channel-list")
-            yield DetailPanel(thumbnails_enabled=self.app.config.ui.thumbnails)
+                yield VideoList(id="channel-list", thumbnails=self.app.config.ui.thumbnails)
+            if not self.app.config.ui.thumbnails:
+                yield DetailPanel(thumbnails_enabled=False)
         yield PlayerBar()
         yield Footer()
 
