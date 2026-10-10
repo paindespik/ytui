@@ -267,6 +267,38 @@ async def test_home_list_web_style_thumbnails(app):
         assert isinstance(cell, ThumbImage)
 
 
+async def test_kitty_thumbnail_survives_cursor_row(app, monkeypatch):
+    """kitty (TGP) thumbnails are Unicode placeholders whose *foreground
+    colour encodes the image id*. The cursor/hover style must not override
+    it, otherwise the selected row shows no image."""
+    import textual_image.renderable.tgp as tgp
+    from textual_image.renderable.tgp import Image as TGPImage
+
+    from ytui.thumbnails.fetcher import _cache_path, thumbs_dir
+    from ytui.ui.widgets import video_list as video_list_mod
+
+    monkeypatch.setattr(tgp, "_send_tgp_message", lambda **kw: None)
+    monkeypatch.setattr(video_list_mod, "ThumbImage", TGPImage)
+    _make_thumb_file(_cache_path(VIDEO.thumbnail_url, thumbs_dir()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        table = app.screen.query_one("#feed-list", video_list_mod.VideoList)
+        assert table.cursor_row == 0  # the only row is the selected one
+        placeholder = chr(0x10EEEE)
+        colors = set()
+        for y in range(table.size.height):
+            for seg in table.render_line(y):
+                if placeholder in seg.text and seg.style and seg.style.color:
+                    colors.add(seg.style.color.triplet)
+        cell = table.get_cell(f"r:0:youtube:{VIDEO.video_id}", "thumb")
+        image_id = cell.terminal_image_id
+        assert image_id
+        expected = ((image_id >> 16) & 255, (image_id >> 8) & 255, image_id & 255)
+        assert colors == {expected}
+
+
 async def test_home_list_compact_when_thumbnails_disabled(app):
     app.config.ui.thumbnails = False
     async with app.run_test() as pilot:
