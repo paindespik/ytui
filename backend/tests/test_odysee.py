@@ -234,6 +234,165 @@ def test_odysee_channel_videos_requests_media_only(client):
     assert seen[0]["stream_types"] == ["video", "audio"]
 
 
+# ─── /api/channels/{id}/videos?platform=odysee&sort=views ───
+
+# Newest first, as claim_search returns them; the ranking must reorder them.
+POPULAR_CLAIMS = {
+    "items": [
+        {
+            "claim_id": "vv33",
+            "name": "new-quiet",
+            "value_type": "stream",
+            "value": {
+                "title": "New Quiet",
+                "stream_type": "video",
+                "source": {"media_type": "video/mp4"},
+                "release_time": "1719000100",
+            },
+            "signing_channel": {"claim_id": "cc33", "name": "@chan"},
+        },
+        {
+            "claim_id": "vv22",
+            "name": "new-viral",
+            "value_type": "stream",
+            "value": {
+                "title": "New Viral",
+                "stream_type": "video",
+                "source": {"media_type": "video/mp4"},
+                "release_time": "1719000000",
+            },
+            "signing_channel": {"claim_id": "cc33", "name": "@chan"},
+        },
+        {
+            "claim_id": "vv11",
+            "name": "old-popular",
+            "value_type": "stream",
+            "value": {
+                "title": "Old Popular",
+                "stream_type": "video",
+                "source": {"media_type": "video/mp4"},
+                "release_time": "1700000000",
+            },
+            "signing_channel": {"claim_id": "cc33", "name": "@chan"},
+        },
+    ]
+}
+
+
+def _mock_popular_http(view_counts=None, view_count_statuses=(200,)):
+    """Route posts by URL: SDK proxy (claim_search) and api.lbry.com.
+
+    `view_counts` maps claim id -> count (unknown ids answer 0, like the API).
+    Returns (patch, calls) where calls lists the posted URLs in order.
+    """
+    calls: list[str] = []
+    statuses = list(view_count_statuses)
+
+    async def fake_post(url, **kwargs):
+        url = str(url)
+        calls.append(url)
+        if "api.lbry.com" in url:
+            if url.endswith("/user/new"):
+                body = {"success": True, "data": {"id": 1, "auth_token": "lbrytok"}}
+                return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+            status = statuses.pop(0) if len(statuses) > 1 else statuses[0]  # /file/view_count
+            csv = (kwargs.get("data") or {}).get("claim_id", "")
+            body = {
+                "success": True,
+                "data": [
+                    (view_counts or {}).get(claim_id, 0) for claim_id in csv.split(",")
+                ],
+            }
+            return httpx.Response(status, json=body, request=httpx.Request("POST", url))
+        return httpx.Response(
+            200, json=_rpc(POPULAR_CLAIMS), request=httpx.Request("POST", url)
+        )
+
+    return (
+        patch.object(httpx.AsyncClient, "post", AsyncMock(side_effect=fake_post)),
+        calls,
+    )
+
+
+def test_odysee_videos_by_views(client):
+    post_patch, calls = _mock_popular_http(
+        view_counts={"vv11": 100, "vv22": 5000, "vv33": 500}
+    )
+    with post_patch:
+        resp = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "sort": "views"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [i["video_id"] for i in body["items"]] == [
+        "new-viral:vv22",
+        "new-quiet:vv33",
+        "old-popular:vv11",
+    ]
+    assert [i["view_count"] for i in body["items"]] == [5000, 500, 100]
+    # One anonymous LBRY user serves the whole request.
+    assert sum("user/new" in c for c in calls) == 1
+
+
+def test_odysee_videos_by_views_pages_share_cached_order(client):
+    post_patch, calls = _mock_popular_http(
+        view_counts={"vv11": 100, "vv22": 5000, "vv33": 500}
+    )
+    with post_patch:
+        first = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "sort": "views", "limit": 2},
+        ).json()
+        second = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "sort": "views", "limit": 2, "offset": 2},
+        ).json()
+    assert [i["video_id"] for i in first["items"]] == [
+        "new-viral:vv22",
+        "new-quiet:vv33",
+    ]
+    assert first["has_more"] is True
+    assert [i["video_id"] for i in second["items"]] == ["old-popular:vv11"]
+    assert second["has_more"] is False
+    # The later page slices the cached ranking: one upstream claim_search walk.
+    assert len([c for c in calls if "na-backend.odysee.com" in c]) == 1
+
+
+def test_odysee_videos_by_views_lbry_down_keeps_date_order(client):
+    """LBRY is the count source, not the listing: its failure degrades, no 502."""
+    post_patch, _ = _mock_popular_http(view_count_statuses=(500,))
+    with post_patch:
+        resp = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "sort": "views"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [i["video_id"] for i in body["items"]] == [
+        "new-quiet:vv33",
+        "new-viral:vv22",
+        "old-popular:vv11",
+    ]
+    assert all(i["view_count"] is None for i in body["items"])
+
+
+def test_odysee_videos_by_views_token_refresh_on_401(client):
+    post_patch, calls = _mock_popular_http(
+        view_counts={"vv11": 100, "vv22": 5000, "vv33": 500},
+        view_count_statuses=(401, 200),
+    )
+    with post_patch:
+        resp = client.get(
+            "/api/channels/@chan:cc33/videos",
+            params={"platform": "odysee", "sort": "views"},
+        )
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["video_id"] == "new-viral:vv22"  # retry succeeded
+    # The expired token was recreated before the retry.
+    assert sum("user/new" in c for c in calls) == 2
+
+
 def test_odysee_channel_videos_query_scopes_lighthouse(client):
     """claim_search has no full-text filter, so `q` goes through Lighthouse."""
     seen: list[dict] = []

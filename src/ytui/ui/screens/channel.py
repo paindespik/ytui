@@ -26,7 +26,7 @@ from .browse import BrowseScreen
 # Platforms whose channels list their playlists (GET /channels/{id}/playlists).
 PLAYLIST_PLATFORMS = ("youtube", "bitchute")
 # Platforms whose video listing can be ordered by views (sort=views).
-SORT_PLATFORMS = ("youtube", "bitchute", "crowdbunker")
+SORT_PLATFORMS = ("youtube", "bitchute", "crowdbunker", "odysee")
 SORT_LABELS = {"date": "newest first", "views": "most viewed"}
 
 VIDEOS_TAB = "tab-videos"

@@ -41,7 +41,7 @@ Platform = Literal["youtube", "bitchute", "odysee", "twitch", "tiktok", "crowdbu
 # Channel listing order: newest first, or most viewed first.
 ChannelSort = Literal["date", "views"]
 # Platforms whose channel listing can be ordered by views.
-_VIEWS_SORT_PLATFORMS = ("youtube", "bitchute", "crowdbunker")
+_VIEWS_SORT_PLATFORMS = ("youtube", "bitchute", "crowdbunker", "odysee")
 
 _ODYSEE_WRITE_DETAIL = "Odysee likes/comments require a LBRY wallet signature (not supported)"
 
@@ -102,6 +102,8 @@ async def _channel_videos_by_views(
         return await bitchute.channel_videos(channel_id, limit=limit, offset=offset, sort="views")
     if platform == "crowdbunker":
         return await crowdbunker.popular_videos(channel_id, limit=limit, offset=offset)
+    if platform == "odysee":
+        return await odysee.popular_videos(channel_id, limit=limit, offset=offset)
     return await ytdlp.channel_popular_videos(channel_id, limit=limit, offset=offset)
 
 
@@ -116,7 +118,7 @@ async def channel_videos(
     sort: ChannelSort = "date",
 ) -> ChannelVideosResponse:
     """One page of a channel's videos, newest first (`sort=date`) or most
-    viewed first (`sort=views`: YouTube, BitChute, CrowdBunker).
+    viewed first (`sort=views`: YouTube, BitChute, CrowdBunker, Odysee).
 
     A search (`q`) keeps the order of the platform's search and ignores
     `sort`.

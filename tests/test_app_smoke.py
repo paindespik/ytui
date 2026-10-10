@@ -522,13 +522,13 @@ async def test_channel_sort_keeps_search_order(app):
         assert app.screen._sort == "date"
 
 
-async def test_channel_sort_unavailable_on_odysee(app):
-    odysee_channel = Video(
-        video_id="@chan:1", title="An Odysee channel", kind="channel", platform="odysee"
+async def test_channel_sort_unavailable_on_twitch(app):
+    twitch_channel = Video(
+        video_id="login", title="A Twitch channel", kind="channel", platform="twitch"
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.open_channel(odysee_channel)
+        app.open_channel(twitch_channel)
         await pilot.pause()
         await app.workers.wait_for_complete()
         await pilot.pause()

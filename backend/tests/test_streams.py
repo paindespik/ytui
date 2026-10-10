@@ -192,7 +192,7 @@ def test_channel_videos_by_views_non_uc_id_ranks_locally(client):
 
 def test_channel_videos_by_views_unsupported_platform(client):
     resp = client.get(
-        "/api/channels/chan0000/videos", params={"platform": "odysee", "sort": "views"}
+        "/api/channels/chan0000/videos", params={"platform": "twitch", "sort": "views"}
     )
     assert resp.status_code == 501
     # Unknown sort keys are rejected by validation.

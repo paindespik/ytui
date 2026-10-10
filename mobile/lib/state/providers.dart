@@ -92,7 +92,7 @@ const kChannelPageSize = 50;
 const kChannelPlaylistPlatforms = {'youtube', 'bitchute'};
 
 /// Platforms whose channel videos can be listed most viewed first.
-const kChannelSortPlatforms = {'youtube', 'bitchute', 'crowdbunker'};
+const kChannelSortPlatforms = {'youtube', 'bitchute', 'crowdbunker', 'odysee'};
 
 /// A paginated channel listing (videos or playlists): page 1 on build, the
 /// next ones through [loadMore]. Subclasses only say how a page is fetched.

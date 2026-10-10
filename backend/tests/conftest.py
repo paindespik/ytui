@@ -19,12 +19,16 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.fixture(autouse=True)
 def _clear_info_cache():
-    """The yt-dlp extract_info and Odysee stream TTL caches must not leak between tests."""
+    """The yt-dlp extract_info and Odysee stream/popular TTL caches must not leak between tests."""
     ytdlp._INFO_CACHE.clear()
     odysee._STREAM_CACHE.clear()
+    odysee._popular_cache.clear()
+    odysee._lbry_token = None
     yield
     ytdlp._INFO_CACHE.clear()
     odysee._STREAM_CACHE.clear()
+    odysee._popular_cache.clear()
+    odysee._lbry_token = None
 
 
 @pytest.fixture()

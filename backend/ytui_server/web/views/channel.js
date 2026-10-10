@@ -22,7 +22,7 @@ import { icon } from "../js/icons.js";
 export const PLAYLIST_PLATFORMS = new Set(["youtube", "bitchute"]);
 
 // Plateformes dont les vidéos se trient par nombre de vues (?sort=views).
-export const SORT_PLATFORMS = new Set(["youtube", "bitchute", "crowdbunker"]);
+export const SORT_PLATFORMS = new Set(["youtube", "bitchute", "crowdbunker", "odysee"]);
 
 const PAGE_SIZE = 50;
 

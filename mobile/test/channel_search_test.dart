@@ -188,10 +188,19 @@ void main() {
 
   testWidgets('no order bar where views cannot be sorted', (tester) async {
     final adapter = _ChannelAdapter();
-    await tester.pumpWidget(_app(adapter, platform: 'odysee'));
+    await tester.pumpWidget(_app(adapter, platform: 'twitch'));
     await tester.pumpAndSettle();
     expect(find.text('Plus vues'), findsNothing);
     expect(find.text('Rocket launch'), findsOneWidget);
+  });
+
+  testWidgets('order bar is available on odysee', (tester) async {
+    final adapter = _ChannelAdapter();
+    await tester.pumpWidget(_app(adapter, platform: 'odysee'));
+    await tester.pumpAndSettle();
+    expect(find.text('Plus vues'), findsOneWidget);
+    // Initial load keeps the date order (no `sort` parameter).
+    expect(adapter.sorts, [null]);
   });
 
   testWidgets('no tabs on platforms without channel playlists',

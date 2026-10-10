@@ -233,6 +233,101 @@ async def channel_videos(channel_id: str, limit: int = 50, offset: int = 0) -> l
     return videos[offset : offset + limit]
 
 
+# ─── Most viewed listing ───
+#
+# claim_search/resolve claims carry NO view count (checked: no view key
+# anywhere), and the proxy's claim_search 500s on the documented
+# order_by=["metadata_view_count"] — so no server-side sort, unlike BitChute.
+# odysee.com itself fetches the counts from LBRY's public API: one anonymous
+# user token (user/new), then file/view_count for a CSV of claim ids (values
+# aligned to the input order, unknown claims = 0). Same numbers as the site.
+LBRY_API = "https://api.lbry.com"
+# Most viewed listing: the newest videos (up to this many) are ranked locally
+# with batched view counts, cached so "load more" pages slice one consistent
+# order instead of re-walking.
+POPULAR_SCAN_CAP = 200
+POPULAR_TTL_SECONDS = 15 * 60
+_POPULAR_CACHE_MAX = 64
+_popular_cache: dict[str, tuple[float, list[Video]]] = {}
+_lbry_token: str | None = None
+
+
+async def _lbry_anonymous_token(client: httpx.AsyncClient) -> str:
+    """Anonymous api.lbry.com auth_token (user/new), cached in-process."""
+    global _lbry_token
+    token = _lbry_token
+    if token is None:
+        resp = await client.post(
+            f"{LBRY_API}/user/new", data={"auth_token": ""}, headers=_HEADERS
+        )
+        resp.raise_for_status()
+        token = (resp.json().get("data") or {}).get("auth_token") or ""
+        if not token:
+            raise OdyseeError("lbry user/new returned no auth_token")
+        _lbry_token = token
+    return token
+
+
+async def _view_counts(client: httpx.AsyncClient, claim_ids: list[str]) -> dict[str, int]:
+    """View counts for claim ids via api.lbry.com, keyed by claim id.
+
+    The response is an integer list aligned with the request order (unknown
+    claims = 0). Best effort: returns {} on any failure so the caller keeps
+    the date order instead of failing the whole listing.
+    """
+    global _lbry_token
+    if not claim_ids:
+        return {}
+    try:
+        for attempt in (1, 2):
+            token = await _lbry_anonymous_token(client)
+            resp = await client.post(
+                f"{LBRY_API}/file/view_count",
+                data={"claim_id": ",".join(claim_ids), "auth_token": token},
+                headers=_HEADERS,
+            )
+            if resp.status_code == 401 and attempt == 1:
+                _lbry_token = None  # token expired: recreate the anonymous user
+                continue
+            resp.raise_for_status()
+            values = (resp.json() or {}).get("data")
+            if not isinstance(values, list) or len(values) != len(claim_ids):
+                return {}  # misaligned: trusting the order is worse than none
+            return dict(zip(claim_ids, (int(v) for v in values)))
+    except Exception as exc:
+        log.warning("lbry view counts failed: %s", exc)
+    return {}
+
+
+async def popular_videos(channel_id: str, limit: int = 50, offset: int = 0) -> list[Video]:
+    """Videos of a channel, most viewed first.
+
+    Exact within the POPULAR_SCAN_CAP newest videos (claims carry no counts,
+    so only what claim_search lists can be ranked — same documented window as
+    CrowdBunker). Cached per channel for POPULAR_TTL_SECONDS so successive
+    pages share one order. When the LBRY count source is down, the date order
+    is kept without counts (best effort, no 502).
+    """
+    key = channel_id.casefold()
+    now = time.monotonic()
+    cached = _popular_cache.get(key)
+    if cached is not None and now - cached[0] < POPULAR_TTL_SECONDS:
+        ranked = cached[1]
+    else:
+        videos = await channel_videos(channel_id, limit=POPULAR_SCAN_CAP)
+        ids = [claim_id_from_video_id(v.video_id) for v in videos]
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            counts = await _view_counts(client, ids)
+        for video in videos:
+            video.view_count = counts.get(claim_id_from_video_id(video.video_id))
+        # Stable sort: equal (or unknown) counts keep the newest first.
+        ranked = sorted(videos, key=lambda v: v.view_count or 0, reverse=True)
+        if key not in _popular_cache and len(_popular_cache) >= _POPULAR_CACHE_MAX:
+            del _popular_cache[min(_popular_cache, key=lambda k: _popular_cache[k][0])]
+        _popular_cache[key] = (now, ranked)
+    return ranked[offset : offset + limit]
+
+
 async def resolve_channel(
     handle: str, client: httpx.AsyncClient | None = None
 ) -> tuple[str, str]:
