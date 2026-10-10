@@ -8,6 +8,7 @@ scrolling), so the sixel variant caches the encoded payload per file.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from rich.console import Group
@@ -79,16 +80,67 @@ class _CachedSixelImage(SixelImage):
 
 
 class _ResendTGPImage(TGPImage):
-    """TGP (kitty) renderable that re-places its image on every render.
+    """TGP (kitty) renderable that places its image at exact cell coordinates.
 
     The base class sends the image data once per instance and places it at
-    the cursor only the first time. Table cells are re-rendered whenever
-    their style changes (cursor row, zebra stripes): the terminal deletes
-    the anchored image as soon as the cell is overwritten, and the base
-    class never re-places it — the highlighted row loses its thumbnail.
-    Re-issuing the placement (``a=p``) on every render keeps the image
-    glued to its cell without re-sending the image data.
+    the terminal cursor, wherever that happens to be when the cell is first
+    rendered (for a table: top-left of the screen, not the cell), and it
+    never re-places on later renders, so a row loses its image as soon as
+    its cells are re-rendered (cursor row highlight, scroll).
+
+    This subclass re-places the image (``a=p``) on every render at explicit
+    screen coordinates provided by the owning table (see ``VideoList``). The
+    cursor is saved (DECSC), jumped to the cell, the image placed, and the
+    cursor restored (DECRC): the physical cursor never ends up moved, so
+    Textual's cursor bookkeeping stays consistent and each render costs
+    exactly one short TGP placement message (the image data itself is only
+    sent once).
     """
+
+    def __init__(self, image, width=None, height=None) -> None:
+        super().__init__(image, width, height)
+        # 1-based (screen_row, screen_col) of the cell, or None to place at
+        # the current cursor (base behavior).
+        self._placement: tuple[int, int] | None = None
+
+    def _place(self, cell_width: int, cell_height: int) -> None:
+        """Schedule the placement just after the frame is flushed.
+
+        Emitting during the render phase is useless: Textual writes the
+        cell's text to the terminal right afterwards, and the terminal
+        deletes an anchored image as soon as its cell is overwritten.
+        Deferring the write by a few milliseconds lands it after the
+        physical writes of the frame, on top of the (already written)
+        cell text. The save/restore cursor pair keeps the physical cursor
+        untouched, so this cannot desynchronize Textual's output.
+        """
+        if self.terminal_image_id is None:
+            return
+        try:
+            import asyncio
+
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._emit_place(cell_width, cell_height)
+            return
+        loop.call_later(0.03, self._emit_place, cell_width, cell_height)
+
+    def _emit_place(self, cell_width: int, cell_height: int) -> None:
+        out = sys.__stdout__ if sys.__stdout__ is not None else None
+        if out is None or self.terminal_image_id is None:
+            return
+        try:
+            if self._placement is not None:
+                row, col = self._placement
+                out.write(f"\x1b7\x1b[{row};{col}H")
+            _send_tgp_message(
+                a="p", i=self.terminal_image_id, c=cell_width, r=cell_height, U=1, q=2
+            )
+            if self._placement is not None:
+                out.write("\x1b8")
+            out.flush()
+        except Exception:
+            pass
 
     def __rich_console__(self, console, options):
         terminal_sizes = get_cell_size()
@@ -102,11 +154,7 @@ class _ResendTGPImage(TGPImage):
             raise ValueError("Image too large to render")
         if self.terminal_image_id is None:
             self._send_image_to_terminal(pixel_width, pixel_height)
-            self._create_virtual_placement(cell_width, cell_height)
-        else:
-            _send_tgp_message(
-                a="p", i=self.terminal_image_id, c=cell_width, r=cell_height, U=1, q=2
-            )
+        self._place(cell_width, cell_height)
         yield from self._render_diacritics(cell_width, cell_height)
 
 

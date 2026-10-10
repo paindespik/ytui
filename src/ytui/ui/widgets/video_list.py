@@ -40,6 +40,29 @@ def _source_label(video: Video) -> str:
     return mark + _PLATFORM_LABELS.get(video.platform, video.platform)
 
 
+class _ThumbCell:
+    """Wraps a ThumbImage and tells it where its cell sits on screen.
+
+    TGP images are placed at explicit coordinates by the renderable; the
+    table computes them at render time (scroll position, column offsets).
+    For non-TGP renderables (sixel, half-blocks) the wrapper is a no-op.
+    """
+
+    def __init__(self, image, table: "VideoList", row_key: str) -> None:
+        self._image = image
+        self._table = table
+        self._row_key = row_key
+
+    def __rich_measure__(self, console, options):
+        return self._image.__rich_measure__(console, options)
+
+    def __rich_console__(self, console, options):
+        placement = self._table.thumb_cell_screen(self._row_key)
+        if hasattr(self._image, "_placement"):
+            self._image._placement = placement
+        yield from self._image.__rich_console__(console, options)
+
+
 class _ThumbnailApp(Protocol):
     thumbnails: ThumbnailFetcher
 
@@ -114,14 +137,51 @@ class VideoList(DataTable):
         """Stable per-position key (position prefix disambiguates duplicates)."""
         return f"r:{row}:{video.platform}:{video.video_id}"
 
+    def _wrap_thumb(self, image, row_key: str):
+        if hasattr(image, "_placement"):
+            return _ThumbCell(image, self, row_key)
+        return image
+
+    def thumb_cell_screen(self, row_key: str):
+        """1-based (row, col) screen coordinates of a thumbnail cell.
+
+        None when the row is not visible (it cannot be rendered then
+        anyway) or the geometry cannot be determined; the renderable then
+        falls back to placing at the current cursor.
+        """
+        try:
+            if self.app is None:
+                return None
+            y = None
+            for key, row_y in self._y_offsets:
+                if key == row_key:
+                    y = row_y
+                    break
+            if y is None:
+                return None
+            top = self.region.y - self.scroll_offset.y
+            if y < top or y >= top + self.region.height:
+                return None
+            x = 0
+            for column in self.ordered_columns:
+                if column.key == "thumb":
+                    break
+                x += column.get_render_width(self)
+            return (top + y + 1, self.region.x - self.scroll_offset.x + x + 1)
+        except Exception:
+            return None
+
     def _thumb_cell(self, video: Video, row: int):
         if not video.thumbnail_url or self.app is None:
-            return centered("–" if video.thumbnail_url else "–", self.THUMB_ROWS)
+            return centered("–", self.THUMB_ROWS)
         app = cast("_ThumbnailApp", self.app)
         path = app.thumbnails.cached_path(video.thumbnail_url)
         if path is not None:
             try:
-                return ThumbImage(path, width=self._thumb_width, height=self.THUMB_ROWS)
+                return self._wrap_thumb(
+                    ThumbImage(path, width=self._thumb_width, height=self.THUMB_ROWS),
+                    self._row_key(row, video),
+                )
             except Exception:
                 return centered("–", self.THUMB_ROWS)
         self._ensure_fetch(video, row)
@@ -148,7 +208,10 @@ class VideoList(DataTable):
                 self.update_cell(
                     self._row_key(row, video),
                     "thumb",
-                    ThumbImage(path, width=self._thumb_width, height=self.THUMB_ROWS),
+                    self._wrap_thumb(
+                        ThumbImage(path, width=self._thumb_width, height=self.THUMB_ROWS),
+                        self._row_key(row, video),
+                    ),
                     update_width=True,
                 )
             except Exception:
