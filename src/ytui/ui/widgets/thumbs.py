@@ -18,6 +18,19 @@ from rich.text import Text
 from textual_image._terminal import get_cell_size
 from textual_image.renderable import Image as AutoImage
 from textual_image.renderable.sixel import Image as SixelImage
+from textual_image.renderable.tgp import (
+    Image as TGPImage,
+    _NUMBER_TO_DIACRITIC,
+    _send_tgp_message,
+)
+
+# Query the terminal once while it is still directly readable (Textual's
+# stdin thread steals answers once the app is running). The result is cached
+# by the library and reused by every renderable.
+try:  # pragma: no cover - no query outside a TTY
+    get_cell_size()
+except Exception:
+    pass
 
 # (file key, pixel size) -> encoded sixel payload
 _SIXEL_CACHE: dict[tuple, str] = {}
@@ -65,8 +78,45 @@ class _CachedSixelImage(SixelImage):
         yield Segment("\x1b8", control=_NULL_CONTROL)
 
 
+class _ResendTGPImage(TGPImage):
+    """TGP (kitty) renderable that re-places its image on every render.
+
+    The base class sends the image data once per instance and places it at
+    the cursor only the first time. Table cells are re-rendered whenever
+    their style changes (cursor row, zebra stripes): the terminal deletes
+    the anchored image as soon as the cell is overwritten, and the base
+    class never re-places it — the highlighted row loses its thumbnail.
+    Re-issuing the placement (``a=p``) on every render keeps the image
+    glued to its cell without re-sending the image data.
+    """
+
+    def __rich_console__(self, console, options):
+        terminal_sizes = get_cell_size()
+        cell_width, cell_height = self._render_size.get_cell_size(
+            options.max_width, options.max_height, terminal_sizes
+        )
+        pixel_width, pixel_height = self._render_size.get_pixel_size(
+            options.max_width, options.max_height, terminal_sizes
+        )
+        if cell_width > len(_NUMBER_TO_DIACRITIC) or cell_height > len(_NUMBER_TO_DIACRITIC):
+            raise ValueError("Image too large to render")
+        if self.terminal_image_id is None:
+            self._send_image_to_terminal(pixel_width, pixel_height)
+            self._create_virtual_placement(cell_width, cell_height)
+        else:
+            _send_tgp_message(
+                a="p", i=self.terminal_image_id, c=cell_width, r=cell_height, U=1, q=2
+            )
+        yield from self._render_diacritics(cell_width, cell_height)
+
+
 try:  # pragma: no cover - depends on the textual-image internals
-    ThumbImage = _CachedSixelImage if AutoImage is SixelImage else AutoImage
+    if AutoImage is SixelImage:
+        ThumbImage = _CachedSixelImage
+    elif AutoImage is TGPImage:
+        ThumbImage = _ResendTGPImage
+    else:
+        ThumbImage = AutoImage
 except Exception:
     ThumbImage = AutoImage
 

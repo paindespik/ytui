@@ -14,6 +14,7 @@ from rich.text import Text
 from textual.binding import Binding
 from textual.message import Message
 from textual.widgets import DataTable
+from textual_image._terminal import get_cell_size
 
 from ...models import Video
 from ...thumbnails.fetcher import ThumbnailFetcher
@@ -44,7 +45,7 @@ class _ThumbnailApp(Protocol):
 
 
 class VideoList(DataTable):
-    THUMB_WIDTH = 11  # cells; 11x6 ~= 16:9
+    MIN_THUMB_WIDTH = 11
     THUMB_ROWS = 6
 
     BINDINGS = [
@@ -70,10 +71,30 @@ class VideoList(DataTable):
         self._videos: list[Video] = []
         self._mark_watched = mark_watched
         self._thumbnails = thumbnails
+        self._thumb_width = self._compute_thumb_width()
         # Bumped on every full rebuild so in-flight thumbnail fetches for the
         # previous list are dropped instead of updating stale rows.
         self._gen = 0
         self._fetching: set[str] = set()
+
+    @classmethod
+    def _compute_thumb_width(cls) -> int:
+        """Thumbnail width in cells so the displayed image stays 16:9.
+
+        Terminal cells are roughly 2:1 (width:height) in pixels, so a fixed
+        11x6 cell box is nearly square on screen and squashes the image. The
+        width is derived from the real cell size instead.
+        """
+        try:
+            cell_w, cell_h = get_cell_size()
+        except Exception:
+            cell_w = cell_h = 0
+        if not cell_w or not cell_h:
+            return 21
+        return max(
+            cls.MIN_THUMB_WIDTH,
+            round(cls.THUMB_ROWS * (16 / 9) * cell_h / cell_w),
+        )
 
     @property
     def thumbnails(self) -> bool:
@@ -100,7 +121,7 @@ class VideoList(DataTable):
         path = app.thumbnails.cached_path(video.thumbnail_url)
         if path is not None:
             try:
-                return ThumbImage(path, width=self.THUMB_WIDTH, height=self.THUMB_ROWS)
+                return ThumbImage(path, width=self._thumb_width, height=self.THUMB_ROWS)
             except Exception:
                 return centered("–", self.THUMB_ROWS)
         self._ensure_fetch(video, row)
@@ -127,7 +148,7 @@ class VideoList(DataTable):
                 self.update_cell(
                     self._row_key(row, video),
                     "thumb",
-                    ThumbImage(path, width=self.THUMB_WIDTH, height=self.THUMB_ROWS),
+                    ThumbImage(path, width=self._thumb_width, height=self.THUMB_ROWS),
                     update_width=True,
                 )
             except Exception:
