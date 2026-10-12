@@ -136,7 +136,11 @@ Deployment: Docker container behind nginx (TLS via Let's Encrypt), Forgejo CI/CD
    ```bash
    flutter build apk
    ```
-   (also automated in CI).
+   (also automated in CI). Signing uses the stable keystore
+   `mobile/android/ytui-release.keystore` + `key.properties` (both gitignored,
+   backed up on the personnel server at `~/ytui-signing/`) — without them the
+   build falls back to the local debug key and the phone rejects the update
+   (see `mobile/README.md` → APK signing).
 4. On Android TV / projectors (leanback, no touchscreen) the app switches to a
    remote-driven player: ◀ ▶ seek ±10 s and raise the progress bar, OK toggles
    play/pause, ▼ walks the action row (speed, subtitles, audio offset) and Back
