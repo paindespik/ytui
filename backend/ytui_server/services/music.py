@@ -638,8 +638,11 @@ class MusicService:
 
         Personal mixes go through the account first (anonymously they list
         generic tracks); anything yt-dlp cannot list (liked music, private
-        playlists) gets a signed-in second chance. Raises UpstreamError
-        (ChannelNotFound when the configured channel does not exist).
+        playlists) gets a signed-in second chance. Anonymous pagination is
+        throttled (the first ~100-entry page is served, continuations come
+        back empty), so a listing shorter than `limit` gets a signed-in
+        second chance too. Raises UpstreamError (ChannelNotFound when the
+        configured channel does not exist).
         """
         if is_personal_playlist(playlist_id):
             listed = await self._signed_in_playlist(playlist_id, limit)
@@ -647,9 +650,17 @@ class MusicService:
                 return listed
         url = Video(video_id=playlist_id, title="", kind="playlist").url
         try:
-            return await ytdlp.playlist_videos(url, limit=limit)
+            items, title = await ytdlp.playlist_videos(url, limit=limit)
         except UpstreamError:
             listed = await self._signed_in_playlist(playlist_id, limit)
             if listed is not None:
                 return listed
             raise
+        if not items or len(items) >= limit:
+            return items, title
+        # The anonymous listing may stop at the first page while the
+        # playlist is longer; the signed-in session sees the full list.
+        listed = await self._signed_in_playlist(playlist_id, limit)
+        if listed is not None and len(listed[0]) > len(items):
+            return listed
+        return items, title

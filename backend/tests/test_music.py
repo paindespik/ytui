@@ -393,6 +393,51 @@ def test_public_playlist_stays_anonymous(client, settings):
     signed.assert_not_awaited()
 
 
+def test_full_anonymous_listing_needs_no_signed_in_fallback(client, settings):
+    _push_cookies(settings)
+    full = [Video(video_id=f"full{i:04d}", title=f"Full {i}") for i in range(200)]
+    with (
+        patch.object(ytdlp, "playlist_videos", AsyncMock(return_value=(full, "Public"))),
+        patch.object(music, "playlist_videos", AsyncMock()) as signed,
+    ):
+        resp = client.get("/api/ytplaylists/PLpublic/videos")
+    assert resp.json()["title"] == "Public"
+    assert len(resp.json()["items"]) == 200
+    signed.assert_not_awaited()
+
+
+def test_truncated_anonymous_listing_uses_the_signed_in_one(client, settings):
+    """Anonymous pagination stops at the first page; the account sees all."""
+    _push_cookies(settings)
+    anon = [Video(video_id=f"anon{i:04d}", title=f"Anon {i}") for i in range(100)]
+    signed = [Video(video_id=f"full{i:04d}", title=f"Full {i}") for i in range(250)]
+    with (
+        patch.object(ytdlp, "playlist_videos", AsyncMock(return_value=(anon, "Public"))),
+        patch.object(music, "playlist_videos", AsyncMock(return_value=(signed, "Public"))) as signin,
+    ):
+        resp = client.get("/api/ytplaylists/PLpublic/videos")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 250
+    assert items[0]["video_id"] == "full0000"
+    signin.assert_awaited_once()
+
+
+def test_truncated_anonymous_listing_kept_when_signed_in_is_shorter(client, settings):
+    """A dead session serves a generic first page; never replace a longer list."""
+    _push_cookies(settings)
+    anon = [Video(video_id=f"anon{i:04d}", title=f"Anon {i}") for i in range(100)]
+    dead = [Video(video_id=f"dead{i:02d}", title=f"Dead {i}") for i in range(30)]
+    with (
+        patch.object(ytdlp, "playlist_videos", AsyncMock(return_value=(anon, "Public"))),
+        patch.object(music, "playlist_videos", AsyncMock(return_value=(dead, "Public"))),
+    ):
+        resp = client.get("/api/ytplaylists/PLpublic/videos")
+    items = resp.json()["items"]
+    assert len(items) == 100
+    assert items[0]["video_id"] == "anon0000"
+
+
 def test_playlist_failure_without_cookies_is_502(client):
     with patch.object(ytdlp, "playlist_videos", AsyncMock(side_effect=ytdlp.UpstreamError("nope"))):
         resp = client.get("/api/ytplaylists/LM/videos")
