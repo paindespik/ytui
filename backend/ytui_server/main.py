@@ -89,8 +89,10 @@ def create_app(settings: Settings | None = None, start_pollers: bool = True) -> 
             history_max_rows=settings.history_max_rows,
         )
         app.state.db = db
-        app.state.feed_service = FeedService(db)
         app.state.youtube_cookies = CookieStore(settings.data_dir)
+        app.state.feed_service = FeedService(
+            db, cookie_file=app.state.youtube_cookies.path
+        )
         app.state.suggestions_service = SuggestionsService(
             db,
             ttl_seconds=settings.suggestions_ttl_minutes * 60,

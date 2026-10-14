@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import feedparser
@@ -227,8 +228,11 @@ async def _fetch_youtube_view_counts(channel_id: str) -> list[Video]:
 
 
 class FeedService:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, cookie_file: Path | None = None) -> None:
         self.db = db
+        # Pushed YouTube session; when present and valid the channel /videos page
+        # is the primary feed source (RSS is 404-prone since ~Dec 2025).
+        self.cookie_file = cookie_file
 
     async def resolve_ref(self, ref: str, client: httpx.AsyncClient) -> FollowedChannel:
         """Resolve a channel ref: UC id, @handle, bitchute:/odysee:/twitch:/
@@ -393,24 +397,9 @@ class FeedService:
                 if cached is not None:
                     return cached, None
             try:
-                resp, counted = await asyncio.gather(
-                    _get_with_retry(
-                        client,
-                        RSS_URL.format(channel_id=channel_id),
-                        headers={"User-Agent": USER_AGENT},
-                    ),
-                    _fetch_youtube_view_counts(channel_id),
+                videos = await self._fetch_youtube_videos(
+                    channel_id, channel.title, client
                 )
-                videos = parse_rss(resp.content)
-                if counted:
-                    counts = {
-                        v.video_id: v.view_count
-                        for v in counted
-                        if v.view_count is not None
-                    }
-                    for video in videos:
-                        if video.view_count is None:
-                            video.view_count = counts.get(video.video_id)
                 self.db.set_feed(channel_id, videos)
                 return videos, None
             except Exception as exc:
@@ -419,6 +408,46 @@ class FeedService:
                 if stale is not None:
                     return stale, f"{channel.ref}: using cached data ({type(exc).__name__})"
                 return [], f"{channel.ref}: {exc}"
+
+    async def _fetch_youtube_videos(
+        self, channel_id: str, title: str, client: httpx.AsyncClient
+    ) -> list[Video]:
+        """Fresh videos for a YouTube channel.
+
+        The channel's /videos page (scraped with the pushed session) is the
+        primary source: it yields the channel name and publish time, and the
+        public RSS endpoint is 404-prone since ~Dec 2025. RSS + the yt-dlp
+        view-count lookup remain the fallback when the session is unavailable.
+        """
+        if self.cookie_file is not None and self.cookie_file.exists():
+            try:
+                scraped = await ytdlp.channel_videos_page(
+                    self.cookie_file, channel_id, _YT_RSS_MAX_ITEMS, fallback_title=title
+                )
+                if scraped:
+                    return scraped
+            except Exception:  # noqa: BLE001 - session path is best-effort
+                log.debug(
+                    "channel /videos scrape failed for %s; falling back to RSS",
+                    channel_id,
+                )
+        resp = await _get_with_retry(
+            client,
+            RSS_URL.format(channel_id=channel_id),
+            headers={"User-Agent": USER_AGENT},
+        )
+        videos = parse_rss(resp.content)
+        counted = await _fetch_youtube_view_counts(channel_id)
+        if counted:
+            counts = {
+                v.video_id: v.view_count
+                for v in counted
+                if v.view_count is not None
+            }
+            for video in videos:
+                if video.view_count is None:
+                    video.view_count = counts.get(video.video_id)
+        return videos
 
     async def _fetch_bitchute(
         self, channel: FollowedChannel, client: httpx.AsyncClient, force_refresh: bool

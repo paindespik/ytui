@@ -208,6 +208,70 @@ def test_feed_enrichment_failure_keeps_feed(client, app):
     assert all(v["view_count"] is None for v in body["videos"])
 
 
+def test_feed_prefers_channel_page_over_rss(client, app, tmp_path, monkeypatch):
+    """With a live session the /videos page is the primary source (RSS is 404-prone)."""
+    from datetime import datetime, timezone
+
+    from ytui_server.models import FollowedChannel, Video
+
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n")
+    app.state.feed_service.cookie_file = cookie_file
+    app.state.db.add_channel(
+        FollowedChannel(ref="UCtest000000000000000000", channel_id="UCtest000000000000000000")
+    )
+
+    async def fake_page(cookie_file, channel_id, limit=15, fallback_title=""):
+        return [
+            Video(
+                video_id="pg1", title="Page video", channel_title="Test Channel",
+                published=datetime.now(timezone.utc), view_count=1234,
+            ),
+            Video(
+                video_id="pg2", title="Page video 2", channel_title="Test Channel",
+                published=datetime.now(timezone.utc), view_count=5678,
+            ),
+        ]
+
+    monkeypatch.setattr(ytdlp, "channel_videos_page", fake_page)
+
+    async def _no_rss(url, **kwargs):
+        raise AssertionError("RSS should not be fetched when the session scrape succeeds")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _no_rss)
+    body = client.get("/api/feed").json()
+    assert body["warnings"] == []
+    assert {v["video_id"] for v in body["videos"]} == {"pg1", "pg2"}
+    by_id = {v["video_id"]: v for v in body["videos"]}
+    assert by_id["pg1"]["channel_title"] == "Test Channel"
+    assert by_id["pg1"]["view_count"] == 1234
+    assert by_id["pg1"]["published"] is not None
+
+
+def test_feed_falls_back_to_rss_when_session_dead(client, app, tmp_path, monkeypatch):
+    """When the session scrape yields nothing, the (still-200) RSS feed is used."""
+    from ytui_server.models import FollowedChannel
+
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n")
+    app.state.feed_service.cookie_file = cookie_file
+    app.state.db.add_channel(
+        FollowedChannel(ref="UCtest000000000000000000", channel_id="UCtest000000000000000000")
+    )
+
+    async def _empty(cookie_file, channel_id, limit=15, fallback_title=""):
+        return []
+
+    monkeypatch.setattr(ytdlp, "channel_videos_page", _empty)
+    xml = (FIXTURES / "channel_feed.xml").read_bytes()
+    with patch.object(
+        httpx.AsyncClient, "get", _mock_get({"feeds/videos.xml": httpx.Response(200, content=xml)})
+    ):
+        body = client.get("/api/feed").json()
+    assert body["warnings"] == []
+    assert {v["video_id"] for v in body["videos"]} == {"abc123def45", "xyz987wvu65"}
+
+
 def test_feed_crowdbunker_videos_carry_view_counts(client, app):
     from ytui_server.models import FollowedChannel
 

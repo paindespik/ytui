@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlparse
 
@@ -1125,6 +1125,52 @@ def _parse_compact_count(text: str) -> int | None:
     return int(float(match.group(1)) * _COMPACT_MULTIPLIERS[(match.group(2) or "").upper()])
 
 
+# Channel /videos lockups carry only relative time ("il y a 21 h", "5 days ago")
+# and a compact view count in the account's language (often French "1,6 k").
+_REL_TIME_FR_RE = re.compile(r"il y a\s+(\d+)\s*([a-zé]+)", re.IGNORECASE)
+_REL_TIME_EN_RE = re.compile(r"(\d+)\s+([a-z]+)\s+ago", re.IGNORECASE)
+_REL_TIME_UNITS = {
+    "min": 60, "mins": 60, "h": 3_600, "j": 86_400, "sem": 604_800,
+    "mois": 2_592_000, "an": 31_536_000, "ans": 31_536_000,
+    "minute": 60, "minutes": 60, "hour": 3_600, "hours": 3_600,
+    "day": 86_400, "days": 86_400, "week": 604_800, "weeks": 604_800,
+    "month": 2_592_000, "months": 2_592_000, "year": 31_536_000, "years": 31_536_000,
+}
+_FR_COUNT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([KMB])?", re.IGNORECASE)
+
+
+def _parse_relative_time(text: str) -> datetime | None:
+    """'il y a 21 h' / '5 days ago' -> an approximate datetime, else None.
+
+    The channel /videos grid shows relative time only, so this is as precise as
+    YouTube provides — enough for feed sorting and the <3-days new-video filter.
+    """
+    lowered = (text or "").strip().lower()
+    match = _REL_TIME_FR_RE.search(lowered) or _REL_TIME_EN_RE.search(lowered)
+    if not match:
+        return None
+    seconds = _REL_TIME_UNITS.get(match.group(2))
+    if seconds is None:
+        return None
+    return datetime.now(timezone.utc) - timedelta(seconds=int(match.group(1)) * seconds)
+
+
+def _parse_compact_count_fr(text: str) -> int | None:
+    """Compact view count, French or English: '1,6 k' -> 1600, '2.3M' -> 2_300_000."""
+    cleaned = (text or "").replace("\xa0", " ").strip()
+    match = _FR_COUNT_RE.search(cleaned)
+    if not match:
+        return None
+    number = match.group(1).replace(",", ".")
+    multiplier = {"": 1, "k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(
+        (match.group(2) or "").lower(), 1
+    )
+    try:
+        return int(float(number) * multiplier)
+    except ValueError:
+        return None
+
+
 def _walk_lockups(node: object) -> list[dict]:
     """Recursively collect every lockupViewModel dict with contentType == video."""
     found: list[dict] = []
@@ -1302,6 +1348,106 @@ async def related_videos(video_id: str, limit: int = 20) -> list[Video]:
         videos.append(video)
         if len(videos) >= limit:
             break
+    return videos
+
+
+def _channel_title_from_html(html: str) -> str:
+    """The channel's display name from its /videos page (og:title, else <title>)."""
+    match = re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', html)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"<title>(.*?)</title>", html, re.DOTALL)
+    if match:
+        title = match.group(1).strip()
+        for suffix in (" - YouTube", " - YouTube FR", " - YouTube UK"):
+            if title.endswith(suffix):
+                return title[: -len(suffix)]
+    return ""
+
+
+def _channel_video_meta(lockup: dict) -> tuple[datetime | None, int | None]:
+    """(published, view_count) from a channel /videos lockup's metadata row.
+
+    The row is a flat [count, time-ago] pair (the channel name is omitted on the
+    channel's own page), in any order and either language.
+    """
+    metadata = (lockup.get("metadata") or {}).get("lockupMetadataViewModel") or {}
+    rows = (
+        (metadata.get("metadata") or {}).get("contentMetadataViewModel") or {}
+    ).get("metadataRows") or []
+    published: datetime | None = None
+    view_count: int | None = None
+    for row in rows:
+        for part in row.get("metadataParts") or []:
+            text = (part.get("text") or {}).get("content") or ""
+            if published is None and (candidate := _parse_relative_time(text)) is not None:
+                published = candidate
+                continue
+            if view_count is None:
+                view_count = _parse_compact_count_fr(text)
+    return published, view_count
+
+
+async def channel_videos_page(
+    cookie_file: Path, channel_id: str, limit: int = 15, fallback_title: str = ""
+) -> list[Video]:
+    """A channel's /videos tab, scraped with the pushed session.
+
+    The public RSS endpoint (feeds/videos.xml?channel_id=) has returned 404
+    intermittently/globally since ~Dec 2025 with no Google acknowledgment, so the
+    feed reads the same channel page the browser shows. This yields the channel
+    name and relative publish time, which RSS never carried. Returns [] when the
+    session no longer authenticates (callers fall back to RSS, then stale cache).
+    """
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    jar = YoutubeDLCookieJar(str(cookie_file))
+    try:
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as exc:
+        raise UpstreamError(f"unreadable cookie file: {exc}") from exc
+    if not ({c.name for c in jar} & set(_SESSION_COOKIES)):
+        return []  # an anonymous /videos page can hit the EU consent wall (serv IP)
+
+    async with httpx.AsyncClient(
+        timeout=15.0,
+        follow_redirects=True,
+        cookies=jar,
+        # Browser UA, no Accept-Language: the account's language wins, and the
+        # server UA gets a thinner page (18 vs 23 items, measured on the home grid).
+        headers={"User-Agent": _BROWSER_UA},
+    ) as http_client:
+        resp = await http_client.get(f"https://www.youtube.com/channel/{channel_id}/videos")
+        if resp.status_code == 429:
+            raise UpstreamError("YouTube rate-limited the channel feed (429)")
+        resp.raise_for_status()
+        html = resp.text
+        match = _YT_INITIAL_DATA_RE.search(html)
+        if not match:
+            raise UpstreamError("ytInitialData not found")
+        data = json.loads(match.group(1))
+    title = _channel_title_from_html(html) or fallback_title
+
+    videos: list[Video] = []
+    seen: set[str] = set()
+    for lockup in _walk_lockups(data):
+        if len(videos) >= limit:
+            break
+        video = _lockup_to_video(lockup)
+        if video is None or video.video_id in seen:
+            continue
+        seen.add(video.video_id)
+        # _lockup_to_video mis-reads the channel page's single [count, time] row
+        # as the channel name; the name is the page's, and the row holds the time.
+        video.channel_title = title
+        published, view_count = _channel_video_meta(lockup)
+        if video.published is None:
+            video.published = published
+        if video.view_count is None:
+            video.view_count = view_count
+        videos.append(video)
+    if not videos:
+        raise UpstreamError("no video lockups in channel page")
     return videos
 
 
