@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir /opt/ytui-server[auth] \
 # Deno: yt-dlp's EJS runtime for YouTube's n-challenge. A signed-in session
 # still triggers JS challenges on the player API (Oct 2026 rollout); without
 # a runtime yt-dlp degrades to "images only". Pinned to a known-good release.
-RUN python -c "import os,urllib.request,zipfile; urllib.request.urlretrieve('https://dl.deno.land/release/v2.4.4/deno-x86_64-unknown-linux-gnu.zip','/tmp/deno.zip'); zipfile.ZipFile('/tmp/deno.zip').extractall('/usr/local/bin'); os.chmod('/usr/local/bin/deno',0o755); os.unlink('/tmp/deno.zip')"
+# (dl.deno.land sits behind Cloudflare and 403s the bare urllib User-Agent.)
+RUN python -c "import os,urllib.request,zipfile; req=urllib.request.Request('https://dl.deno.land/release/v2.4.4/deno-x86_64-unknown-linux-gnu.zip',headers={'User-Agent':'ytui-deploy'}); data=urllib.request.urlopen(req).read(); open('/tmp/d.zip','wb').write(data); zipfile.ZipFile('/tmp/d.zip').extractall('/usr/local/bin'); os.chmod('/usr/local/bin/deno',0o755); os.unlink('/tmp/d.zip')"
 
 RUN useradd --system --create-home --uid 900 app \
     && mkdir -p /data && chown app:app /data

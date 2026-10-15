@@ -147,11 +147,11 @@ describe("vue chaîne — tri des vidéos", () => {
     assert.equal(tabButtons(view).length, 0, "pas d'onglet Playlists sur CrowdBunker");
   });
 
-  test("Odysee : pas de tri, ?sort=views ignoré", async () => {
+  test("Odysee : ?sort=views demandé à l'API, puce active", async () => {
     const api = mockApi(routes());
     const view = await mount("odysee", "sort=views");
-    assert.equal(sortButtons(view).length, 0);
-    assert.ok(!api.find("/videos")[0].url.includes("sort="));
+    assert.ok(api.find("/videos")[0].url.includes("sort=views"));
+    assert.equal(sortButtons(view)[1].getAttribute("aria-pressed"), "true");
   });
 
   test("recherche : ordre de la plateforme, puces masquées, tri gardé pour Effacer", async () => {
