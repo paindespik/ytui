@@ -157,7 +157,7 @@ async def test_a_rewrite_that_would_drop_credentials_is_skipped(cookie_file):
     jar = YoutubeDLCookieJar(str(cookie_file))
     jar.load(ignore_discard=True, ignore_expires=True)
     jar.clear(".youtube.com", "/", "LOGIN_INFO")
-    ytdlp._save_cookies(jar, cookie_file, {"LOGIN_INFO", "SAPISID"})
+    ytdlp._save_cookies(jar, cookie_file)
     assert cookie_file.read_text() == before
 
 
@@ -167,7 +167,7 @@ async def test_a_complete_jar_is_written(cookie_file):
     jar = YoutubeDLCookieJar(str(cookie_file))
     jar.load(ignore_discard=True, ignore_expires=True)
     cookie_file.write_text("clobbered", encoding="utf-8")
-    ytdlp._save_cookies(jar, cookie_file, {"LOGIN_INFO", "SAPISID"})
+    ytdlp._save_cookies(jar, cookie_file)
     text = cookie_file.read_text()
     assert "LOGIN_INFO" in text and "SAPISID" in text
     assert (cookie_file.stat().st_mode & 0o777) == 0o600

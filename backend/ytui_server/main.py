@@ -31,6 +31,7 @@ from .routers import (
 )
 from .security import require_token
 from .services.cookies import CookieStore
+from .services import ytdlp
 from .services.feed import FeedService
 from .services.live import LiveMonitor
 from .services.livechat import ChatManager
@@ -90,6 +91,7 @@ def create_app(settings: Settings | None = None, start_pollers: bool = True) -> 
         )
         app.state.db = db
         app.state.youtube_cookies = CookieStore(settings.data_dir)
+        ytdlp.set_cookie_file(app.state.youtube_cookies.path)
         app.state.feed_service = FeedService(
             db, cookie_file=app.state.youtube_cookies.path
         )

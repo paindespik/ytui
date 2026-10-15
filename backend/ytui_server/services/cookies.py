@@ -1,8 +1,12 @@
 """Account cookies pushed from the desktop client.
 
-Used ONLY for the personalised YouTube home feed and the YouTube Music home
-(services/music.py, with its personal playlists): search, stream resolution and
-details stay anonymous, so a flagged session cannot break playback. yt-dlp rewrites rotated cookies back into this file on every use,
+Used for the personalised YouTube home feed, the YouTube Music home
+(services/music.py, with its personal playlists) AND YouTube stream
+resolution (services/ytdlp.py): since the 2026 n-challenge rollout,
+anonymous playback from a datacenter IP gets "Sign in to confirm you're
+not a bot", so VOD extraction goes through the session — but always with
+an anonymous retry, so a flagged session can no longer break playback.
+yt-dlp rewrites rotated cookies back into this file on every use,
 which is what keeps the pushed session alive.
 """
 

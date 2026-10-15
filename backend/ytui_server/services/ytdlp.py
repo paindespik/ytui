@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -31,6 +32,37 @@ _BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) Gecko/20100101 Firefox/
 _SESSION_COOKIES = ("LOGIN_INFO", "SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")
 # Home-feed pagination: each InnerTube page carries ~24 videos.
 _HOME_MAX_PAGES = 12
+
+# The pushed session (same file as the home feed): see set_cookie_file.
+_cookie_file: Path | None = None
+# Serializes rotated-cookie writes; the file itself is only ever replaced,
+# never truncated in place, so readers need no lock.
+_COOKIE_FILE_LOCK = threading.Lock()
+
+
+def set_cookie_file(path: Path | None) -> None:
+    global _cookie_file
+    _cookie_file = path
+
+
+def _load_session_jar() -> tuple | None:
+    """(jar, credentials) from the pushed session, or None to stay anonymous."""
+    if _cookie_file is None or not _cookie_file.exists():
+        return None
+    try:
+        from yt_dlp.cookies import YoutubeDLCookieJar
+
+        jar = YoutubeDLCookieJar(str(_cookie_file))
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as exc:
+        log.warning("session cookie file unreadable, staying anonymous: %s", exc)
+        return None
+    names = {c.name for c in jar}
+    # LOGIN_INFO alone proves a signed-in session; a partial file that lost it
+    # (see _save_cookies) would only ever fetch the anonymous page.
+    if "LOGIN_INFO" not in names:
+        return None
+    return jar, names
 
 log = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
@@ -493,11 +525,34 @@ def _extract_info_cached(url: str) -> dict:
 
 
 def _extract_info_fresh(url: str) -> dict:
-    """One full extraction (with the truncation guard), stored in the cache."""
+    """One full extraction (with the truncation guard), stored in the cache.
+
+    YouTube VODs use the pushed session when it exists: since the 2026
+    n-challenge rollout a datacenter IP gets "Sign in to confirm you're not a
+    bot" anonymously. A dead or flagged session must never break playback,
+    so the same extraction is retried anonymously on any failure.
+    """
     bitchute = "bitchute.com" in url
+    session = None if bitchute else _load_session_jar()
+    try:
+        return _extract_info_once(url, bitchute, session)
+    except Exception as exc:
+        if session is None:
+            raise
+        log.warning(
+            "stream extraction with session cookies failed for %s (%s); retrying anonymously",
+            url,
+            exc,
+        )
+        return _extract_info_once(url, bitchute, None)
+
+
+def _extract_info_once(url: str, bitchute: bool, session: tuple | None) -> dict:
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
     if bitchute:
         opts["check_formats"] = False  # see _bitchute_media_url
+    if session is not None:
+        opts["cookies"] = session[0]
     info = {}
     for attempt in range(1, _TRUNCATION_ATTEMPTS + 1):
         with _youtube_dl(opts) as ydl:
@@ -514,6 +569,12 @@ def _extract_info_fresh(url: str) -> dict:
             attempt,
             _TRUNCATION_ATTEMPTS,
         )
+    if session is not None:
+        # Google rotates session cookies on every request; persisting them is
+        # what keeps the pushed session alive (same as the home feed).
+        # The session was loaded from _cookie_file, so it exists.
+        assert _cookie_file is not None
+        _save_cookies(session[0], _cookie_file)
     if bitchute:
         _fix_bitchute_formats(info)
     _drop_dead_muxed_formats(info)
@@ -1481,7 +1542,6 @@ async def home_recommendations(
         jar.load(ignore_discard=True, ignore_expires=True)
     except Exception as exc:
         raise UpstreamError(f"unreadable cookie file: {exc}") from exc
-    credentials = {c.name for c in jar} & set(_SESSION_COOKIES)
 
     videos: list[Video] = []
     seen: set[str] = set()
@@ -1523,7 +1583,7 @@ async def home_recommendations(
 
     # Google rotates session cookies on every request; persisting them is what
     # keeps the pushed session from lapsing.
-    _save_cookies(jar, cookie_file, credentials)
+    _save_cookies(jar, cookie_file)
     return videos
 
 
@@ -1658,19 +1718,27 @@ def _walk_key(node: object, key: str) -> list[dict]:
     return found
 
 
-def _save_cookies(jar, cookie_file: Path, credentials: set[str]) -> None:
-    """Write the rotated jar back, unless doing so would break the session.
+def _save_cookies(jar, cookie_file: Path) -> None:
+    """Write the rotated jar back atomically, unless doing so would break the session.
 
     Seen in production: rewriting on every call eventually dropped LOGIN_INFO
     and SAPISID, leaving a file that still loaded fine but only ever fetched the
-    anonymous home. Skipping the write keeps the pushed session usable.
+    anonymous home. A rewrite must therefore keep LOGIN_INFO and at least one
+    SAPISID-family cookie; anything else is skipped and the file stays as pushed.
+    The write is a tmp file + os.replace (never a truncated live file) so a
+    concurrent reader can never see a partial jar.
     """
-    missing = credentials - {c.name for c in jar}
-    if missing:
-        log.warning("keeping cookies as pushed: a rewrite would drop %s", ", ".join(sorted(missing)))
+    names = {c.name for c in jar}
+    if "LOGIN_INFO" not in names or not (names & {"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}):
+        log.warning(
+            "keeping cookies as pushed: the rotated jar would drop the session credentials"
+        )
         return
-    try:
-        jar.save(str(cookie_file), ignore_discard=True, ignore_expires=True)
-        cookie_file.chmod(0o600)
-    except Exception as exc:  # a stale file is recoverable; a crash here is not
-        log.warning("could not persist rotated cookies: %s", exc)
+    with _COOKIE_FILE_LOCK:
+        try:
+            tmp = cookie_file.with_name(cookie_file.name + f".tmp{os.getpid()}")
+            jar.save(str(tmp), ignore_discard=True, ignore_expires=True)
+            os.replace(tmp, cookie_file)
+            cookie_file.chmod(0o600)
+        except Exception as exc:  # a stale file is recoverable; a crash here is not
+            log.warning("could not persist rotated cookies: %s", exc)

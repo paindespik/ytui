@@ -41,6 +41,37 @@ def _patch_ydl(info):
     return patch.object(yt_dlp, "YoutubeDL", FakeYDL(info))
 
 
+class _SequenceYDL:
+    """Fake YoutubeDL serving one info per construction; records the opts each call got."""
+
+    def __init__(self, infos):
+        self._infos = list(infos)
+        self.opts_list = []
+
+    def __call__(self, opts):
+        self.opts_list.append(opts)
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def extract_info(self, url, download=False):
+        info = self._infos.pop(0) if self._infos else {}
+        if isinstance(info, Exception):
+            raise info
+        return info
+
+
+_COOKIES_TEXT = (
+    "# Netscape HTTP Cookie File\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t9999999999\tLOGIN_INFO\tfake\n"
+    ".youtube.com\tTRUE\t/\tTRUE\t9999999999\tSAPISID\tfake\n"
+)
+
+
 # ─── /api/search ───
 
 
@@ -331,6 +362,115 @@ def test_video_details(client):
     body = resp.json()
     assert body["upload_date"] == "2024-06-02"
     assert body["view_count"] == 100
+
+
+# ─── stream resolution and the pushed session ───
+#
+# Since the 2026 n-challenge rollout a datacenter IP gets "Sign in to confirm
+# you're not a bot" for anonymous YouTube VODs, so extraction goes through the
+# pushed session when it exists — and always falls back to anonymous so a dead
+# or flagged session can never break playback.
+
+
+def _jar_names(cookies_option):
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    assert isinstance(cookies_option, YoutubeDLCookieJar)
+    return {c.name for c in cookies_option}
+
+
+def test_streams_use_the_pushed_session(client, tmp_path, monkeypatch):
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text(_COOKIES_TEXT, encoding="utf-8")
+    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
+    fake = _SequenceYDL([_info([PROG])])
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", fake):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    assert len(fake.opts_list) == 1
+    assert "LOGIN_INFO" in _jar_names(fake.opts_list[0]["cookies"])
+
+
+def test_streams_stay_anonymous_without_cookie_file(client, monkeypatch):
+    monkeypatch.setattr(ytdlp, "_cookie_file", None)
+    fake = _SequenceYDL([_info([PROG])])
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", fake):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    assert len(fake.opts_list) == 1
+    assert "cookies" not in fake.opts_list[0]
+
+
+def test_streams_stay_anonymous_when_cookie_file_is_unreadable(client, tmp_path, monkeypatch):
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text("not a netscape file\n", encoding="utf-8")
+    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
+    fake = _SequenceYDL([_info([PROG])])
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", fake):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    assert len(fake.opts_list) == 1
+    assert "cookies" not in fake.opts_list[0]
+
+
+def test_streams_stay_anonymous_when_session_lacks_login_info(client, tmp_path, monkeypatch):
+    # A partial file that lost LOGIN_INFO only ever fetches the anonymous page.
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t9999999999\tSAPISID\tfake\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
+    fake = _SequenceYDL([_info([PROG])])
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", fake):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    assert len(fake.opts_list) == 1
+    assert "cookies" not in fake.opts_list[0]
+
+
+def test_streams_fall_back_to_anonymous_when_the_session_fails(client, tmp_path, monkeypatch):
+    from yt_dlp.utils import DownloadError
+
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text(_COOKIES_TEXT, encoding="utf-8")
+    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
+    fake = _SequenceYDL(
+        [DownloadError("Sign in to confirm you're not a bot"), _info([PROG])]
+    )
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", fake):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    assert len(fake.opts_list) == 2
+    assert "LOGIN_INFO" in _jar_names(fake.opts_list[0]["cookies"])
+    assert "cookies" not in fake.opts_list[1]
+
+
+def test_streams_persist_rotated_session_cookies(client, tmp_path, monkeypatch):
+    # The same rotation-persistence that keeps the home feed's session alive.
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text(_COOKIES_TEXT, encoding="utf-8")
+    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
+    fake = _SequenceYDL([_info([PROG])])
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", fake):
+        resp = client.get("/api/videos/vid000000001/streams")
+    assert resp.status_code == 200
+    text = cookie_file.read_text()
+    assert "LOGIN_INFO" in text and "SAPISID" in text
+    assert (cookie_file.stat().st_mode & 0o777) == 0o600
 
 
 # ─── /api/videos/{id}/streams ───
