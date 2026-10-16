@@ -6,7 +6,14 @@ import json
 import pytest
 
 from ytui.config import PlayerConfig
-from ytui.player.mpv import MpvController, PlayerError, build_command, ytdl_format
+from ytui.player.mpv import (
+    Media,
+    MpvController,
+    PlayerError,
+    Subtitle,
+    build_command,
+    ytdl_format,
+)
 
 
 class FakeMpv:
@@ -204,3 +211,76 @@ def test_build_command_missing_mpv(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda cmd: None)
     with pytest.raises(PlayerError):
         build_command(URL, PLAYER)
+
+
+# ─── Server-resolved media (Media): per-file options, subtitles ───
+
+MEDIA = Media(
+    url="https://rr1.googlevideo.com/videoplayback?itag=137&mime=video%2Fmp4",
+    video_id="dlkIa_0hI4E",
+    title="Un titre, avec = virgule",
+    audio_url="https://rr1.googlevideo.com/videoplayback?itag=140,x=1",
+    subtitles=(Subtitle("https://x/fr.vtt", "fr", "fr (auto)"),),
+)
+
+
+def _esc(value):
+    return f"%{len(value.encode())}%{value}"
+
+
+async def test_media_loads_with_per_file_audio_and_title(fake_mpv):
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    await ctrl.play(MEDIA, PLAYER, start=42)
+    opts = ",".join([
+        "start=42",
+        f"force-media-title={_esc(MEDIA.title)}",
+        f"audio-files-append={_esc(MEDIA.audio_url)}",
+    ])
+    # Per file: the audio track must not leak onto the next queued entry.
+    assert ["loadfile", MEDIA.url, "replace", -1, opts] in fake_mpv.commands
+    await ctrl.close()
+
+
+async def test_media_enqueues_with_its_options(fake_mpv):
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    assert await ctrl.enqueue(MEDIA, PLAYER) is True
+    [cmd] = [c for c in fake_mpv.commands if c[0] == "loadfile"]
+    assert cmd[:4] == ["loadfile", MEDIA.url, "append-play", -1]
+    assert f"audio-files-append={_esc(MEDIA.audio_url)}" in cmd[4]
+    await ctrl.close()
+
+
+async def test_subtitles_are_added_one_by_one(fake_mpv):
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    two = Media(url="u", video_id="v", subtitles=(
+        Subtitle("https://x/fr.vtt", "fr", "fr (auto)"), Subtitle("https://x/en.vtt", "en", "en")))
+    assert await ctrl.add_subtitles(two) == 2
+    subs = [c for c in fake_mpv.commands if c[0] == "sub-add"]
+    assert subs == [["sub-add", "https://x/fr.vtt", "auto", "fr (auto)", "fr"],
+                    ["sub-add", "https://x/en.vtt", "auto", "en", "en"]]
+    await ctrl.close()
+
+
+async def test_current_entry_id(fake_mpv):
+    fake_mpv.properties["playlist-playing-pos"] = 1
+    fake_mpv.properties["playlist/1/id"] = 7
+    ctrl = MpvController(socket_path=fake_mpv.socket_path)
+    assert await ctrl.current_entry_id() == 7
+    await ctrl.close()
+
+
+def test_one_shot_command_keeps_media_options_per_file(monkeypatch):
+    monkeypatch.setattr("ytui.player.mpv.shutil.which", lambda cmd: "/usr/bin/mpv")
+    cmd = build_command(MEDIA, PLAYER, start=10)
+    group = cmd[cmd.index("--{"):]
+    assert group == [
+        "--{", "--start=10", f"--force-media-title={MEDIA.title}",
+        f"--audio-files-append={MEDIA.audio_url}", "--sub-files-append=https://x/fr.vtt",
+        MEDIA.url, "--}",
+    ]
+
+
+def test_controlled_spawn_leaves_subtitles_to_the_poller(monkeypatch):
+    monkeypatch.setattr("ytui.player.mpv.shutil.which", lambda cmd: "/usr/bin/mpv")
+    cmd = build_command(MEDIA, PLAYER, ipc_socket="/tmp/s")
+    assert not any(c.startswith("--sub-files-append") for c in cmd)

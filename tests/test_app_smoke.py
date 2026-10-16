@@ -19,6 +19,7 @@ from ytui.api_client import (
 )
 from ytui.config import Config
 from ytui.models import Comment, CommentPage, Video, VideoDetails
+from ytui.player.mpv import Media
 
 VIDEO = Video(
     video_id="dQw4w9WgXcQ",
@@ -201,6 +202,24 @@ class FakeClient:
 
     async def sponsor_segments(self, video_id, platform="youtube"):
         return []
+
+    stream_calls: list[tuple] = []
+    streams_answer: dict | Exception = {
+        "kind": "split",
+        "url": "https://rr1.googlevideo.com/video",
+        "video_url": "https://rr1.googlevideo.com/video",
+        "audio_url": "https://rr1.googlevideo.com/audio",
+        "title": "A video",
+        "subtitles": [{"lang": "fr", "label": "fr (auto)", "url": "https://x/fr.vtt"}],
+    }
+
+    async def video_streams(
+        self, video_id, platform="youtube", max_height=1440, audio_only=False, sub_langs=None
+    ):
+        self.stream_calls = [*self.stream_calls, (video_id, platform, max_height, audio_only)]
+        if isinstance(self.streams_answer, Exception):
+            raise self.streams_answer
+        return dict(self.streams_answer)
 
 
 @pytest.fixture
@@ -868,7 +887,11 @@ async def test_ctrl_enter_plays_also_in_separate_mpv(app, monkeypatch):
         await pilot.pause()
         await pilot.press("ctrl+enter")
         await app.workers.wait_for_complete()
-    assert launched == [(VIDEO.url, None)]
+    [(media, start)] = launched
+    assert start is None
+    # A YouTube VOD is resolved by the server, not handed to mpv's yt-dlp.
+    assert isinstance(media, Media) and media.video_id == VIDEO.video_id
+    assert media.audio_url == "https://rr1.googlevideo.com/audio"
     assert not app.player.process_alive()
 
 
@@ -886,7 +909,8 @@ async def test_detail_ctrl_enter_play_also(app, monkeypatch):
         await pilot.pause()
         await pilot.press("ctrl+enter")
         await app.workers.wait_for_complete()
-    assert launched == [(VIDEO.url, None)]
+    [(media, _start)] = launched
+    assert isinstance(media, Media) and media.video_id == VIDEO.video_id
 
 
 async def test_detail_shift_y_copies_the_ytui_link(app, monkeypatch):

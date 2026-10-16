@@ -268,12 +268,20 @@ class YtuiClient:
         platform: str = "youtube",
         max_height: int = 1440,
         audio_only: bool = False,
+        sub_langs: str | None = None,
     ) -> dict:
+        params: dict[str, object] = {
+            "platform": platform,
+            "max_height": max_height,
+            "audio_only": audio_only,
+        }
+        if sub_langs:
+            params["sub_langs"] = sub_langs
         return (
             await self._request(
                 "GET",
                 f"/api/videos/{_encode(video_id)}/streams",
-                params={"platform": platform, "max_height": max_height, "audio_only": audio_only},
+                params=params,
                 timeout=SLOW_TIMEOUT,
             )
         ).json()

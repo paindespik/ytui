@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 
 from ..config import PlayerConfig
 
@@ -21,13 +23,76 @@ def default_socket_path() -> str:
     return os.path.join(base, "ytui-mpv.sock")
 
 
+@dataclass(frozen=True)
+class Subtitle:
+    url: str
+    lang: str
+    label: str
+
+
+@dataclass(frozen=True)
+class Media:
+    """A stream already resolved by the ytui server (not a page URL for yt-dlp).
+
+    YouTube VODs go through the server (pushed session, dead-URL fallbacks,
+    original-language pick) instead of mpv's local yt-dlp: mpv then opens
+    `url` directly, with the separate audio track of a split stream attached
+    per file. `video_id`/`platform` keep the identity mpv can no longer derive
+    from its path (history, resume, SponsorBlock).
+    """
+
+    url: str
+    video_id: str
+    platform: str = "youtube"
+    title: str = ""
+    audio_url: str | None = None
+    subtitles: tuple[Subtitle, ...] = ()
+
+
+def _url(item: str | Media) -> str:
+    return item.url if isinstance(item, Media) else item
+
+
+def _escape(value: str) -> str:
+    """mpv's fixed-length quoting: commas, '=' and ':' in URLs stay literal."""
+    return f"%{len(value.encode())}%{value}"
+
+
+def _file_options(
+    item: str | Media, start: float | None, *, subtitles: bool = False
+) -> list[tuple[str, str]]:
+    """Per-file options for `item` (applied to that playlist entry only)."""
+    opts: list[tuple[str, str]] = []
+    if start and start > 0:
+        opts.append(("start", f"{start:.0f}"))
+    if isinstance(item, Media):
+        if item.title:
+            opts.append(("force-media-title", item.title))
+        if item.audio_url:
+            opts.append(("audio-files-append", item.audio_url))
+        if subtitles:
+            # One-shot players have no poller to sub-add them later.
+            opts.extend(("sub-files-append", sub.url) for sub in item.subtitles)
+    return opts
+
+
+_PLAIN_OPTION_RE = re.compile(r"[\w.-]+", re.ASCII)
+
+
+def _ipc_options(opts: list[tuple[str, str]]) -> str:
+    return ",".join(
+        f"{key}={value if _PLAIN_OPTION_RE.fullmatch(value) else _escape(value)}"
+        for key, value in opts
+    )
+
+
 def ytdl_format(max_height: int) -> str:
     """yt-dlp format selector for a height cap ('?' = tolerate no exact match)."""
     return f"bestvideo[height<=?{max_height}]+bestaudio/best"
 
 
 def build_command(
-    url: str,
+    url: str | Media,
     player: PlayerConfig,
     audio_only: bool | None = None,
     ipc_socket: str | None = None,
@@ -54,12 +119,14 @@ def build_command(
             cmd.append("--ytdl-raw-options-append=write-auto-subs=")
     if ipc_socket:
         cmd.append(f"--input-ipc-server={ipc_socket}")
-    if start and start > 0:
-        # Per-file option: a global --start would also apply to any file
-        # loaded later over IPC (queue, live streams), stalling playback.
-        cmd.extend(["--{", f"--start={start:.0f}", url, "--}"])
+    # Per-file options: a global --start (or --audio-file) would also apply to
+    # any file loaded later over IPC (queue, live streams). A controlled
+    # player gets its subtitles from the app's poller (sub-add).
+    opts = _file_options(url, start, subtitles=not ipc_socket)
+    if opts:
+        cmd.extend(["--{", *(f"--{key}={value}" for key, value in opts), _url(url), "--}"])
     else:
-        cmd.append(url)
+        cmd.append(_url(url))
     return cmd
 
 
@@ -74,7 +141,7 @@ def _popen(cmd: list[str]) -> subprocess.Popen:
 
 
 def play(
-    url: str,
+    url: str | Media,
     player: PlayerConfig,
     audio_only: bool | None = None,
     start: float | None = None,
@@ -114,7 +181,7 @@ class MpvController:
 
     def _spawn(
         self,
-        url: str,
+        url: str | Media,
         player: PlayerConfig,
         audio_only: bool | None = None,
         start: float | None = None,
@@ -179,7 +246,9 @@ class MpvController:
         await self._disconnect()
         return await self._connect(retries=1)
 
-    async def play(self, url: str, player: PlayerConfig, start: float | None = None) -> None:
+    async def play(
+        self, url: str | Media, player: PlayerConfig, start: float | None = None
+    ) -> None:
         """Play now: replace playback in the live instance, or spawn a new one."""
         if await self.is_alive():
             resp = await self._loadfile_replace(url, start)
@@ -188,19 +257,27 @@ class MpvController:
             await self._disconnect()
         self._spawn(url, player, start=start)
 
-    async def _loadfile_replace(self, url: str, start: float | None) -> dict | None:
-        if not start or start <= 0:
-            return await self.command("loadfile", url, "replace", connect_retries=25)
-        opts = f"start={start:.0f}"
+    async def _loadfile(self, item: str | Media, mode: str, start: float | None) -> dict | None:
+        """loadfile with per-file options (start, title, separate audio)."""
+        url = _url(item)
+        opts = _file_options(item, start)
+        if not opts:
+            return await self.command("loadfile", url, mode, connect_retries=25)
+        options = _ipc_options(opts)
         # mpv >= 0.38 inserted an index argument before the options string.
-        resp = await self.command("loadfile", url, "replace", -1, opts, connect_retries=25)
+        resp = await self.command("loadfile", url, mode, -1, options, connect_retries=25)
         if resp is not None and resp.get("error") == "success":
             return resp
-        resp = await self.command("loadfile", url, "replace", opts)
+        return await self.command("loadfile", url, mode, options)
+
+    async def _loadfile_replace(self, url: str | Media, start: float | None) -> dict | None:
+        resp = await self._loadfile(url, "replace", start)
         if resp is not None and resp.get("error") == "success":
             return resp
-        # Playing without resume beats not playing at all.
-        return await self.command("loadfile", url, "replace")
+        if start and start > 0:
+            # Playing without resume beats not playing at all.
+            return await self._loadfile(url, "replace", None)
+        return resp
 
     async def reload_with_quality(
         self, url: str, max_height: int, start: float | None
@@ -220,15 +297,39 @@ class MpvController:
         resp = await self.command("loadfile", url, "replace", opts)
         return resp is not None and resp.get("error") == "success"
 
-    async def enqueue(self, url: str, player: PlayerConfig) -> bool:
+    async def enqueue(self, url: str | Media, player: PlayerConfig) -> bool:
         """Append to the live queue (True) or start a new player (False)."""
         if await self.is_alive():
-            resp = await self.command("loadfile", url, "append-play", connect_retries=25)
+            resp = await self._loadfile(url, "append-play", None)
             if resp is not None and resp.get("error") == "success":
                 return True
             await self._disconnect()
         self._spawn(url, player)
         return False
+
+    async def current_entry_id(self) -> int | None:
+        """mpv's id of the playing playlist entry (new on every loadfile)."""
+        pos = await self.command("get_property", "playlist-playing-pos")
+        if pos is None or pos.get("error") != "success" or not isinstance(pos.get("data"), int):
+            return None
+        entry = await self.command("get_property", f"playlist/{pos['data']}/id")
+        if entry is None or entry.get("error") != "success":
+            return None
+        data = entry.get("data")
+        return data if isinstance(data, int) else None
+
+    async def add_subtitles(self, media: Media) -> int:
+        """sub-add each external track of the playing file (not selected); count added.
+
+        Tracks are added one by one: YouTube's timedtext answers 429 now and
+        then, and one refused track must not cost the others.
+        """
+        added = 0
+        for sub in media.subtitles:
+            resp = await self.command("sub-add", sub.url, "auto", sub.label, sub.lang)
+            if resp is not None and resp.get("error") == "success":
+                added += 1
+        return added
 
     async def pause_toggle(self) -> bool:
         resp = await self.command("cycle", "pause")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import OrderedDict, deque
 
 from textual.app import App
 from textual.reactive import reactive
@@ -11,7 +12,7 @@ from .api_client import YtuiApiError, YtuiClient, resume_start
 from .config import Config, set_option
 from .livenotify import send_live_notification
 from .models import SponsorSegment, Video, video_id_from_url
-from .player.mpv import MpvController, PlayerError, play
+from .player.mpv import Media, MpvController, PlayerError, Subtitle, play
 from .thumbnails.fetcher import ThumbnailFetcher
 from .ui.screens.channel import ChannelScreen
 from .ui.screens.detail import VideoDetailScreen
@@ -33,6 +34,11 @@ LIVE_POLL_SECONDS = 5 * 60  # feed refresh cadence
 # are caught within ~1 min server-side, so clients poll faster than the feed.
 LIVE_CHECK_SECONDS = 60
 POSITION_HEARTBEAT_SECONDS = 10.0
+# Server-resolved queue entries kept ahead of the playing one. The rest is
+# resolved as mpv advances: a 50-video playlist must not fire 50 extractions
+# (through the account session) before the first one even plays.
+QUEUE_LOOKAHEAD = 2
+_RESOLVED_MEMORY = 256  # resolved URL -> Media, for identity in the poller
 
 
 class YtuiApp(App):
@@ -104,6 +110,12 @@ class YtuiApp(App):
         self._sponsor_segments: dict[str, list[SponsorSegment]] = {}
         self._sponsor_pending: set[str] = set()
         self._playing: Video | None = None
+        # mpv opens server-resolved stream URLs: map them back to their video.
+        self._resolved: OrderedDict[str, Media] = OrderedDict()
+        self._subs_loaded_for: int | None = None  # mpv playlist entry id
+        # Videos still to append to mpv's queue (lazily resolved, in order).
+        self._pending: deque[Video] = deque()
+        self._topping_up = False
 
     def on_mount(self) -> None:
         self.push_screen("home")
@@ -198,20 +210,32 @@ class YtuiApp(App):
     # -- playback --
 
     async def _poll_player(self) -> None:
-        self.player.process_alive()  # reap an exited mpv
+        alive = self.player.process_alive()  # reap an exited mpv
         status = await self.player.status()
         if status is None:
             self.player_status = ""
+            if not alive:
+                self._pending.clear()  # player closed: the rest of the queue goes too
             return
         icon = "⏸ paused" if status.paused else "▶ playing"
         if status.speed != 1.0:
             icon += f" {status.speed:g}x"
-        queued = f" ({status.queued} queued)" if status.queued else ""
+        pending = status.queued + len(self._pending)
+        queued = f" ({pending} queued)" if pending else ""
         self.player_status = f"{icon}{queued}"
+        if self._pending and status.queued < QUEUE_LOOKAHEAD and not self._topping_up:
+            self._topping_up = True
+            self.run_worker(self._top_up_queue(), group="queue-topup")
         snap = await self.player.playback_snapshot()
         if snap:
             path, title, position, duration = snap
-            ref = video_id_from_url(path)
+            media = self._resolved.get(path)
+            if media is not None and media.subtitles:
+                entry = await self.player.current_entry_id()
+                if entry is not None and entry != self._subs_loaded_for:
+                    self._subs_loaded_for = entry
+                    await self.player.add_subtitles(media)
+            ref = (media.video_id, media.platform) if media else video_id_from_url(path)
             if ref:
                 vid, platform = ref
                 qualified = f"{platform}:{vid}"
@@ -292,29 +316,88 @@ class YtuiApp(App):
         self._record_watch(video)
         self.run_worker(self._play_video_async(video, audio_only), group="player")
 
-    async def _playback_url(self, video: Video) -> str:
-        """Resolved stream URL for a Twitch/TikTok live, else the plain URL.
+    def _remember(self, media: Media) -> Media:
+        self._resolved[media.url] = media
+        self._resolved.move_to_end(media.url)
+        while len(self._resolved) > _RESOLVED_MEMORY:
+            self._resolved.popitem(last=False)
+        return media
 
-        Live ids carry "login:stream_id"; VODs and other platforms play
-        directly. Falls back to the page URL when resolution fails (Twitch:
-        direct ad-fed stream; TikTok: /live page via yt-dlp).
+    async def _playback_url(
+        self, video: Video, *, audio_only: bool = False, max_height: int | None = None
+    ) -> str | Media:
+        """What mpv should open for `video`.
+
+        YouTube VODs are resolved by the server (Media): it extracts with the
+        pushed account session, drops dead URLs and keeps the original audio
+        language — mpv's local yt-dlp has none of that (measured 2026-10-16:
+        it picked an audio URL answering 403 and mpv closed at once). Twitch/
+        TikTok live ids get their resolved stream URL. Everything else, YouTube
+        lives included, and any server failure, keeps the page URL for mpv's
+        own yt-dlp.
         """
+        height = max_height or self.config.player.max_height
+        if video.platform == "youtube" and self._server_resolves(video):
+            try:
+                streams = await self.client.video_streams(
+                    video.video_id,
+                    platform="youtube",
+                    max_height=height,
+                    audio_only=audio_only,
+                    sub_langs=None if audio_only else self.config.player.subtitle_langs,
+                )
+            except YtuiApiError as exc:
+                self.notify(
+                    f"Server could not resolve the stream ({exc}); trying local yt-dlp.",
+                    severity="warning",
+                    timeout=6,
+                )
+                return video.url
+            media = _media_from_streams(video, streams)
+            return self._remember(media) if media is not None else video.url
         if video.platform not in ("twitch", "tiktok") or ":" not in video.video_id:
             return video.url
         try:
             streams = await self.client.video_streams(
                 video.video_id,
                 platform=video.platform,
-                max_height=self.config.player.max_height,
+                max_height=height,
             )
         except YtuiApiError:
             return video.url
         return streams.get("url") or video.url
 
+    def _server_resolves(self, video: Video) -> bool:
+        """YouTube VODs with a server to ask (lives keep mpv's yt-dlp)."""
+        return (
+            bool(self.config.server.url)
+            and video.kind == "video"
+            and video.video_id not in self.active_lives
+            and video.video_id not in self._live_vids
+        )
+
+    async def _top_up_queue(self) -> None:
+        """Resolve and append pending videos until QUEUE_LOOKAHEAD are queued."""
+        try:
+            while self._pending:
+                status = await self.player.status()
+                if status is None or status.queued >= QUEUE_LOOKAHEAD:
+                    return
+                video = self._pending.popleft()
+                item = await self._playback_url(video)
+                try:
+                    await self.player.enqueue(item, self.config.player)
+                except PlayerError:
+                    self._pending.clear()
+                    return
+        finally:
+            self._topping_up = False
+
     async def _play_video_async(self, video: Video, audio_only: bool | None) -> None:
         start = await self._resume_start_for(video)
         self._playing = video
-        url = await self._playback_url(video)
+        self._pending.clear()
+        url = await self._playback_url(video, audio_only=bool(audio_only))
         if audio_only:
             # One-shot audio playback, separate from the controlled queue.
             try:
@@ -387,17 +470,19 @@ class YtuiApp(App):
             self.notify("Video no longer in playlist, playing video only.", timeout=5)
             await self._play_resumed_async(await self._playback_url(video), start, [])
             return
-        rest = [e.url for e in entries[idx + 1 :]]
+        rest = [e for e in entries[idx + 1 :] if e.kind != "channel"]
         await self._play_resumed_async(await self._playback_url(video), start, rest)
 
-    async def _play_resumed_async(self, url: str, start: float, queue: list[str]) -> None:
+    async def _play_resumed_async(
+        self, url: str | Media, start: float, queue: list[Video]
+    ) -> None:
+        self._pending.clear()
         try:
             await self.player.play(url, self.config.player, start=start or None)
-            for u in queue:
-                await self.player.enqueue(u, self.config.player)
         except PlayerError as exc:
             self.notify(str(exc), severity="error", timeout=10)
             return
+        self._pending.extend(queue)
         queued = f" ({len(queue)} queued)" if queue else ""
         self.notify(f"Playing in mpv…{queued}", timeout=4)
 
@@ -433,18 +518,18 @@ class YtuiApp(App):
 
     async def _play_all_async(self, videos: list[Video]) -> None:
         self._playing = videos[0]
-        urls = [await self._playback_url(v) for v in videos]
+        self._pending.clear()
         try:
-            await self.player.play(urls[0], self.config.player)
-            for url in urls[1:]:
-                await self.player.enqueue(url, self.config.player)
+            await self.player.play(await self._playback_url(videos[0]), self.config.player)
         except PlayerError as exc:
             self.notify(str(exc), severity="error", timeout=10)
             return
-        queued = f" ({len(urls) - 1} queued)" if len(urls) > 1 else ""
+        # The rest is resolved lazily by the poller (QUEUE_LOOKAHEAD ahead).
+        self._pending.extend(videos[1:])
+        queued = f" ({len(videos) - 1} queued)" if len(videos) > 1 else ""
         self.notify(f"Playing in mpv…{queued}", timeout=4)
 
-    async def _play_async(self, url: str, start: float | None = None) -> None:
+    async def _play_async(self, url: str | Media, start: float | None = None) -> None:
         try:
             await self.player.play(url, self.config.player, start=start)
             self.notify("Playing in mpv…", timeout=4)
@@ -452,6 +537,11 @@ class YtuiApp(App):
             self.notify(str(exc), severity="error", timeout=10)
 
     async def _enqueue_async(self, video: Video) -> None:
+        if self._pending:
+            # Keep the order: it lands after the not-yet-resolved entries.
+            self._pending.append(video)
+            self.notify("Added to mpv queue.", timeout=4)
+            return
         url = await self._playback_url(video)
         try:
             appended = await self.player.enqueue(url, self.config.player)
@@ -495,9 +585,13 @@ class YtuiApp(App):
             or video.video_id in self.active_lives
             or (video.platform in ("twitch", "tiktok") and ":" in video.video_id)
         )
-        url = await self._playback_url(video)
+        url = await self._playback_url(video, max_height=max_height)
         start = None if live else position
-        if await self.player.reload_with_quality(url, max_height, start):
+        if isinstance(url, Media):
+            # Server-resolved: the new cap is already in the resolved URL.
+            await self.player.play(url, self.config.player, start=start)
+            self.notify(f"Max height: {max_height}p", timeout=3)
+        elif await self.player.reload_with_quality(url, max_height, start):
             self.notify(f"Max height: {max_height}p", timeout=3)
         else:
             self.notify("Could not switch quality.", severity="warning", timeout=5)
@@ -749,3 +843,27 @@ class YtuiApp(App):
             self.notify(f"Saved: {video.title}", timeout=4)
         else:
             self.notify("Already in that playlist.", timeout=4)
+
+
+def _media_from_streams(video: Video, streams: dict) -> Media | None:
+    """Media for a /streams answer, or None to leave it to mpv's yt-dlp."""
+    if streams.get("is_live"):
+        return None  # lives keep mpv's own yt-dlp (DVR window, live edge)
+    kind = streams.get("kind")
+    title = streams.get("title") or video.title or ""
+    subtitles = tuple(
+        Subtitle(url=s["url"], lang=s.get("lang") or "", label=s.get("label") or s.get("lang") or "")
+        for s in streams.get("subtitles") or []
+        if s.get("url")
+    )
+    if kind == "split" and streams.get("video_url") and streams.get("audio_url"):
+        return Media(
+            url=streams["video_url"],
+            audio_url=streams["audio_url"],
+            video_id=video.video_id,
+            title=title,
+            subtitles=subtitles,
+        )
+    if kind in ("hls", "progressive") and streams.get("url"):
+        return Media(url=streams["url"], video_id=video.video_id, title=title, subtitles=subtitles)
+    return None
