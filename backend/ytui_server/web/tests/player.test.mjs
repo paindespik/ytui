@@ -923,6 +923,19 @@ describe("lecteur web — reprise et playlist", () => {
       player.destroy();
     });
 
+    test("split sans MPD et repli 360p en HLS : hls.js joue le master, pas d'erreur", async () => {
+      const hls = fakeHls();
+      globalThis.window.Hls = hls.Hls;
+      const master = { ...STREAMS_HLS, url: "https://cdn.example/master.m3u8", title: "Une vidéo" };
+      mockApi([{ match: "max_height=360", json: master }, ...routes({ mpd: false, streams: STREAMS_SPLIT })]);
+      const el = new FakeMediaElement();
+      const { player, events } = makePlayer(el);
+      await player.load(VIDEO);
+      assert.deepEqual(events.fatal, []);
+      assert.ok(hls.instances.at(-1).calls.loadSource[0].includes(encodeURIComponent(master.url)));
+      player.destroy();
+    });
+
     test("lien nu : l'historique est réécrit avec le titre venu de /streams", async () => {
       const api = mockApi(routes());
       const el = new FakeMediaElement();

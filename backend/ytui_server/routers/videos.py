@@ -423,6 +423,9 @@ async def render_mpd(
         dash.probe_ranges(client, split.audio_url),
     )
     if video_ranges is None or audio_ranges is None:
+        # Usually a URL refusing its head (403): drop the cached extraction so
+        # the player's retry re-resolves instead of replaying dead URLs.
+        ytdlp.forget_dead_stream(split.video_url)
         raise HTTPException(status_code=404, detail="sidx not found")
     return dash.build_mpd(split, proxy, video_ranges, audio_ranges)
 

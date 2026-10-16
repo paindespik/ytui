@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -45,27 +46,58 @@ def set_cookie_file(path: Path | None) -> None:
     _cookie_file = path
 
 
-def _load_session_jar() -> tuple | None:
-    """(jar, credentials) from the pushed session, or None to stay anonymous."""
+log = logging.getLogger(__name__)
+_YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
+
+
+def _session_cookie_copy() -> Path | None:
+    """A private temp copy of the pushed session jar, or None to stay anonymous.
+
+    yt-dlp only reads cookies from `cookiefile` (an unknown `cookies` option is
+    silently ignored) and rewrites that file IN PLACE when it closes. Handing it
+    the live jar would let concurrent extractions read a half-written file, so
+    each extraction gets its own copy; rotated cookies are merged back by
+    _persist_rotated_cookies through the guarded, atomic _save_cookies.
+    """
     if _cookie_file is None or not _cookie_file.exists():
         return None
-    try:
-        from yt_dlp.cookies import YoutubeDLCookieJar
+    from yt_dlp.cookies import YoutubeDLCookieJar
 
+    try:
         jar = YoutubeDLCookieJar(str(_cookie_file))
         jar.load(ignore_discard=True, ignore_expires=True)
     except Exception as exc:
         log.warning("session cookie file unreadable, staying anonymous: %s", exc)
         return None
-    names = {c.name for c in jar}
-    # LOGIN_INFO alone proves a signed-in session; a partial file that lost it
-    # (see _save_cookies) would only ever fetch the anonymous page.
-    if "LOGIN_INFO" not in names:
+    # LOGIN_INFO alone proves a signed-in session; a file that lost it only
+    # ever fetches anonymous pages.
+    if "LOGIN_INFO" not in {c.name for c in jar}:
         return None
-    return jar, names
+    fd, name = tempfile.mkstemp(prefix="ytui-cookies-", suffix=".txt")  # 0600
+    os.close(fd)
+    copy = Path(name)
+    try:
+        jar.save(str(copy), ignore_discard=True, ignore_expires=True)
+    except Exception as exc:
+        copy.unlink(missing_ok=True)
+        log.warning("could not stage the session cookies, staying anonymous: %s", exc)
+        return None
+    return copy
 
-log = logging.getLogger(__name__)
-_YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});</script>", re.DOTALL)
+
+def _persist_rotated_cookies(copy: Path) -> None:
+    """Merge the jar yt-dlp rewrote into `copy` back into the live session file."""
+    if _cookie_file is None:
+        return
+    from yt_dlp.cookies import YoutubeDLCookieJar
+
+    try:
+        jar = YoutubeDLCookieJar(str(copy))
+        jar.load(ignore_discard=True, ignore_expires=True)
+    except Exception as exc:
+        log.warning("could not read the rotated session cookies: %s", exc)
+        return
+    _save_cookies(jar, _cookie_file)
 
 
 def _youtube_dl(opts: dict):
@@ -361,6 +393,50 @@ def _delivery_truncated(info: dict) -> bool:
     return resp.status_code == 403
 
 
+def _adaptive_head_dead(info: dict) -> bool:
+    """True when the split pair a player would pick refuses its first byte.
+
+    Measured 2026-10-16 from serv: once Deno solves the n-challenge, anonymous
+    extractions serve the TV client's adaptive formats (c=TVHTML5), whose URLs
+    can 403 from byte 0 for a given video — every re-extraction alike — while
+    the EOF truncation probe may look at a healthy audio of another client.
+    Probes the best avc1 video-only and best audio-only googlevideo formats
+    (what /mpd and the split stream would serve) with a 2-byte range.
+    """
+    formats = [
+        f
+        for f in info.get("formats") or []
+        if _GOOGLEVIDEO_RE.match(f.get("url") or "")
+        and not (f.get("protocol") or "").startswith("m3u8")
+    ]
+    videos = [
+        f for f in formats
+        if f.get("vcodec") not in (None, "none") and f.get("acodec") in (None, "none")
+    ]
+    videos = [f for f in videos if (f.get("vcodec") or "").startswith("avc1")] or videos
+    audios = [
+        f for f in formats
+        if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
+    ]
+    targets: list[str] = []
+    if videos:
+        targets.append(max(videos, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))["url"])
+    if audios:
+        targets.append(
+            max(audios, key=lambda f: (_lang_rank(f), f.get("abr") or f.get("tbr") or 0))["url"]
+        )
+    if not targets:
+        return False
+    try:
+        with httpx.Client(timeout=_TRUNCATION_PROBE_TIMEOUT) as client:
+            for target in targets:
+                if client.get(target, headers={"Range": "bytes=0-1"}).status_code == 403:
+                    return True
+    except httpx.HTTPError as exc:  # network hiccup: assume the stream is fine
+        log.debug("adaptive head probe failed: %s", exc)
+    return False
+
+
 def _drop_dead_muxed_formats(info: dict) -> None:
     """Remove muxed googlevideo formats whose URL refuses its very first byte.
 
@@ -524,43 +600,94 @@ def _extract_info_cached(url: str) -> dict:
         pending.done.set()
 
 
+class _DeadAdaptive(Exception):
+    """An extraction whose split video/audio pair refuses its very first byte."""
+
+    def __init__(self, info: dict) -> None:
+        super().__init__("adaptive formats refuse their first byte")
+        self.info = info
+
+
+# Set on a cached info when every extraction path served dead adaptive URLs:
+# the split/DASH path is skipped and the HLS master (with its audio
+# renditions) is served instead.
+_ADAPTIVE_DEAD_KEY = "_ytui_adaptive_dead"
+
+
 def _extract_info_fresh(url: str) -> dict:
     """One full extraction (with the truncation guard), stored in the cache.
 
-    YouTube VODs use the pushed session when it exists: since the 2026
-    n-challenge rollout a datacenter IP gets "Sign in to confirm you're not a
-    bot" anonymously. A dead or flagged session must never break playback,
-    so the same extraction is retried anonymously on any failure.
+    YouTube goes through the pushed session first when there is one (measured
+    2026-10-16: the anonymous TV client's adaptive URLs can 403 from byte 0 on
+    a datacenter IP, the session's web-embedded ones do not), then anonymously
+    if the session extraction fails or serves dead URLs. A dead or flagged
+    session must never break playback.
     """
     bitchute = "bitchute.com" in url
-    session = None if bitchute else _load_session_jar()
+    cookie_copy = None if bitchute else _session_cookie_copy()
+    attempts: list[Path | None] = [cookie_copy, None] if cookie_copy is not None else [None]
+    dead_info: dict | None = None
     try:
-        return _extract_info_once(url, bitchute, session)
-    except Exception as exc:
-        if session is None:
-            raise
-        log.warning(
-            "stream extraction with session cookies failed for %s (%s); retrying anonymously",
-            url,
-            exc,
-        )
-        return _extract_info_once(url, bitchute, None)
+        for i, cookies in enumerate(attempts):
+            last = i == len(attempts) - 1
+            try:
+                info = _extract_info_once(url, bitchute, cookies)
+            except _DeadAdaptive as dead:
+                dead_info = dead.info
+                if not last:
+                    log.warning(
+                        "session extraction of %s served adaptive URLs refusing "
+                        "their first byte; retrying anonymously",
+                        url,
+                    )
+                continue
+            except Exception as exc:
+                if not last:
+                    log.warning(
+                        "stream extraction with session cookies failed for %s (%s); "
+                        "retrying anonymously",
+                        url,
+                        exc,
+                    )
+                    continue
+                if dead_info is None:
+                    raise
+                break
+            return _store_info(url, bitchute, info)
+    finally:
+        if cookie_copy is not None:
+            cookie_copy.unlink(missing_ok=True)
+    # Every path served dead adaptive URLs: keep the formats that may still
+    # play (HLS master, muxed) and steer _extract_streams away from DASH.
+    assert dead_info is not None
+    log.warning("every extraction of %s served dead adaptive URLs; HLS only", url)
+    dead_info[_ADAPTIVE_DEAD_KEY] = True
+    return _store_info(url, bitchute, dead_info)
 
 
-def _extract_info_once(url: str, bitchute: bool, session: tuple | None) -> dict:
+def _extract_info_once(url: str, bitchute: bool, cookies: Path | None) -> dict:
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 15}
     if bitchute:
         opts["check_formats"] = False  # see _bitchute_media_url
-    if session is not None:
-        opts["cookies"] = session[0]
+    if cookies is not None:
+        opts["cookiefile"] = str(cookies)
     info = {}
     for attempt in range(1, _TRUNCATION_ATTEMPTS + 1):
         with _youtube_dl(opts) as ydl:
             info = ydl.extract_info(url, download=False)
+        if cookies is not None:
+            # Google rotates session cookies on every request; persisting them
+            # is what keeps the pushed session alive (same as the home feed).
+            _persist_rotated_cookies(cookies)
         if attempt == _TRUNCATION_ATTEMPTS:
             break  # a capped stream still beats no stream at all
         quarantined = _bucket_quarantined(_live_bucket_signature(info))
-        if not quarantined and not _delivery_truncated(info):
+        healthy = not quarantined and not _delivery_truncated(info)
+        # A client refused from byte 0 is dead, not an unlucky bucket:
+        # re-rolling the same path cannot help (measured 3/3), switch paths.
+        if _adaptive_head_dead(info):
+            raise _DeadAdaptive(info)
+        if healthy:
             break
         log.warning(
             "youtube served %s stream URLs for %s, re-resolving (%d/%d)",
@@ -569,12 +696,10 @@ def _extract_info_once(url: str, bitchute: bool, session: tuple | None) -> dict:
             attempt,
             _TRUNCATION_ATTEMPTS,
         )
-    if session is not None:
-        # Google rotates session cookies on every request; persisting them is
-        # what keeps the pushed session alive (same as the home feed).
-        # The session was loaded from _cookie_file, so it exists.
-        assert _cookie_file is not None
-        _save_cookies(session[0], _cookie_file)
+    return info
+
+
+def _store_info(url: str, bitchute: bool, info: dict) -> dict:
     if bitchute:
         _fix_bitchute_formats(info)
     _drop_dead_muxed_formats(info)
@@ -941,6 +1066,22 @@ def _extract_streams(
             return make("progressive", best["url"])
         # fall through: use whatever combined format exists
 
+    # 0. Every extraction path served split URLs refusing their first byte
+    # (see _extract_info_fresh): the HLS master still plays. Its variants are
+    # video-only (audio comes from its EXT-X-MEDIA renditions), so only the
+    # master qualifies, and the cap is advisory on it.
+    if info.get(_ADAPTIVE_DEAD_KEY) and not audio_only:
+        hls_video = [
+            f
+            for f in formats
+            if (f.get("protocol") or "").startswith("m3u8")
+            and f.get("vcodec") not in (None, "none")
+            and f.get("manifest_url")
+        ]
+        if hls_video:
+            best = max(_capped(hls_video, max_height), key=lambda f: f.get("height") or 0)
+            return make("hls", best["manifest_url"], height=best.get("height") or None)
+
     # 1. HLS manifest (adaptive; best for mobile players).
     # acodec == "none" is a video-only variant: its audio lives in separate
     # renditions only reachable through a master manifest — which YouTube VODs
@@ -954,6 +1095,14 @@ def _extract_streams(
         and f.get("vcodec") not in (None, "none")
         and f.get("acodec") != "none"
     ]
+    # A signed-in extraction (2026-10) lists muxed HLS variants once per audio
+    # language (original + auto-dubs) all in one master: keep the original
+    # soundtrack's variants, and serve a variant (never that master, where the
+    # player would pick by bandwidth and could land on a dub).
+    multilingual = len({_lang_rank(f) for f in hls_all}) > 1
+    if multilingual:
+        top_rank = max(_lang_rank(f) for f in hls_all)
+        hls_all = [f for f in hls_all if _lang_rank(f) == top_rank]
     if hls_all:
         hls = _capped(hls_all, max_height)
         best = max(hls, key=lambda f: f.get("height") or 0)
@@ -961,7 +1110,7 @@ def _extract_streams(
         top = max((f.get("height") or 0) for f in hls_all)
         # The master manifest lets the player adapt, but it carries every
         # variant: only serve it when the cap took nothing away.
-        if top > (best.get("height") or 0):
+        if multilingual or top > (best.get("height") or 0):
             return make("hls", best["url"], height=height)
         manifest = info.get("manifest_url") or ""
         return make("hls", manifest or best["url"], height=height)
@@ -1119,6 +1268,8 @@ class SplitMp4:
 def _extract_split_mp4(url: str, max_height: int) -> SplitMp4 | None:
     # avc1/mp4a only: one MP4 sidx parser, universal browser support.
     info = _extract_info_cached(url)
+    if info.get(_ADAPTIVE_DEAD_KEY):
+        return None  # dead split pair: /streams serves the HLS master instead
     formats = info.get("formats") or []
     videos = [
         f

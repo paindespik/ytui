@@ -181,6 +181,34 @@ def _proxied(url: str, playlist: bool) -> str:
     return f"{endpoint}?url={urllib.parse.quote(url, safe='')}"
 
 
+_DEFAULT_ATTR_RE = re.compile(r"DEFAULT=(YES|NO)")
+
+
+def prefer_original_audio(text: str) -> str:
+    """Make a YouTube HLS master default to the original soundtrack.
+
+    YouTube VOD masters (2026-10) list every audio rendition — auto-dubs
+    included — with DEFAULT=NO, so hls.js plays the first one, often a dub.
+    The original carries NAME="… - original"; flag it DEFAULT=YES (and every
+    other rendition NO). Masters without such a rendition are left untouched.
+    """
+    lines = text.splitlines()
+    audio = [i for i, line in enumerate(lines)
+             if line.startswith("#EXT-X-MEDIA") and "TYPE=AUDIO" in line]
+    original = {i for i in audio if re.search(r'NAME="[^"]*- original"', lines[i])}
+    if not original:
+        return text
+    for i in audio:
+        value = "YES" if i in original else "NO"
+        line = lines[i]
+        if _DEFAULT_ATTR_RE.search(line):
+            line = _DEFAULT_ATTR_RE.sub(f"DEFAULT={value}", line, count=1)
+        else:
+            line = f"{line},DEFAULT={value}"
+        lines[i] = line
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
 def rewrite_hls(text: str, base_url: str, proxied: ProxyUrl = _proxied) -> str:
     """Rewrite every URI in an m3u8 playlist so it goes through this proxy.
 
@@ -369,7 +397,9 @@ async def relay_playlist(
             status_code=upstream.status_code, detail="Upstream playlist error"
         )
     return Response(
-        content=rewrite_hls(upstream.text, str(upstream.url), proxied),
+        content=rewrite_hls(
+            prefer_original_audio(upstream.text), str(upstream.url), proxied
+        ),
         media_type="application/vnd.apple.mpegurl",
         headers=dict(_BASE_HEADERS),
     )

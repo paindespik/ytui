@@ -264,6 +264,10 @@ export class Player {
         if (this._stale(token)) return;
         if (low.kind === "progressive") {
           this._useProgressive(low.url, start);
+        } else if (low.kind === "hls") {
+          // Split pair dead on every extraction path: the server falls back to
+          // the HLS master (audio renditions included), playable by hls.js.
+          this._useHls(low.url, start);
         } else {
           this.cb.onFatal?.("Format non lisible dans le navigateur");
           return;

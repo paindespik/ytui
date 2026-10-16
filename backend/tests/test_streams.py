@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -42,11 +43,19 @@ def _patch_ydl(info):
 
 
 class _SequenceYDL:
-    """Fake YoutubeDL serving one info per construction; records the opts each call got."""
+    """Fake YoutubeDL serving one info per construction.
 
-    def __init__(self, infos):
+    Records the opts of every construction and, for a session extraction, the
+    content of the cookie file yt-dlp was given AT EXTRACTION TIME (the copy is
+    deleted afterwards). ``on_close`` mimics yt-dlp rewriting that file when
+    the YoutubeDL closes (rotated cookies).
+    """
+
+    def __init__(self, infos, on_close=None):
         self._infos = list(infos)
         self.opts_list = []
+        self.cookie_texts = []
+        self._on_close = on_close
 
     def __call__(self, opts):
         self.opts_list.append(opts)
@@ -56,9 +65,14 @@ class _SequenceYDL:
         return self
 
     def __exit__(self, *args):
+        cookiefile = self.opts_list[-1].get("cookiefile")
+        if cookiefile and self._on_close:
+            self._on_close(Path(cookiefile))
         return False
 
     def extract_info(self, url, download=False):
+        cookiefile = self.opts_list[-1].get("cookiefile")
+        self.cookie_texts.append(Path(cookiefile).read_text() if cookiefile else None)
         info = self._infos.pop(0) if self._infos else {}
         if isinstance(info, Exception):
             raise info
@@ -366,43 +380,47 @@ def test_video_details(client):
 
 # ─── stream resolution and the pushed session ───
 #
-# Since the 2026 n-challenge rollout a datacenter IP gets "Sign in to confirm
-# you're not a bot" for anonymous YouTube VODs, so extraction goes through the
-# pushed session when it exists — and always falls back to anonymous so a dead
-# or flagged session can never break playback.
+# yt-dlp only reads cookies from `cookiefile` (an unknown `cookies` option is
+# silently ignored — the 2026-10-15 version of this code was a no-op because
+# of it) and rewrites that file when it closes. So every session extraction
+# gets a private copy of the jar, rotated cookies are merged back through the
+# guarded _save_cookies, and any session failure falls back to anonymous.
 
 
-def _jar_names(cookies_option):
-    from yt_dlp.cookies import YoutubeDLCookieJar
-
-    assert isinstance(cookies_option, YoutubeDLCookieJar)
-    return {c.name for c in cookies_option}
-
-
-def test_streams_use_the_pushed_session(client, tmp_path, monkeypatch):
+@pytest.fixture()
+def session_file(tmp_path, monkeypatch):
     cookie_file = tmp_path / "youtube_cookies.txt"
     cookie_file.write_text(_COOKIES_TEXT, encoding="utf-8")
     monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
-    fake = _SequenceYDL([_info([PROG])])
+    return cookie_file
+
+
+def _streams(client, fake):
     import yt_dlp
 
     with patch.object(yt_dlp, "YoutubeDL", fake):
-        resp = client.get("/api/videos/vid000000001/streams")
+        return client.get("/api/videos/vid000000001/streams")
+
+
+def test_streams_hand_ytdlp_a_private_copy_of_the_session(client, session_file):
+    fake = _SequenceYDL([_info([PROG])])
+    resp = _streams(client, fake)
     assert resp.status_code == 200
     assert len(fake.opts_list) == 1
-    assert "LOGIN_INFO" in _jar_names(fake.opts_list[0]["cookies"])
+    opts = fake.opts_list[0]
+    assert "cookies" not in opts  # the option yt-dlp ignores
+    copy = Path(opts["cookiefile"])
+    assert copy != session_file  # yt-dlp rewrites it in place: never the live jar
+    assert "LOGIN_INFO" in fake.cookie_texts[0]
+    assert not copy.exists(), "the private copy is removed after the extraction"
 
 
 def test_streams_stay_anonymous_without_cookie_file(client, monkeypatch):
     monkeypatch.setattr(ytdlp, "_cookie_file", None)
     fake = _SequenceYDL([_info([PROG])])
-    import yt_dlp
-
-    with patch.object(yt_dlp, "YoutubeDL", fake):
-        resp = client.get("/api/videos/vid000000001/streams")
-    assert resp.status_code == 200
+    assert _streams(client, fake).status_code == 200
     assert len(fake.opts_list) == 1
-    assert "cookies" not in fake.opts_list[0]
+    assert "cookiefile" not in fake.opts_list[0]
 
 
 def test_streams_stay_anonymous_when_cookie_file_is_unreadable(client, tmp_path, monkeypatch):
@@ -410,17 +428,11 @@ def test_streams_stay_anonymous_when_cookie_file_is_unreadable(client, tmp_path,
     cookie_file.write_text("not a netscape file\n", encoding="utf-8")
     monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
     fake = _SequenceYDL([_info([PROG])])
-    import yt_dlp
-
-    with patch.object(yt_dlp, "YoutubeDL", fake):
-        resp = client.get("/api/videos/vid000000001/streams")
-    assert resp.status_code == 200
-    assert len(fake.opts_list) == 1
-    assert "cookies" not in fake.opts_list[0]
+    assert _streams(client, fake).status_code == 200
+    assert "cookiefile" not in fake.opts_list[0]
 
 
 def test_streams_stay_anonymous_when_session_lacks_login_info(client, tmp_path, monkeypatch):
-    # A partial file that lost LOGIN_INFO only ever fetches the anonymous page.
     cookie_file = tmp_path / "youtube_cookies.txt"
     cookie_file.write_text(
         "# Netscape HTTP Cookie File\n"
@@ -429,48 +441,133 @@ def test_streams_stay_anonymous_when_session_lacks_login_info(client, tmp_path, 
     )
     monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
     fake = _SequenceYDL([_info([PROG])])
-    import yt_dlp
-
-    with patch.object(yt_dlp, "YoutubeDL", fake):
-        resp = client.get("/api/videos/vid000000001/streams")
-    assert resp.status_code == 200
-    assert len(fake.opts_list) == 1
-    assert "cookies" not in fake.opts_list[0]
+    assert _streams(client, fake).status_code == 200
+    assert "cookiefile" not in fake.opts_list[0]
 
 
-def test_streams_fall_back_to_anonymous_when_the_session_fails(client, tmp_path, monkeypatch):
+def test_streams_fall_back_to_anonymous_when_the_session_fails(client, session_file):
     from yt_dlp.utils import DownloadError
 
-    cookie_file = tmp_path / "youtube_cookies.txt"
-    cookie_file.write_text(_COOKIES_TEXT, encoding="utf-8")
-    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
-    fake = _SequenceYDL(
-        [DownloadError("Sign in to confirm you're not a bot"), _info([PROG])]
-    )
-    import yt_dlp
-
-    with patch.object(yt_dlp, "YoutubeDL", fake):
-        resp = client.get("/api/videos/vid000000001/streams")
-    assert resp.status_code == 200
+    fake = _SequenceYDL([DownloadError("Sign in to confirm you're not a bot"), _info([PROG])])
+    assert _streams(client, fake).status_code == 200
     assert len(fake.opts_list) == 2
-    assert "LOGIN_INFO" in _jar_names(fake.opts_list[0]["cookies"])
-    assert "cookies" not in fake.opts_list[1]
+    assert "cookiefile" in fake.opts_list[0]
+    assert "cookiefile" not in fake.opts_list[1]
+    assert not Path(fake.opts_list[0]["cookiefile"]).exists()
 
 
-def test_streams_persist_rotated_session_cookies(client, tmp_path, monkeypatch):
-    # The same rotation-persistence that keeps the home feed's session alive.
-    cookie_file = tmp_path / "youtube_cookies.txt"
-    cookie_file.write_text(_COOKIES_TEXT, encoding="utf-8")
-    monkeypatch.setattr(ytdlp, "_cookie_file", cookie_file)
-    fake = _SequenceYDL([_info([PROG])])
+def test_streams_persist_rotated_session_cookies(client, session_file):
+    def rotate(copy):
+        with copy.open("a") as fh:
+            fh.write(".youtube.com\tTRUE\t/\tTRUE\t9999999999\tSIDCC\trotated\n")
+
+    fake = _SequenceYDL([_info([PROG])], on_close=rotate)
+    assert _streams(client, fake).status_code == 200
+    text = session_file.read_text()
+    assert "rotated" in text and "LOGIN_INFO" in text
+    assert (session_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_streams_never_persist_a_rotation_that_drops_the_session(client, session_file):
+    """yt-dlp rewriting a jar without LOGIN_INFO must not reach the live file."""
+    before = session_file.read_text()
+
+    def drop_login(copy):
+        copy.write_text(
+            "# Netscape HTTP Cookie File\n"
+            ".youtube.com\tTRUE\t/\tTRUE\t9999999999\tSAPISID\tother\n"
+        )
+
+    fake = _SequenceYDL([_info([PROG])], on_close=drop_login)
+    assert _streams(client, fake).status_code == 200
+    assert session_file.read_text() == before
+
+
+def test_real_ytdlp_reads_the_staged_session(session_file):
+    """Against the real YoutubeDL (no network): the jar it loads is the session.
+
+    Guards the 2026-10-15 regression where the jar went into an option yt-dlp
+    never reads, and every fake-based test above still passed.
+    """
     import yt_dlp
 
-    with patch.object(yt_dlp, "YoutubeDL", fake):
-        resp = client.get("/api/videos/vid000000001/streams")
+    copy = ytdlp._session_cookie_copy()
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "cookiefile": str(copy)}) as ydl:
+            assert "LOGIN_INFO" in {c.name for c in ydl.cookiejar}
+        with yt_dlp.YoutubeDL({"quiet": True, "cookies": object()}) as ydl:
+            assert not {c.name for c in ydl.cookiejar}  # `cookies` is ignored
+    finally:
+        copy.unlink(missing_ok=True)
+
+
+# A split pair refusing its first byte (anonymous TV client, measured
+# 2026-10-16) is a dead client, not a capped bucket: switch path, don't re-roll.
+
+_DEAD = {"title": "A video", "duration": 212, "dead": True}
+
+
+def _dead_marker(monkeypatch):
+    monkeypatch.setattr(ytdlp, "_adaptive_head_dead", lambda info: bool(info.get("dead")))
+
+
+def test_dead_session_split_switches_to_anonymous(client, session_file, monkeypatch):
+    _dead_marker(monkeypatch)
+    fake = _SequenceYDL([dict(_DEAD, formats=[PROG]), _info([VONLY, AONLY])])
+    resp = _streams(client, fake)
     assert resp.status_code == 200
-    text = cookie_file.read_text()
-    assert "LOGIN_INFO" in text and "SAPISID" in text
-    assert (cookie_file.stat().st_mode & 0o777) == 0o600
+    assert resp.json()["kind"] == "split"
+    assert ["cookiefile" in o for o in fake.opts_list] == [True, False]
+
+
+def test_healthy_session_needs_no_anonymous_round(client, session_file, monkeypatch):
+    _dead_marker(monkeypatch)
+    fake = _SequenceYDL([_info([VONLY, AONLY])])
+    assert _streams(client, fake).status_code == 200
+    assert len(fake.opts_list) == 1  # healthy session: no anonymous round
+
+
+HLS_VONLY = {"format_id": "616", "url": "https://x/v616.m3u8", "protocol": "m3u8_native",
+             "vcodec": "avc1", "acodec": "none", "height": 1080,
+             "manifest_url": "https://x/master.m3u8"}
+
+
+def test_every_path_dead_serves_the_hls_master(client, session_file, monkeypatch):
+    _dead_marker(monkeypatch)
+    dead = dict(_DEAD, formats=[VONLY, AONLY, HLS_VONLY])
+    fake = _SequenceYDL([dead, dict(dead)])
+    resp = _streams(client, fake)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["kind"] == "hls"
+    assert body["url"] == "https://x/master.m3u8"
+    assert len(fake.opts_list) == 2  # one per path, no truncation re-rolls
+    import yt_dlp
+
+    with patch.object(yt_dlp, "YoutubeDL", _SequenceYDL([])):
+        mpd = client.get("/api/videos/vid000000001/mpd")
+    assert mpd.status_code == 404  # cached dead extraction: no DASH
+
+
+def test_dead_split_without_session_is_resolved_once(client, monkeypatch):
+    monkeypatch.setattr(ytdlp, "_cookie_file", None)
+    _dead_marker(monkeypatch)
+    fake = _SequenceYDL([dict(_DEAD, formats=[VONLY, AONLY, HLS_VONLY])])
+    resp = _streams(client, fake)
+    assert resp.json()["kind"] == "hls"
+    assert len(fake.opts_list) == 1
+
+
+def test_adaptive_head_probe_checks_the_split_pair():
+    info = _gv_info("dead")
+    probe, probed = _patch_range_probe(set(), dead_tags={"dead"})
+    with probe:
+        assert ytdlp._adaptive_head_dead(info) is True
+    assert probed[0][1] == "bytes=0-1" and "itag=137" in probed[0][0]
+    probe, probed = _patch_range_probe({"capped"})
+    with probe:
+        assert ytdlp._adaptive_head_dead(_gv_info("capped")) is False
+    assert {r for _, r in probed} == {"bytes=0-1"}
 
 
 # ─── /api/videos/{id}/streams ───
@@ -995,8 +1092,12 @@ class SequenceYDL(FakeYDL):
         return info
 
 
-def _patch_range_probe(capped_tags):
-    """Fake httpx.Client whose ranged GET 403s for URLs of a capped bucket."""
+def _patch_range_probe(capped_tags, dead_tags=frozenset()):
+    """Fake httpx.Client modelling googlevideo's two failure modes.
+
+    A capped bucket serves the file head (``bytes=0-1``) but 403s further in;
+    a dead client (``dead_tags``) 403s from the very first byte.
+    """
     probed: list[tuple[str, str]] = []
 
     class FakeClient:
@@ -1011,8 +1112,11 @@ def _patch_range_probe(capped_tags):
 
         def get(self, url, headers=None):
             probed.append((url, (headers or {}).get("Range", "")))
+            rng = (headers or {}).get("Range", "")
+            if any(f"sig={tag}" in url for tag in dead_tags):
+                return httpx.Response(403)
             capped = any(f"sig={tag}" in url for tag in capped_tags)
-            return httpx.Response(403 if capped else 206)
+            return httpx.Response(403 if capped and rng != "bytes=0-1" else 206)
 
     return patch.object(ytdlp.httpx, "Client", FakeClient), probed
 
@@ -1044,7 +1148,8 @@ def test_streams_keeps_first_resolution_when_delivery_is_whole(client):
 
     assert "sig=healthy" in resp.json()["video_url"]
     assert ydl.calls == 1
-    assert len(probed) == 1
+    # One EOF truncation probe, then the 2-byte head probe of the split pair.
+    assert [r for _, r in probed] == ["bytes=35999999-35999999", "bytes=0-1", "bytes=0-1"]
 
 
 def test_streams_gives_up_after_three_capped_resolutions(client):
@@ -1463,7 +1568,7 @@ def test_dead_muxed_format_is_dropped(client):
     """itag 18 (android_vr) mort dès l'octet 0 : purgé, le 360p sert le split
     au lieu d'une URL morte — re-résoudre n'y changerait rien."""
     ydl = SequenceYDL([_gv_info_with_muxed("healthy", "deadmux")])
-    probe, _ = _patch_range_probe({"deadmux"})
+    probe, _ = _patch_range_probe(set(), dead_tags={"deadmux"})
     import yt_dlp
 
     with patch.object(yt_dlp, "YoutubeDL", ydl), probe:
@@ -1603,3 +1708,46 @@ def test_youtube_details_share_the_stream_extraction(client):
     assert details["description"] == "Chapitres : 1:02 intro"
     assert details["upload_date"] == "2026-09-20"
     assert details["thumbnail_url"] == "https://i.ytimg.com/vi/vid000000001/mqdefault.jpg"
+
+
+def test_mpd_without_sidx_evicts_the_cached_extraction(client, monkeypatch):
+    """A split pair whose head is refused must not be replayed from the cache."""
+    from ytui_server.services import dash
+
+    split = ytdlp.SplitMp4(
+        video_url="https://rr1.googlevideo.com/videoplayback?id=dead", width=1920,
+        height=1080, video_codec="avc1", video_bitrate=1, audio_url="https://x/a",
+        audio_codec="mp4a", audio_bitrate=1, duration=10,
+    )
+
+    async def fake_split(url, max_height):
+        return split
+
+    async def no_ranges(client, url):
+        return None
+
+    forgotten = []
+    monkeypatch.setattr(ytdlp, "resolve_split_mp4", fake_split)
+    monkeypatch.setattr(dash, "probe_ranges", no_ranges)
+    monkeypatch.setattr(ytdlp, "forget_dead_stream", lambda url: forgotten.append(url))
+    resp = client.get("/api/videos/vid000000001/mpd")
+    assert resp.status_code == 404
+    assert forgotten == [split.video_url]
+
+
+def _hls_lang(height, lang, pref):
+    return {"format_id": f"{height}-{lang}", "url": f"https://x/{height}-{lang}.m3u8",
+            "protocol": "m3u8_native", "vcodec": "avc1", "acodec": "mp4a.40.2",
+            "height": height, "language": lang, "language_preference": pref}
+
+
+def test_signed_in_hls_serves_the_original_language_variant(client):
+    """Signed-in extraction (2026-10): muxed HLS variants per audio language in one
+    master. The master would let the player pick a dub: serve the original's variant."""
+    formats = [_hls_lang(1080, "en-US", -1), _hls_lang(1080, "fr-FR", 10),
+               _hls_lang(720, "en-US", -1), _hls_lang(720, "fr-FR", 10)]
+    with _patch_ydl(_info(formats, manifest_url="https://x/master.m3u8")):
+        body = client.get("/api/videos/vid000000001/streams").json()
+    assert body["kind"] == "hls"
+    assert body["url"] == "https://x/1080-fr-FR.m3u8"
+    assert body["height"] == 1080

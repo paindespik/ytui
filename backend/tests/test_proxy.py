@@ -8,7 +8,7 @@ import httpx
 import pytest
 from conftest import TEST_TOKEN
 
-from ytui_server.routers.proxy import rewrite_hls
+from ytui_server.routers.proxy import prefer_original_audio, rewrite_hls
 from ytui_server.settings import Settings
 
 
@@ -375,3 +375,23 @@ def test_proxy_hls_rewrites_against_final_url(proxied):
     resp = client.get("/api/proxy/hls", params={"url": "https://cdn.example/start.m3u8"})
     assert resp.status_code == 200
     assert _enc("https://other.example/v/seg.ts") in resp.text
+
+
+# YouTube VOD master (2026-10): every audio rendition DEFAULT=NO, dubs first.
+YT_MASTER = """#EXTM3U
+#EXT-X-MEDIA:URI="https://m.googlevideo.com/a/en",TYPE=AUDIO,GROUP-ID="233",LANGUAGE="en-US",NAME="American English - dubbed-auto",DEFAULT=NO,AUTOSELECT=YES
+#EXT-X-MEDIA:URI="https://m.googlevideo.com/a/fr",TYPE=AUDIO,GROUP-ID="233",LANGUAGE="fr-FR",NAME="Français (France) - original",DEFAULT=NO,AUTOSELECT=YES
+#EXT-X-STREAM-INF:BANDWIDTH=300523,CODECS="avc1.4D4015,mp4a.40.5",RESOLUTION=426x240,AUDIO="233"
+https://m.googlevideo.com/v/240
+"""
+
+
+def test_youtube_master_defaults_to_the_original_audio():
+    out = prefer_original_audio(YT_MASTER).splitlines()
+    assert 'NAME="American English - dubbed-auto",DEFAULT=NO' in out[1]
+    assert 'NAME="Français (France) - original",DEFAULT=YES' in out[2]
+    assert out[3:] == YT_MASTER.splitlines()[3:]
+
+
+def test_master_without_original_rendition_is_untouched():
+    assert prefer_original_audio(MASTER) == MASTER
