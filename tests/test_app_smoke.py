@@ -291,13 +291,13 @@ async def test_kitty_thumbnail_survives_cursor_row(app, monkeypatch):
     colour encodes the image id*. The cursor/hover style must not override
     it, otherwise the selected row shows no image."""
     import textual_image.renderable.tgp as tgp
-    from textual_image.renderable.tgp import Image as TGPImage
 
     from ytui.thumbnails.fetcher import _cache_path, thumbs_dir
     from ytui.ui.widgets import video_list as video_list_mod
+    from ytui.ui.widgets.thumbs import _CachedTGPImage
 
     monkeypatch.setattr(tgp, "_send_tgp_message", lambda **kw: None)
-    monkeypatch.setattr(video_list_mod, "ThumbImage", TGPImage)
+    monkeypatch.setattr(video_list_mod, "ThumbImage", _CachedTGPImage)
     _make_thumb_file(_cache_path(VIDEO.thumbnail_url, thumbs_dir()))
     async with app.run_test() as pilot:
         await pilot.pause()
